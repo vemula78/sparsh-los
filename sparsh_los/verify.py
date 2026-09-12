@@ -20,6 +20,9 @@ import frappe
 from sparsh_los.mastery import STATE_ORDER, derive_state
 
 PREFIX = "ZZV-"
+OTHER_DOMAIN = PREFIX + "DOM2"
+OTHER_COMPETENCY = PREFIX + "COMP3"
+OTHER_ACTIVITY = PREFIX + "ACT3"
 LEARNER = "Administrator"
 DOMAIN = PREFIX + "DOM"
 COMPETENCY = PREFIX + "COMP"
@@ -81,17 +84,17 @@ def _delete_all(doctype, filters):
 
 def teardown():
 	"""Delete fixtures in dependency order. Safe to call when nothing exists."""
-	competencies = [COMPETENCY, COMPETENCY_2]
+	competencies = [COMPETENCY, COMPETENCY_2, OTHER_COMPETENCY]
 	_delete_all("Sparsh Certification Record", {"competency": ("in", competencies)})
 	# Evidence before Mastery State: cancelling Evidence triggers a recompute that
 	# recreates the Mastery row, so deleting Mastery first leaves one behind.
 	_delete_all("Sparsh Evidence", {"competency": ("in", competencies)})
 	_delete_all("Sparsh Mastery State", {"competency": ("in", competencies)})
 	_delete_all("Sparsh Escalation Question", {"learner": ("in", [LEARNER, TEST_LEARNER, OTHER_LEARNER])})
-	_delete_all("Sparsh Attempt", {"activity": ("in", [ACTIVITY_1, ACTIVITY_2])})
-	_delete_all("Sparsh Activity", {"name": ("in", [ACTIVITY_1, ACTIVITY_2])})
+	_delete_all("Sparsh Attempt", {"activity": ("in", [ACTIVITY_1, ACTIVITY_2, OTHER_ACTIVITY])})
+	_delete_all("Sparsh Activity", {"name": ("in", [ACTIVITY_1, ACTIVITY_2, OTHER_ACTIVITY])})
 	_delete_all("Sparsh Competency", {"name": ("in", competencies)})
-	_delete_all("Sparsh Competency Domain", {"name": DOMAIN})
+	_delete_all("Sparsh Competency Domain", {"name": ("in", [DOMAIN, OTHER_DOMAIN])})
 	_delete_all("Sparsh Source of Truth Rule", {"rule_id": RULE_ID})
 	for user in (TEST_LEARNER, OTHER_LEARNER):
 		if frappe.db.exists("User", user):
@@ -665,6 +668,58 @@ def check_dashboards():
 	frappe.db.commit()
 
 
+def check_other_domain_runs_unchanged():
+	"""Acceptance criterion 13, tested rather than asserted.
+
+	A competency from an entirely different domain — a digital-skills task, no clinical
+	content — must run the same loop end to end with no schema change. If this needs a
+	new field or a new code path, the engine is not domain-agnostic and the claim that
+	it can host TechLingo or an HCP pack later is not true.
+	"""
+	from sparsh_los import dashboard, runner
+
+	domain = frappe.new_doc("Sparsh Competency Domain")
+	domain.domain_id = OTHER_DOMAIN
+	domain.domain_name = "Digital skills"
+	domain.insert(ignore_permissions=True)
+
+	competency = frappe.new_doc("Sparsh Competency")
+	competency.competency_id = OTHER_COMPETENCY
+	competency.competency_name = "Create and share a spreadsheet"
+	competency.domain = OTHER_DOMAIN
+	competency.insert(ignore_permissions=True)
+
+	activity = frappe.new_doc("Sparsh Activity")
+	activity.activity_id = OTHER_ACTIVITY
+	activity.title = "Share a sheet with a colleague"
+	activity.competency = OTHER_COMPETENCY
+	activity.activity_type = "Knowledge check"
+	activity.instruction = "Which menu shares a spreadsheet with another person?"
+	activity.version = 1
+	activity.evaluation_mode = "Deterministic"
+	activity.expected_response = "share"
+	activity.append("hint_ladder", {"level": 1, "hint_text": "Look at the top right of the screen."})
+	activity.insert(ignore_permissions=True)
+	frappe.db.commit()
+
+	wrong = runner.submit(OTHER_ACTIVITY, "file")
+	_assert(wrong["outcome"] == "Fail", "The other-domain activity did not evaluate a wrong answer")
+	_assert(wrong["hint"], "The other-domain activity returned no hint")
+
+	right = runner.submit(OTHER_ACTIVITY, "Share")
+	_assert(right["outcome"] == "Pass", "The other-domain activity did not evaluate a correct answer")
+	_assert(right.get("evidence"), "The other-domain pass produced no evidence")
+
+	state = frappe.db.get_value(
+		"Sparsh Mastery State", {"learner": LEARNER, "competency": OTHER_COMPETENCY}, "state"
+	)
+	_assert(state == "Demonstrated", f"The other-domain competency reached {state}")
+
+	view = dashboard.supervisor_view(competency=OTHER_COMPETENCY)
+	_assert(view["learners"] >= 1, "The other-domain competency is invisible to the supervisor view")
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -698,6 +753,7 @@ CHECKS = (
 	("runner_flags_critical_response", check_runner_flags_critical_response),
 	("escalation_to_human_review", check_escalation_to_human_review),
 	("dashboards", check_dashboards),
+	("other_domain_runs_unchanged", check_other_domain_runs_unchanged),
 	("cleanup", check_cleanup),
 )
 
