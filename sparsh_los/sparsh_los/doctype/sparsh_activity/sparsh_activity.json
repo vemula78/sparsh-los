@@ -103,39 +103,40 @@
    "label": "Critical Errors"
   },
   {
+   "default": "Deterministic",
+   "description": "How this activity is judged. Anything the engine cannot score itself falls to a reviewer.",
    "fieldname": "evaluation_mode",
    "fieldtype": "Select",
    "label": "Evaluation Mode",
-   "options": "Deterministic\nHuman review",
-   "default": "Deterministic",
+   "options": "Deterministic\nNumeric validation\nRubric\nAI-assisted\nHuman review\nReflection",
    "reqd": 1
   },
   {
+   "depends_on": "eval:doc.evaluation_mode=='Deterministic'",
+   "description": "Accepted answers, one per line. Compared case-insensitively after trimming.",
    "fieldname": "expected_response",
    "fieldtype": "Small Text",
    "label": "Expected Response",
-   "description": "Accepted answers, one per line. Compared case-insensitively after trimming.",
-   "depends_on": "eval:doc.evaluation_mode=='Deterministic'",
    "permlevel": 1
   },
   {
+   "description": "One hint per line, weakest first. Line 1 is hint level 1.",
    "fieldname": "hints",
    "fieldtype": "Small Text",
    "label": "Hint Ladder",
-   "permlevel": 1,
-   "description": "One hint per line, weakest first. Line 1 is hint level 1."
+   "permlevel": 1
   },
   {
+   "description": "One phrase per line. A response matching one is unsafe.",
    "fieldname": "critical_markers",
    "fieldtype": "Small Text",
    "label": "Critical Error Markers",
-   "permlevel": 1,
-   "description": "One phrase per line. A response matching one is unsafe."
+   "permlevel": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-12 22:29:13.597928",
+ "modified": "2026-09-13 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Activity",
@@ -172,30 +173,30 @@
    "write": 0
   },
   {
-   "role": "System Manager",
-   "permlevel": 1,
-   "read": 1,
-   "write": 1,
    "create": 0,
    "delete": 0,
-   "print": 1,
    "email": 1,
    "export": 1,
+   "permlevel": 1,
+   "print": 1,
+   "read": 1,
    "report": 1,
-   "share": 0
+   "role": "System Manager",
+   "share": 0,
+   "write": 1
   },
   {
-   "role": "Sparsh Reviewer",
-   "permlevel": 1,
-   "read": 1,
-   "write": 1,
    "create": 0,
    "delete": 0,
-   "print": 1,
    "email": 1,
    "export": 1,
+   "permlevel": 1,
+   "print": 1,
+   "read": 1,
    "report": 1,
-   "share": 0
+   "role": "Sparsh Reviewer",
+   "share": 0,
+   "write": 1
   }
  ],
  "sort_field": "modified",

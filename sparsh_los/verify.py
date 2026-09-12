@@ -1841,6 +1841,58 @@ def check_rejected_evidence_does_not_count():
 	frappe.db.commit()
 
 
+def check_unbuilt_evaluator_modes_fall_to_a_person():
+	"""A declared evaluator the engine cannot perform routes to a reviewer, never scores.
+
+	The evaluator types are declared ahead of their implementations so activity content
+	can be authored against them. The failure that matters is an unbuilt mode falling
+	through to the deterministic string comparison, which would score a rubric or a
+	free-text answer as though it were multiple choice.
+	"""
+	from sparsh_los import runner
+
+	_reset_competency()
+	activity = frappe.get_doc("Sparsh Activity", ACTIVITY_1)
+	original_mode = activity.evaluation_mode
+	original_expected = activity.expected_response
+	try:
+		# An exact match against the answer key, so anything that scored at all
+		# would score this a Pass.
+		activity.expected_response = "level two"
+		for mode in runner.AWAITING_IMPLEMENTATION_MODES + runner.NOT_SCORED_MODES:
+			activity.evaluation_mode = mode
+			activity.save(ignore_permissions=True)
+			frappe.db.commit()
+			outcome, critical = runner.evaluate(
+				frappe.get_doc("Sparsh Activity", ACTIVITY_1), "level two"
+			)
+			_assert(
+				outcome == "Not Evaluated",
+				f"Mode {mode} scored the response itself: {outcome}",
+			)
+			_assert(not critical, f"Mode {mode} invented a critical error")
+
+		# A critical marker still bites whatever the mode: an unsafe answer is unsafe
+		# whether or not the engine can grade the rest of it.
+		activity.evaluation_mode = "Rubric"
+		activity.critical_markers = "stop the medicine"
+		activity.save(ignore_permissions=True)
+		frappe.db.commit()
+		outcome, critical = runner.evaluate(
+			frappe.get_doc("Sparsh Activity", ACTIVITY_1), "I would stop the medicine"
+		)
+		_assert(
+			outcome == "Fail" and critical,
+			f"A critical marker was missed under a non-scoring mode: {outcome}/{critical}",
+		)
+	finally:
+		activity.reload()
+		activity.evaluation_mode = original_mode
+		activity.expected_response = original_expected
+		activity.save(ignore_permissions=True)
+		frappe.db.commit()
+
+
 def check_pathway_does_not_hand_over_a_gated_activity():
 	"""A mandatory step whose prerequisite is unmet is reported blocked, not offered.
 
@@ -2439,6 +2491,7 @@ CHECKS = (
 	("rejected_evidence_does_not_count", check_rejected_evidence_does_not_count),
 	("pathway_walks_in_order", check_pathway_walks_in_order),
 	("pathway_does_not_hand_over_a_gated_activity", check_pathway_does_not_hand_over_a_gated_activity),
+	("unbuilt_evaluator_modes_fall_to_a_person", check_unbuilt_evaluator_modes_fall_to_a_person),
 	("nobody_judges_their_own_work", check_nobody_judges_their_own_work),
 	("unenrolled_user_is_shut_out", check_unenrolled_user_is_shut_out),
 	("mastery_cannot_be_deleted", check_mastery_cannot_be_deleted),

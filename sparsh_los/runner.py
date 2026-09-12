@@ -130,16 +130,32 @@ def _is_critical(activity, response):
 	return False
 
 
+# The evaluator types the programme owner asked to be explicit from the start, so a new
+# activity type does not need a new screen or a change to the learner data model.
+# Only the two the engine can actually perform are dispatched; the rest are declared and
+# routed to a person. Declaring a mode the engine cannot perform and silently scoring it
+# with the deterministic comparison would be the worst of both.
+AUTO_SCORED_MODES = ("Deterministic",)
+NOT_SCORED_MODES = ("Reflection",)
+AWAITING_IMPLEMENTATION_MODES = ("Numeric validation", "Rubric", "AI-assisted")
+
+
 def evaluate(activity, response):
 	"""Return (outcome, critical_error). Deterministic; no model call.
 
-	An activity set to Human review is never auto-passed: it returns Not Evaluated and
-	waits for a reviewer, which is the correct behaviour for judgement-heavy work.
+	Every mode except Deterministic returns Not Evaluated and waits for a reviewer.
+	That is the right answer for judgement-heavy work, and for the modes not yet
+	built it is the only safe one: the alternative is falling through to the
+	string comparison, which would score a rubric activity as though it were a
+	multiple-choice question.
 	"""
+	# Critical markers are checked whatever the mode. An unsafe response is unsafe
+	# whether or not the engine can grade the rest of the answer.
 	if _is_critical(activity, response):
 		return "Fail", 1
 
-	if activity.evaluation_mode == "Human review":
+	mode = activity.evaluation_mode or "Human review"
+	if mode not in AUTO_SCORED_MODES:
 		return "Not Evaluated", 0
 
 	accepted = _accepted_responses(activity)
