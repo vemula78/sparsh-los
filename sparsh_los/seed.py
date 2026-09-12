@@ -77,11 +77,25 @@ def load_matrix(force=False):
 @frappe.whitelist()
 def matrix_status():
 	"""How much of the matrix is still waiting on the programme owner."""
-	rows = frappe.get_all(
+	# The current version of each rule lineage, not version 1. A v1 superseded by a
+	# validated v2 was still reported as unvalidated and blocking.
+	# Only the matrix's own rules. Widening this to every rule swept up anything else
+	# the site happened to hold and reported it as programme status.
+	matrix_ids = [row["rule_id"] for row in _rows()]
+	all_rows = frappe.get_all(
 		"Sparsh Source of Truth Rule",
-		filters={"version": 1},
-		fields=["rule_id", "status", "criticality", "automation_status"],
+		filters={"rule_id": ("in", matrix_ids)},
+		fields=["name", "rule_id", "version", "status", "criticality", "automation_status"],
+		order_by="rule_id asc, version asc",
 	)
+	current = {}
+	for row in all_rows:
+		if row.status == "Superseded":
+			continue
+		existing = current.get(row.rule_id)
+		if not existing or (row.version or 0) > (existing.version or 0):
+			current[row.rule_id] = row
+	rows = list(current.values())
 
 	by_status = {}
 	for row in rows:

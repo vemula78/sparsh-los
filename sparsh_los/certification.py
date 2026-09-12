@@ -17,7 +17,7 @@ from sparsh_los.mastery import (
 	derive_state,
 	has_blocking_critical_error,
 )
-from sparsh_los.permissions import is_restricted, require_reviewer
+from sparsh_los.permissions import is_restricted, require_enrolment, require_reviewer
 
 READY = "Ready for sign-off"
 BLOCKED = "Blocked by a safety error"
@@ -54,6 +54,7 @@ def _evidence_summary(learner, competency):
 def readiness(competency, learner=None):
 	"""Why this learner is or is not ready, with the evidence behind the answer."""
 	learner = learner or frappe.session.user
+	require_enrolment()
 	if learner != frappe.session.user and is_restricted():
 		frappe.throw(_("You can only view your own readiness"), frappe.PermissionError)
 

@@ -40,6 +40,21 @@ def is_reviewer(user=None):
 	return bool(set(frappe.get_roles(user)) & REVIEWER_ROLES)
 
 
+ENROLLED_ROLES = {"Sparsh Learner", "Sparsh Reviewer", "System Manager", "Administrator"}
+
+
+def require_enrolment(user=None):
+	"""Signed in is not the same as enrolled.
+
+	Own-record endpoints only rejected requests naming somebody else, so any account
+	on the site could ask the platform about itself and learn the shape of the
+	programme.
+	"""
+	user = user or frappe.session.user
+	if not set(frappe.get_roles(user)) & ENROLLED_ROLES:
+		frappe.throw(frappe._("You are not enrolled in this programme"), frappe.PermissionError)
+
+
 def require_reviewer():
 	if not is_reviewer():
 		frappe.throw(frappe._("This is a reviewer action"), frappe.PermissionError)

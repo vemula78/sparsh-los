@@ -63,3 +63,18 @@ class SparshAttempt(Document):
 			# An attempt records what a learner did at a point in time. Editing it after
 			# the fact would make the evidence trail unreliable, so nothing may change.
 			frappe.throw(_("An attempt is a historical record and cannot be edited once created"))
+
+	def on_trash(self):
+		"""Deleting a failed attempt would make a later answer look unaided.
+
+		The role permission is gone too, but a privileged deletion path does not
+		consult permissions, and this record is the assistance history. Data
+		maintenance — uninstalling the app, clearing a test fixture — declares itself
+		with a flag rather than working around the guard.
+		"""
+		if frappe.flags.in_sparsh_maintenance or frappe.flags.in_uninstall:
+			return
+
+		frappe.throw(
+			_("An attempt is a historical record and cannot be deleted"), frappe.ValidationError
+		)

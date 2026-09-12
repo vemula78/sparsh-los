@@ -13,7 +13,7 @@ Selection is deterministic and cheap. Nothing here calls a model.
 import frappe
 from frappe import _
 
-from sparsh_los.permissions import is_restricted
+from sparsh_los.permissions import is_restricted, require_enrolment
 from sparsh_los.mastery import (
 	DEMONSTRATED,
 	EXPLORING,
@@ -87,6 +87,7 @@ def next_experience(competency, learner=None):
 	"""
 	learner = learner or frappe.session.user
 
+	require_enrolment()
 	if learner != frappe.session.user and is_restricted():
 		frappe.throw(_("You can only request your own next activity"), frappe.PermissionError)
 
@@ -194,6 +195,7 @@ def next_in_pathway(pathway, learner=None):
 	mandatory step is not passed over, an optional one is.
 	"""
 	learner = learner or frappe.session.user
+	require_enrolment()
 	if learner != frappe.session.user and is_restricted():
 		frappe.throw(_("You can only request your own pathway position"), frappe.PermissionError)
 
@@ -201,15 +203,17 @@ def next_in_pathway(pathway, learner=None):
 	if not steps:
 		return {"reason": None, "activity": None, "message": "This pathway has no steps."}
 
-	for step in steps:
-		competency = step.competency or frappe.db.get_value(
+	def competency_of(step):
+		return step.competency or frappe.db.get_value(
 			"Sparsh Activity", step.activity, "competency"
 		)
-		if not competency:
-			continue
 
-		# Safety outranks sequence, here as everywhere.
-		if has_blocking_critical_error(learner, competency):
+	# Safety outranks the whole sequence, not just the step being walked. Checking it
+	# inside the loop meant an incomplete earlier step was returned before a standing
+	# critical error on a later competency was ever examined.
+	for step in steps:
+		competency = competency_of(step)
+		if competency and has_blocking_critical_error(learner, competency):
 			return {
 				"reason": REMEDIATION,
 				"activity": _last_critical_activity(learner, competency) or step.activity,
@@ -217,6 +221,36 @@ def next_in_pathway(pathway, learner=None):
 				"step": step.step_order,
 				"message": "An unresolved critical error must be worked through before progressing.",
 			}
+
+	for step in steps:
+		competency = competency_of(step)
+		if not competency:
+			continue
+
+		# A mandatory step names an activity, and demonstrating the competency by some
+		# other route does not complete that step.
+		if step.is_mandatory and step.activity:
+			done = frappe.db.count(
+				"Sparsh Evidence",
+				{
+					"learner": learner,
+					"activity": step.activity,
+					"outcome": "Pass",
+					"critical_error": 0,
+					"docstatus": 1,
+				},
+			)
+			if not done:
+				suggestion = next_experience(competency, learner)
+				return dict(
+					suggestion,
+					activity=step.activity,
+					competency=competency,
+					step=step.step_order,
+					pathway=pathway,
+					reason=suggestion.get("reason") or PRACTICE,
+				)
+			continue
 
 		state = derive_state(learner, competency)
 		if state in (DEMONSTRATED, MASTERED):

@@ -26,11 +26,20 @@ def get_context(context):
 	# The next thing to do, for the first competency that has one.
 	from sparsh_los import orchestrator
 
+	# Competencies the learner has touched, then every competency that has activities.
+	# Looking only at existing Mastery State rows meant a learner with no evidence saw
+	# "Nothing is waiting" and had no way to begin at all.
+	seen = [row["competency"] for row in context.view["competencies"]]
+	available = frappe.get_all(
+		"Sparsh Activity", fields=["competency"], distinct=True, pluck="competency"
+	)
+	candidates = seen + [c for c in sorted(set(available)) if c and c not in seen]
+
 	context.next_up = None
-	for row in context.view["competencies"]:
-		suggestion = orchestrator.next_experience(row["competency"])
+	for competency in candidates:
+		suggestion = orchestrator.next_experience(competency)
 		if suggestion.get("activity"):
-			context.next_up = dict(suggestion, competency=row["competency"])
+			context.next_up = dict(suggestion, competency=competency)
 			break
 
 	if context.next_up:

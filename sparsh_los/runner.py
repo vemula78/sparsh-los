@@ -173,11 +173,12 @@ def _session_position(learner, activity):
 	take a hint, pass with it, and immediately resubmit the now-known answer as an
 	independent pass. Demonstrating unaided competence needs a different activity.
 
-	Two simultaneous submissions can both read the same position and both be shown
-	the same hint. That is deliberate rather than unhandled: because assistance only
-	ever rises, a race can overstate the help a learner received but never understate
-	it, so it cannot manufacture an independent pass. The cost is a hint rung
-	occasionally skipped, which is a worse lesson, not a false record.
+	Concurrency is a real limit here, not a solved problem. Two submissions racing
+	can both read the same position, and the one that commits second can record less
+	assistance than the learner has by then been shown. The window is the gap between
+	this read and the insert, which is why the read happens immediately before the
+	write rather than at the start of the request. Closing it properly needs a lock
+	on (learner, activity), which is a schema decision rather than a patch.
 	"""
 	attempts = frappe.get_all(
 		"Sparsh Attempt",

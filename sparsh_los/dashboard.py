@@ -15,7 +15,7 @@ import frappe
 from frappe import _
 
 from sparsh_los.mastery import DEMONSTRATED, MASTERED, PRACTISING
-from sparsh_los.permissions import is_restricted, require_reviewer
+from sparsh_los.permissions import is_restricted, require_enrolment, require_reviewer
 
 CERTIFIABLE = (DEMONSTRATED, MASTERED)
 
@@ -24,6 +24,7 @@ CERTIFIABLE = (DEMONSTRATED, MASTERED)
 def learner_view(learner=None):
 	"""One learner's position: what they have shown, and what is waiting for them."""
 	learner = learner or frappe.session.user
+	require_enrolment()
 
 	# Every @frappe.whitelist() method is callable by any logged-in user, so an
 	# argument naming a learner is an access decision, not a convenience.

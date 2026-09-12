@@ -100,6 +100,11 @@ class SparshCertificationRecord(Document):
 		# what actually guarantees it, because the database rejects the duplicate.
 		self.standing_key = f"{self.learner}::{self.competency}"
 
+		# Read-only in the form is not read-only to a crafted document: a certificate
+		# could be submitted already Suspended or Revoked while still occupying the
+		# standing key.
+		self.certification_state = "Active"
+
 	def on_update_after_submit(self):
 		"""Standing is decided by reconciliation and revocation, not by editing.
 
@@ -177,7 +182,16 @@ def current(learner, competency):
 
 	row = rows[0]
 	if derive_state(learner, competency) not in (DEMONSTRATED, MASTERED):
+		# Persist it rather than only reporting it, or certificate_detail and the
+		# stored record keep saying Active until the daily job runs.
+		previous = frappe.flags.in_sparsh_certification
+		frappe.flags.in_sparsh_certification = True
+		try:
+			frappe.db.set_value(
+				"Sparsh Certification Record", row["name"], "certification_state", "Suspended"
+			)
+		finally:
+			frappe.flags.in_sparsh_certification = previous
 		row["certification_state"] = "Suspended"
-		row["suspended_at_read_time"] = True
 
 	return row

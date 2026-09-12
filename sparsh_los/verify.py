@@ -32,6 +32,7 @@ ACTIVITY_1 = PREFIX + "ACT1"
 ACTIVITY_2 = PREFIX + "ACT2"
 RULE_ID = PREFIX + "RULE"
 TEST_LEARNER = "zzv-learner@example.invalid"
+DUAL_LEARNER = "zzv-dual@example.invalid"
 OTHER_LEARNER = "zzv-other@example.invalid"
 
 PII_PATTERN = re.compile(r"patient|mrn|uhid|dob|aadhaar|phone|address", re.IGNORECASE)
@@ -86,6 +87,17 @@ def _delete_mastery(filters):
 
 
 def _delete_all(doctype, filters):
+	# Fixture cleanup is maintenance, and says so rather than routing around the
+	# guards that make attempts and mastery states undeletable in ordinary use.
+	previous = frappe.flags.in_sparsh_maintenance
+	frappe.flags.in_sparsh_maintenance = True
+	try:
+		_delete_each(doctype, filters)
+	finally:
+		frappe.flags.in_sparsh_maintenance = previous
+
+
+def _delete_each(doctype, filters):
 	for name in frappe.get_all(doctype, filters=filters, pluck="name"):
 		doc = frappe.get_doc(doctype, name)
 		if doc.meta.is_submittable and doc.docstatus == 1:
@@ -136,7 +148,33 @@ def teardown():
 	_delete_all("Sparsh Pathway", {"name": PATHWAY})
 	_delete_all("Sparsh Competency Domain", {"name": ("in", [DOMAIN, OTHER_DOMAIN])})
 	_delete_all("Sparsh Source of Truth Rule", {"rule_id": RULE_ID})
-	for user in (LEARNER, TEST_LEARNER, OTHER_LEARNER):
+	# Everything belonging to the fixture learners, whatever competency it names.
+	# Deleting the user first left evidence behind, and cancelling that evidence on a
+	# later run tried to recompute mastery for a learner who no longer existed.
+	fixture_users = (
+		LEARNER,
+		TEST_LEARNER,
+		OTHER_LEARNER,
+		DUAL_LEARNER,
+		"zzv-fresh@example.invalid",
+		"zzv-stranger@example.invalid",
+	)
+	for name in frappe.get_all(
+		"Sparsh Evidence", filters={"learner": ("in", fixture_users)}, pluck="name"
+	):
+		frappe.db.set_value("Sparsh Evidence", name, "cleared_by_review", None)
+		frappe.db.set_value("Sparsh Evidence", name, "critical_error", 0)
+	frappe.db.commit()
+
+	_delete_all("Sparsh Human Review", {"learner": ("in", fixture_users)})
+	_delete_all("Sparsh Certification Record", {"learner": ("in", fixture_users)})
+	_delete_all("Sparsh Evidence", {"learner": ("in", fixture_users)})
+	_delete_mastery({"learner": ("in", fixture_users)})
+	_delete_all("Sparsh Refresher Assignment", {"learner": ("in", fixture_users)})
+	_delete_all("Sparsh Escalation Question", {"learner": ("in", fixture_users)})
+	_delete_all("Sparsh Attempt", {"learner": ("in", fixture_users)})
+
+	for user in fixture_users:
 		if frappe.db.exists("User", user):
 			frappe.delete_doc("User", user, force=True, ignore_permissions=True)
 	frappe.db.commit()
@@ -1785,28 +1823,33 @@ def check_pathway_walks_in_order():
 		f"After demonstrating step one the pathway offered {second.get('competency')}",
 	)
 
-	# A critical error on step one pulls the learner back, mid-pathway.
-	_new_evidence(ACTIVITY_1, "Fail", critical_error=1)
+	# A critical error on a LATER step must still outrank an incomplete earlier one,
+	# or "safety outranks sequence" is only true when safety happens to come first.
+	_new_evidence(step_two_activity, "Fail", critical_error=1, competency=COMPETENCY_2)
 	back = orchestrator.next_in_pathway(PATHWAY, LEARNER)
 	_assert(
-		back["reason"] == orchestrator.REMEDIATION and back["competency"] == COMPETENCY,
-		f"A critical error did not pull the learner back: {back.get('reason')}",
+		back["reason"] == orchestrator.REMEDIATION and back["competency"] == COMPETENCY_2,
+		f"A critical error on a later step was not reached: {back.get('reason')} {back.get('competency')}",
 	)
 	frappe.db.commit()
 
 
 def check_nobody_judges_their_own_work():
 	"""Role combinations do not create a way to grade yourself."""
-	dual = "zzv-dual@example.invalid"
-	if not frappe.db.exists("User", dual):
-		user = frappe.new_doc("User")
-		user.email = dual
-		user.first_name = "Verification"
-		user.user_type = "System User"
-		user.append("roles", {"role": "Sparsh Learner"})
+	dual = DUAL_LEARNER
+	user = _make_learner(dual)
+	if "Sparsh Reviewer" not in [r.role for r in user.roles]:
 		user.append("roles", {"role": "Sparsh Reviewer"})
-		user.insert(ignore_permissions=True)
-		frappe.db.commit()
+		user.save(ignore_permissions=True)
+	frappe.db.commit()
+	_assert(frappe.db.exists("User", dual), "The dual-role fixture user was not created")
+
+	# Qualify them before the impersonation, and commit, so nothing inside the test
+	# can roll the fixture away underneath it.
+	_reset_competency()
+	_new_evidence(ACTIVITY_1, "Pass", learner=dual)
+	_new_evidence(ACTIVITY_2, "Pass", learner=dual)
+	frappe.db.commit()
 
 	original_user = frappe.session.user
 	try:
@@ -1838,14 +1881,33 @@ def check_nobody_judges_their_own_work():
 
 		try:
 			self_certify()
-			raise AssertionError("A learner-reviewer certified themselves")
-		except (frappe.PermissionError, frappe.ValidationError):
+			raise AssertionError("A learner-reviewer certified themselves despite qualifying")
+		except frappe.PermissionError:
+			pass
+
+		def self_review():
+			critical = frappe.get_all(
+				"Sparsh Evidence",
+				filters={"learner": dual, "critical_error": 1, "docstatus": 1},
+				pluck="name",
+			)
+			doc = frappe.new_doc("Sparsh Human Review")
+			doc.evidence = critical[0] if critical else None
+			doc.learner = dual
+			doc.competency = COMPETENCY
+			doc.review_status = "Approved"
+			doc.insert(ignore_permissions=True)
+			doc.submit()
+
+		try:
+			self_review()
+			raise AssertionError("A learner-reviewer reviewed their own evidence")
+		except (frappe.PermissionError, frappe.ValidationError, IndexError, TypeError):
 			pass
 	finally:
 		frappe.set_user(original_user)
 		frappe.db.rollback()
 
-	frappe.delete_doc("User", dual, force=True, ignore_permissions=True)
 	frappe.db.commit()
 
 
@@ -2083,6 +2145,69 @@ def check_programme_summary_counts_from_evidence():
 	frappe.db.commit()
 
 
+def check_new_learner_can_begin():
+	"""Somebody with no evidence at all must have a way to start."""
+	from sparsh_los.www import practice
+
+	fresh = "zzv-fresh@example.invalid"
+	_make_learner(fresh)
+	frappe.db.commit()
+
+	context = frappe._dict()
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(fresh)
+		practice.get_context(context)
+	finally:
+		frappe.set_user(original_user)
+
+	_assert(not context.view["competencies"], "The fresh learner already has competency rows")
+	_assert(context.next_up, "A learner with no evidence was offered nothing to begin with")
+	_assert(context.next_up.get("activity"), "The offered start has no activity")
+
+	frappe.delete_doc("User", fresh, force=True, ignore_permissions=True)
+	frappe.db.commit()
+
+
+def check_certification_cannot_be_born_suspended():
+	"""A crafted certificate cannot start Suspended while holding the standing slot."""
+	_reset_competency()
+	_new_evidence(ACTIVITY_1, "Pass")
+
+	doc = frappe.new_doc("Sparsh Certification Record")
+	doc.learner = LEARNER
+	doc.competency = COMPETENCY
+	doc.certification_status = "Full"
+	doc.certification_state = "Suspended"
+	doc.insert(ignore_permissions=True)
+	doc.submit()
+	doc.reload()
+	_assert(
+		doc.certification_state == "Active",
+		f"A certificate was submitted as {doc.certification_state}",
+	)
+	frappe.db.commit()
+
+
+def check_attempt_cannot_be_deleted():
+	"""The assistance history cannot be erased."""
+	attempt = _new_attempt(None, outcome="Fail", hint_level=2)
+	frappe.db.commit()
+
+	previous = frappe.flags.in_sparsh_maintenance
+	frappe.flags.in_sparsh_maintenance = False
+	try:
+		_raises(
+			lambda: frappe.delete_doc(
+				"Sparsh Attempt", attempt.name, force=True, ignore_permissions=True
+			),
+			"An attempt was deleted",
+		)
+	finally:
+		frappe.flags.in_sparsh_maintenance = previous
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -2153,6 +2278,9 @@ CHECKS = (
 	("certificate_shows_its_working", check_certificate_shows_its_working),
 	("supervisor_sees_why_someone_is_stuck", check_supervisor_sees_why_someone_is_stuck),
 	("programme_summary_counts_from_evidence", check_programme_summary_counts_from_evidence),
+	("new_learner_can_begin", check_new_learner_can_begin),
+	("certification_cannot_be_born_suspended", check_certification_cannot_be_born_suspended),
+	("attempt_cannot_be_deleted", check_attempt_cannot_be_deleted),
 	("cleanup", check_cleanup),
 )
 
