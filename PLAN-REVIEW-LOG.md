@@ -10,3 +10,67 @@ Append-only. Never edit a past entry.
   proposed names; `Sparsh%` namespace empty; developer_mode off; scheduler active.
 - Builders dispatched: Opus (doctype/**, mastery.py, verify.py, install.py),
   Sonnet (scaffold, hooks, scripts/).
+
+## 2026-09-12 · Build, audit and adjudication
+- Plan hash audited against: `50553ad04e854e932a6f5895f16a726f2cea756223df02dff73ec2495ea27274` (unchanged).
+- Baseline commit `660e78e` — acceptance `RESULT passed=6 failed=2`.
+- Final commit `9d1b3ff` — acceptance `RESULT passed=9 failed=0`, twice consecutively.
+
+### Codex tier
+Intended `gpt-5.6-astra` (safety-gate logic, cross-file interaction, 2558 LOC). **Not available on
+this ChatGPT-account Codex** — `invalid_request_error`. Audit ran at `gpt-5.6-sol`, one tier below
+what the diff warranted. Audit depth is correspondingly lower; treat coverage as partial.
+
+### Builder C (Codex terra) — failed
+Dispatched to fix the two failing checks. Ran ~25 minutes, consumed 0.07s CPU, produced zero bytes
+of output and zero file changes. Hung, killed. The work was done by the orchestrator instead.
+
+### Findings disposition
+CONFIRMED AND FIXED
+- B2 blocker — Evidence could cite a critical-error Attempt while declaring `critical_error=0`,
+  `outcome=Pass`. Safety gate bypassable through the normal ORM path. Added
+  `_reconcile_with_attempt` + regression check `evidence_cannot_contradict_attempt`.
+- M1 major — `derive_state` took `list[-1]` on a `creation`-ordered query but compared with a
+  `(recorded_at, creation)` key. Ordering now uses `creation` alone.
+- M2 major — `recorded_at` was caller-suppliable and affected ordering. Same fix; `creation` is
+  database-assigned and cannot be supplied.
+- M5 major — race-prone upsert. Real unique index `unique_learner_competency` now enforced at the
+  storage layer. NOTE: required bumping the DocType JSON `modified` timestamp to force a re-sync;
+  `on_doctype_update` does not fire on an unchanged JSON.
+- M7 major — two passes with no activity recorded yielded Mastered. Now requires two distinct
+  activities.
+- m5 minor — recompute flag cleared rather than restored, clobbering a nested context.
+- m8 minor — `Refresh Due` absent from `STATE_ORDER` would raise on index lookup. Guarded.
+- Harness `results` list accumulated across `run()` calls in one worker. Now cleared.
+
+FOUND BY ORCHESTRATOR, NOT BY THE AUDIT
+- **Controller class name mismatch.** `SparshSourceOfTruthRule` vs the `SparshSourceofTruthRule`
+  Frappe derives via `doctype.replace(" ", "")`. The entire Source of Truth Rule controller —
+  supersession included — was never loading. Codex reviewed that file as though it executed and
+  reported on logic that was dead. This was the true cause of `rule_version_snapshot`.
+
+DEFERRED (real, out of scope for the scaffold)
+- B1 — `db.set_value` / `db_set` / raw SQL bypass `validate`. Inherent Frappe behaviour, present in
+  every app on this bench. Mitigation is role restriction, audit logging and code review, not
+  controller code. Document in the build brief.
+- B3 — free-text fields can hold PHI; the verifier checks field names, not content. Operational
+  control (de-identified scenarios), not field validation.
+- M3 — force-delete bypasses `on_cancel` and can orphan Mastery. Blocking deletion would break the
+  harness teardown; belongs with the permission model.
+- M4 — existing certifications are not revoked when mastery later regresses. Needs the revocation
+  workflow (see M14).
+- M6 — Evidence competency need not match its Activity's competency. Partially closed (learner and
+  activity now reconciled against the Attempt); full closure needs Activity→Competency validation.
+- M8 — `human_review_status` and `mastery_contribution` are not consulted by derivation.
+- M9/M10/M11 — the Attempt's `rule` Link is mutable, rule versions are editable after Attempts
+  exist, and supersession fires on Draft. Rule immutability is its own slice.
+- M12 — `retry_index` has no uniqueness or sequencing rule.
+- M13 — `Sparsh Learner` / `Sparsh Reviewer` roles exist but hold no DocType permissions. Known gap,
+  self-declared by Builder A. Needs its own slice.
+- M14 — certification cannot be amended to Revoked because validation demands Demonstrated/Mastered
+  for every status, including Revoked.
+- M15, m1–m4, m6, m7, m9, m10 — logged, not actioned.
+
+### Re-audit status
+Code changed materially after the audit. The `sol` audit does NOT cover commit `9d1b3ff`. A
+re-audit is required before this is treated as reviewed.
