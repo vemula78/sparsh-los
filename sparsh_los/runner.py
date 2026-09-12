@@ -15,6 +15,9 @@ are decided here, server-side, which is why this module â€” and not the caller â
 them on the Attempt.
 """
 
+import re
+import unicodedata
+
 import frappe
 from frappe import _
 
@@ -27,8 +30,16 @@ def _activity(name):
 	return frappe.get_cached_doc("Sparsh Activity", name)
 
 
+# Punctuation and unicode dashes/quotes are stripped before matching: "stop the
+# medicine." slipped past a marker for "stop the medicine", which is not a
+# distinction anybody intended to make.
+_PUNCTUATION = re.compile(r"[^\w\s]", re.UNICODE)
+
+
 def _normalise(text):
-	return " ".join((text or "").strip().lower().split())
+	text = unicodedata.normalize("NFKC", text or "")
+	text = _PUNCTUATION.sub(" ", text)
+	return " ".join(text.strip().lower().split())
 
 
 def _accepted_responses(activity):
@@ -95,8 +106,9 @@ def _is_critical(activity, response):
 			if words[i : i + len(marker_words)] != marker_words:
 				continue
 
-			preceding = words[max(0, i - 3) : i]
-			if any(w in NEGATIONS for w in preceding):
+			# Immediately preceding only. A wider window read "do not hesitate to stop
+			# the medicine" as a negation, which it is not.
+			if i > 0 and words[i - 1] in NEGATIONS:
 				continue
 
 			return True

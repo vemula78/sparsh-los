@@ -1182,11 +1182,22 @@ def check_critical_response_reaches_a_person():
 	_assert(question.status == "Open", "The automatic escalation is not open")
 	_assert(question.escalation_reason == "Safety critical", "The escalation reason is wrong")
 
-	# A negated mention of the same phrase is not unsafe.
+	# A directly negated mention is not unsafe.
 	negated = runner.submit(ACTIVITY_1, "I would tell them to not stop the medicine")
 	_assert(
 		not negated["critical_error"],
 		"A negated mention of a critical marker was flagged as unsafe",
+	)
+
+	# Punctuation does not smuggle an unsafe answer past the marker.
+	punctuated = runner.submit(ACTIVITY_1, "Simple: stop the medicine.")
+	_assert(punctuated["critical_error"] == 1, "Punctuation defeated the critical marker")
+
+	# And a distant negation is not a negation of this phrase.
+	distant = runner.submit(ACTIVITY_1, "Do not hesitate to stop the medicine")
+	_assert(
+		distant["critical_error"] == 1,
+		"A distant negation wrongly suppressed a critical marker",
 	)
 	frappe.db.commit()
 
