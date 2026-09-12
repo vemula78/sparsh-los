@@ -189,3 +189,59 @@ def case_pack_status():
 		"awaiting_human_review": len([a for a in activities if a.evaluation_mode == "Human review"]),
 		"auto_scored": [a.name for a in activities if a.evaluation_mode == "Deterministic"],
 	}
+
+
+@frappe.whitelist()
+def programme_readiness():
+	"""What stands between the platform and a pilot, stated plainly.
+
+	Written for the programme owner rather than the developer: every line is
+	something a person has to decide, not something left to build.
+	"""
+	from sparsh_los.permissions import require_reviewer
+
+	require_reviewer()
+
+	matrix = matrix_status()
+	cases = case_pack_status()
+
+	competencies = frappe.get_all(
+		"Sparsh Competency", fields=["name", "competency_name"], order_by="name asc"
+	)
+	without_activities = [
+		c.name
+		for c in competencies
+		if not frappe.db.count("Sparsh Activity", {"competency": c.name})
+	]
+	without_rules = [
+		c.name
+		for c in competencies
+		if not frappe.db.count("Sparsh Competency Rule Link", {"parent": c.name})
+	]
+
+	blocking = []
+	if matrix["unvalidated_safety_critical"]:
+		blocking.append(
+			f"{len(matrix['unvalidated_safety_critical'])} safety-critical rules are not validated"
+		)
+	if cases["awaiting_human_review"]:
+		blocking.append(
+			f"{cases['awaiting_human_review']} cases can only be judged by a person until their rules are locked"
+		)
+	if without_rules:
+		blocking.append(f"{len(without_rules)} competencies have no rule linked")
+	if without_activities:
+		blocking.append(f"{len(without_activities)} competencies have no activity")
+
+	return {
+		"rules_total": matrix["total"],
+		"rules_by_status": matrix["by_status"],
+		"rules_ready_to_automate": matrix["ready_to_automate"],
+		"unvalidated_safety_critical": matrix["unvalidated_safety_critical"],
+		"cases_loaded": cases["loaded"],
+		"cases_awaiting_human_review": cases["awaiting_human_review"],
+		"competencies_without_activities": without_activities,
+		"competencies_without_rules": without_rules,
+		"blocking": blocking,
+		"can_pilot_with_human_review": not without_activities,
+	}

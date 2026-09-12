@@ -1596,6 +1596,45 @@ def check_case_pack_loads_for_review_only():
 	frappe.db.commit()
 
 
+def check_programme_readiness_is_honest():
+	"""The readiness report tells the programme owner the truth."""
+	from sparsh_los import seed
+
+	seed.load_matrix()
+	seed.load_case_pack()
+	report = seed.programme_readiness()
+
+	_assert(report["rules_total"] >= 17, f"Only {report['rules_total']} rules are present")
+	_assert(
+		not report["rules_ready_to_automate"],
+		f"Rules are reported ready to automate before validation: {report['rules_ready_to_automate']}",
+	)
+	_assert(
+		report["unvalidated_safety_critical"],
+		"No safety-critical rule is reported as awaiting validation",
+	)
+	_assert(report["blocking"], "The report claims nothing is blocking the pilot")
+	_assert(
+		any("safety-critical" in line for line in report["blocking"]),
+		f"Unvalidated safety rules are not named as blocking: {report['blocking']}",
+	)
+
+	# It is a reviewer view.
+	_make_learner(TEST_LEARNER)
+	frappe.db.commit()
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+		try:
+			seed.programme_readiness()
+			raise AssertionError("A learner could read the programme readiness report")
+		except frappe.PermissionError:
+			pass
+	finally:
+		frappe.set_user(original_user)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -1654,6 +1693,7 @@ CHECKS = (
 	("rule_refresher_uses_provenance", check_rule_refresher_uses_provenance),
 	("review_queue_page", check_review_queue_page),
 	("case_pack_loads_for_review_only", check_case_pack_loads_for_review_only),
+	("programme_readiness_is_honest", check_programme_readiness_is_honest),
 	("cleanup", check_cleanup),
 )
 
