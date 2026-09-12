@@ -30,6 +30,13 @@ class SparshMasteryState(Document):
 
 		self.state = derive_state(self.learner, self.competency)
 
+	def on_trash(self):
+		"""Deleting a derived state would leave submitted evidence unrepresented."""
+		if not frappe.flags.in_mastery_recompute:
+			frappe.throw(
+				_("Mastery State is derived and cannot be deleted"), frappe.ValidationError
+			)
+
 
 def on_doctype_update():
 	# The controller's duplicate check loses a race between concurrent recomputes.

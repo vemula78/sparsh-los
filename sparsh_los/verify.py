@@ -75,6 +75,16 @@ def _raises(fn, message):
 
 
 # --------------------------------------------------------------------- fixtures
+def _delete_mastery(filters):
+	"""Mastery is undeletable by design; cleanup is the engine acting, so it says so."""
+	previous_flag = frappe.flags.in_mastery_recompute
+	frappe.flags.in_mastery_recompute = True
+	try:
+		_delete_all("Sparsh Mastery State", filters)
+	finally:
+		frappe.flags.in_mastery_recompute = previous_flag
+
+
 def _delete_all(doctype, filters):
 	for name in frappe.get_all(doctype, filters=filters, pluck="name"):
 		doc = frappe.get_doc(doctype, name)
@@ -96,7 +106,7 @@ def _reset_competency(competency=None):
 	_delete_all("Sparsh Human Review", {"competency": competency})
 	_delete_all("Sparsh Certification Record", {"competency": competency})
 	_delete_all("Sparsh Evidence", {"competency": competency})
-	_delete_all("Sparsh Mastery State", {"competency": competency})
+	_delete_mastery({"competency": competency})
 	_delete_all("Sparsh Attempt", {"activity": ("in", [ACTIVITY_1, ACTIVITY_2])})
 	frappe.db.commit()
 
@@ -118,7 +128,7 @@ def teardown():
 	# Evidence before Mastery State: cancelling Evidence triggers a recompute that
 	# recreates the Mastery row, so deleting Mastery first leaves one behind.
 	_delete_all("Sparsh Evidence", {"competency": ("in", competencies)})
-	_delete_all("Sparsh Mastery State", {"competency": ("in", competencies)})
+	_delete_mastery({"competency": ("in", competencies)})
 	_delete_all("Sparsh Escalation Question", {"learner": ("in", [LEARNER, TEST_LEARNER, OTHER_LEARNER])})
 	_delete_all("Sparsh Attempt", {"activity": ("like", PREFIX + "%")})
 	_delete_all("Sparsh Activity", {"name": ("like", PREFIX + "%")})
@@ -1447,10 +1457,12 @@ def check_practice_page_builds():
 		"The page is missing the competency just demonstrated",
 	)
 
-	# The page must offer the next thing to do, with an instruction to show.
-	if context.next_up:
-		_assert(context.next_up.get("activity"), "next_up carries no activity")
-		_assert("reason" in context.next_up, "next_up does not say why")
+	# The page must offer the next thing to do. Wrapping this in "if next_up" meant
+	# a page that offered nothing passed the check.
+	_assert(context.next_up, "The page offered the learner nothing to do")
+	_assert(context.next_up.get("activity"), "next_up carries no activity")
+	_assert(context.next_up.get("instruction"), "next_up carries no instruction to show")
+	_assert("reason" in context.next_up, "next_up does not say why")
 
 	# A guest gets nothing.
 	original_user = frappe.session.user
@@ -1766,6 +1778,113 @@ def check_pathway_walks_in_order():
 	frappe.db.commit()
 
 
+def check_nobody_judges_their_own_work():
+	"""Role combinations do not create a way to grade yourself."""
+	dual = "zzv-dual@example.invalid"
+	if not frappe.db.exists("User", dual):
+		user = frappe.new_doc("User")
+		user.email = dual
+		user.first_name = "Verification"
+		user.user_type = "System User"
+		user.append("roles", {"role": "Sparsh Learner"})
+		user.append("roles", {"role": "Sparsh Reviewer"})
+		user.insert(ignore_permissions=True)
+		frappe.db.commit()
+
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(dual)
+
+		def self_evidence():
+			doc = frappe.new_doc("Sparsh Evidence")
+			doc.learner = dual
+			doc.competency = COMPETENCY
+			doc.activity = ACTIVITY_1
+			doc.activity_version = 1
+			doc.outcome = "Pass"
+			doc.assistance_level = 0
+			doc.insert(ignore_permissions=True)
+
+		try:
+			self_evidence()
+			raise AssertionError("A learner-reviewer wrote evidence about themselves")
+		except frappe.PermissionError:
+			pass
+
+		def self_certify():
+			doc = frappe.new_doc("Sparsh Certification Record")
+			doc.learner = dual
+			doc.competency = COMPETENCY
+			doc.certification_status = "Full"
+			doc.insert(ignore_permissions=True)
+			doc.submit()
+
+		try:
+			self_certify()
+			raise AssertionError("A learner-reviewer certified themselves")
+		except (frappe.PermissionError, frappe.ValidationError):
+			pass
+	finally:
+		frappe.set_user(original_user)
+		frappe.db.rollback()
+
+	frappe.delete_doc("User", dual, force=True, ignore_permissions=True)
+	frappe.db.commit()
+
+
+def check_unenrolled_user_is_shut_out():
+	"""A signed-in account with no programme role reaches nothing."""
+	from sparsh_los import certification, dashboard, escalation, orchestrator, runner
+
+	stranger = "zzv-stranger@example.invalid"
+	if not frappe.db.exists("User", stranger):
+		user = frappe.new_doc("User")
+		user.email = stranger
+		user.first_name = "Verification"
+		user.user_type = "System User"
+		user.insert(ignore_permissions=True)
+		frappe.db.commit()
+
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(stranger)
+		for call, label in (
+			(lambda: dashboard.learner_view(LEARNER), "dashboard.learner_view"),
+			(lambda: certification.readiness(COMPETENCY, LEARNER), "certification.readiness"),
+			(lambda: orchestrator.next_experience(COMPETENCY, LEARNER), "orchestrator.next_experience"),
+			(lambda: dashboard.supervisor_view(), "dashboard.supervisor_view"),
+			(lambda: escalation.open_queue(), "escalation.open_queue"),
+			(lambda: runner.start(ACTIVITY_1), "runner.start"),
+			(lambda: runner.submit(ACTIVITY_1, "anything"), "runner.submit"),
+		):
+			try:
+				call()
+				raise AssertionError(f"{label} was reachable by an unenrolled account")
+			except frappe.PermissionError:
+				pass
+	finally:
+		frappe.set_user(original_user)
+
+	frappe.delete_doc("User", stranger, force=True, ignore_permissions=True)
+	frappe.db.commit()
+
+
+def check_mastery_cannot_be_deleted():
+	"""A derived state cannot be removed to hide the evidence behind it."""
+	_reset_competency()
+	_new_evidence(ACTIVITY_1, "Pass")
+	name = frappe.db.get_value(
+		"Sparsh Mastery State", {"learner": LEARNER, "competency": COMPETENCY}, "name"
+	)
+	_assert(name, "No mastery state to test deletion against")
+
+	_raises(
+		lambda: frappe.delete_doc("Sparsh Mastery State", name, ignore_permissions=True),
+		"A derived mastery state was deleted",
+	)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -1828,6 +1947,9 @@ CHECKS = (
 	("activity_cannot_change_competency", check_activity_cannot_change_competency),
 	("rejected_evidence_does_not_count", check_rejected_evidence_does_not_count),
 	("pathway_walks_in_order", check_pathway_walks_in_order),
+	("nobody_judges_their_own_work", check_nobody_judges_their_own_work),
+	("unenrolled_user_is_shut_out", check_unenrolled_user_is_shut_out),
+	("mastery_cannot_be_deleted", check_mastery_cannot_be_deleted),
 	("cleanup", check_cleanup),
 )
 
