@@ -74,3 +74,42 @@ DEFERRED (real, out of scope for the scaffold)
 ### Re-audit status
 Code changed materially after the audit. The `sol` audit does NOT cover commit `9d1b3ff`. A
 re-audit is required before this is treated as reviewed.
+
+## 2026-09-12 · Permission model and re-audit
+- Commit `9753305` permission model; commit `HEAD` re-audit fixes.
+- Acceptance: `RESULT passed=14 failed=0`, twice consecutively, and on a clean install
+  with both roles deleted first.
+- Codex tier `gpt-5.6-sol` again (`astra` unavailable on this account).
+
+### Re-audit dispositions
+REJECTED WITH EVIDENCE
+- Blocker "frappe.client.get_value bypasses row scoping". FALSE for Frappe v16 on this bench.
+  `frappe/client.py:get_value` routes non-Single doctypes through `get_list`, which applies
+  `permission_query_conditions`; `frappe.db.get_value` is used only for Single doctypes, and none
+  of ours are Single. Verified by reading the installed source. A regression test now exercises
+  `frappe.client.get_value` as an authenticated learner.
+
+CONFIRMED AND FIXED
+- #2 learners controlled evaluation fields on Attempt.
+- #3 learners could forge escalation workflow state.
+- #6 Evidence could credit an activity to the wrong competency.
+- #8 equal `creation` timestamps read as "critical error answered". Tie-break on (creation, name).
+- #9 reviewer/certifier attribution was caller-supplied.
+- #10 the scope test would have passed even if the boundary were broken. Now authenticates as a
+  learner and exercises get_list, frappe.client.get_value, cross-learner insert and Evidence create.
+- #11 no test distinguished one activity from two. Now covered.
+- M14 from the first audit: certification could not be revoked after regression.
+
+DEFERRED
+- #4/#5 System Manager retains delete on Mastery State and Attempt; no `on_trash` guard. Blocking
+  deletion breaks the harness teardown and an administrator can reach the table regardless. Belongs
+  with the retention policy, not the controller.
+- #7 the unique index protects the invariant but the upsert has no retry, so a concurrent recompute
+  raises a duplicate-key error rather than merging. Correct but not graceful.
+- M8 `human_review_status` and `mastery_contribution` still not consulted by derivation.
+- M9/M10/M11 rule immutability after attempts cite it.
+- M12 `retry_index` sequencing.
+
+### Coverage note
+Both audits ran at `sol`. Neither covers the current HEAD: code changed after the re-audit. A third
+audit would be needed to call HEAD reviewed.
