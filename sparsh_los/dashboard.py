@@ -15,7 +15,7 @@ import frappe
 from frappe import _
 
 from sparsh_los.mastery import DEMONSTRATED, MASTERED, PRACTISING
-from sparsh_los.permissions import is_restricted
+from sparsh_los.permissions import is_restricted, require_reviewer
 
 CERTIFIABLE = (DEMONSTRATED, MASTERED)
 
@@ -59,8 +59,7 @@ def learner_view(learner=None):
 
 def _require_supervisor():
 	"""Cohort-wide views are for people who supervise a cohort."""
-	if is_restricted():
-		frappe.throw(_("Cohort views require a reviewer role"), frappe.PermissionError)
+	require_reviewer()
 
 
 def _cohort_states(competency=None):

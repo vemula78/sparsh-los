@@ -17,7 +17,7 @@ from sparsh_los.mastery import (
 	derive_state,
 	has_blocking_critical_error,
 )
-from sparsh_los.permissions import is_restricted
+from sparsh_los.permissions import is_restricted, require_reviewer
 
 READY = "Ready for sign-off"
 BLOCKED = "Blocked by a safety error"
@@ -87,8 +87,7 @@ def readiness(competency, learner=None):
 @frappe.whitelist()
 def cohort_readiness(competency):
 	"""Who is ready, who is blocked, and who needs more evidence — with reasons."""
-	if is_restricted():
-		frappe.throw(_("Cohort views require a reviewer role"), frappe.PermissionError)
+	require_reviewer()
 
 	learners = {
 		row.learner

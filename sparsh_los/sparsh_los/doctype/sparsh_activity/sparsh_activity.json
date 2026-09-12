@@ -17,11 +17,11 @@
   "instruction",
   "expected_evidence",
   "section_break_hints",
-  "hint_ladder",
   "section_break_errors",
-  "critical_errors",
   "evaluation_mode",
-  "expected_response"
+  "expected_response",
+  "hints",
+  "critical_markers"
  ],
  "fields": [
   {
@@ -98,23 +98,9 @@
    "label": "Hint Ladder"
   },
   {
-   "fieldname": "hint_ladder",
-   "fieldtype": "Table",
-   "label": "Hint Ladder",
-   "options": "Sparsh Hint Ladder Step",
-   "permlevel": 1
-  },
-  {
    "fieldname": "section_break_errors",
    "fieldtype": "Section Break",
    "label": "Critical Errors"
-  },
-  {
-   "fieldname": "critical_errors",
-   "fieldtype": "Table",
-   "label": "Critical Errors",
-   "options": "Sparsh Critical Error",
-   "permlevel": 1
   },
   {
    "fieldname": "evaluation_mode",
@@ -131,11 +117,25 @@
    "description": "Accepted answers, one per line. Compared case-insensitively after trimming.",
    "depends_on": "eval:doc.evaluation_mode=='Deterministic'",
    "permlevel": 1
+  },
+  {
+   "fieldname": "hints",
+   "fieldtype": "Small Text",
+   "label": "Hint Ladder",
+   "permlevel": 1,
+   "description": "One hint per line, weakest first. Line 1 is hint level 1."
+  },
+  {
+   "fieldname": "critical_markers",
+   "fieldtype": "Small Text",
+   "label": "Critical Error Markers",
+   "permlevel": 1,
+   "description": "One phrase per line. A response matching one is unsafe."
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-12 22:10:49.147407",
+ "modified": "2026-09-12 22:29:13.597928",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Activity",
@@ -167,21 +167,6 @@
    "read": 1,
    "report": 1,
    "role": "Sparsh Reviewer",
-   "share": 0,
-   "submit": 0,
-   "write": 0
-  },
-  {
-   "amend": 0,
-   "cancel": 0,
-   "create": 0,
-   "delete": 0,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
-   "role": "Sparsh Learner",
    "share": 0,
    "submit": 0,
    "write": 0

@@ -59,12 +59,17 @@ class SparshEvidence(Document):
 		self._validate_clearance()
 
 	def before_cancel(self):
-		"""A safety error is not made to disappear by cancelling the record."""
-		if self.critical_error and not self.critical_error_cleared:
+		"""A safety error is not made to disappear by cancelling the record.
+
+		This holds even once the error has been cleared. A cleared error is still part
+		of the history, and cancelling it then withdrawing the clearing review left
+		nothing behind to re-impose the block.
+		"""
+		if self.critical_error:
 			frappe.throw(
 				_(
-					"Evidence carrying an unresolved critical error cannot be cancelled. "
-					"It must be cleared by a human review."
+					"Evidence carrying a critical error cannot be cancelled. A safety "
+					"record stays in the history whether or not it has been cleared."
 				),
 				frappe.ValidationError,
 			)

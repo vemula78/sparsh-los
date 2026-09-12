@@ -19,7 +19,7 @@ import json
 import frappe
 from frappe import _
 
-from sparsh_los.permissions import is_restricted, throttle
+from sparsh_los.permissions import is_restricted, require_reviewer, throttle
 
 DISPOSITIONS = (
 	"Private answer",
@@ -128,8 +128,7 @@ def answer(question, answer_text, disposition):
 @frappe.whitelist()
 def open_queue(reviewer=None):
 	"""The reviewer's queue: oldest first, because a waiting learner is blocked."""
-	if is_restricted():
-		frappe.throw(_("The escalation queue is a reviewer view"), frappe.PermissionError)
+	require_reviewer()
 
 	filters = {"status": ("in", ("Open", "Routed to Human"))}
 	if reviewer:

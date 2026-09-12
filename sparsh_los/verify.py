@@ -96,6 +96,7 @@ def _reset_competency(competency=None):
 	_delete_all("Sparsh Certification Record", {"competency": competency})
 	_delete_all("Sparsh Evidence", {"competency": competency})
 	_delete_all("Sparsh Mastery State", {"competency": competency})
+	_delete_all("Sparsh Attempt", {"activity": ("in", [ACTIVITY_1, ACTIVITY_2])})
 	frappe.db.commit()
 
 
@@ -150,8 +151,7 @@ def setup():
 		activity.activity_type = "Knowledge check"
 		activity.instruction = "Verification instruction."
 		activity.version = 1
-		activity.append("hint_ladder", {"level": 0, "hint_text": "No hint."})
-		activity.append("hint_ladder", {"level": 1, "hint_text": "First hint."})
+		activity.hints = "First hint.\nSecond hint."
 		activity.insert(ignore_permissions=True)
 
 	frappe.db.commit()
@@ -182,9 +182,9 @@ def _new_attempt(rule_name, hint_level=0, outcome="Pass", critical_error=0,
 
 
 def _new_evidence(activity, outcome, assistance_level=0, critical_error=0,
-				  competency=COMPETENCY, submit=True):
+				  competency=COMPETENCY, submit=True, learner=None):
 	evidence = frappe.new_doc("Sparsh Evidence")
-	evidence.learner = LEARNER
+	evidence.learner = learner or LEARNER
 	evidence.competency = competency
 	evidence.activity = activity
 	evidence.activity_version = 1
@@ -197,9 +197,11 @@ def _new_evidence(activity, outcome, assistance_level=0, critical_error=0,
 	return evidence
 
 
-def _state():
+def _state(learner=None):
 	return frappe.db.get_value(
-		"Sparsh Mastery State", {"learner": LEARNER, "competency": COMPETENCY}, "state"
+		"Sparsh Mastery State",
+		{"learner": learner or LEARNER, "competency": COMPETENCY},
+		"state",
 	)
 
 
@@ -552,11 +554,7 @@ def check_runner_loop():
 		activity = frappe.get_doc("Sparsh Activity", name)
 		activity.evaluation_mode = "Deterministic"
 		activity.expected_response = "level two"
-		if not activity.critical_errors:
-			activity.append(
-				"critical_errors",
-				{"error_description": "stop the medicine", "severity": "Safety-critical"},
-			)
+		activity.critical_markers = "stop the medicine"
 		activity.save(ignore_permissions=True)
 	frappe.db.commit()
 
@@ -736,7 +734,7 @@ def check_other_domain_runs_unchanged():
 	activity.version = 1
 	activity.evaluation_mode = "Deterministic"
 	activity.expected_response = "share"
-	activity.append("hint_ladder", {"level": 1, "hint_text": "Look at the top right of the screen."})
+	activity.hints = "Look at the top right of the screen."
 	activity.insert(ignore_permissions=True)
 	frappe.db.commit()
 
@@ -804,17 +802,20 @@ def check_only_review_clears_critical_error():
 	"""A safety error is cleared by a reviewer, never by performing well afterwards."""
 	_reset_competency()
 
-	critical = _new_evidence(ACTIVITY_1, "Fail", critical_error=1)
-	_new_evidence(ACTIVITY_1, "Pass")
-	_new_evidence(ACTIVITY_2, "Pass")
+	# The reviewer cannot be the learner, so this runs against a separate account.
+	_make_learner(TEST_LEARNER)
+	frappe.db.commit()
+	critical = _new_evidence(ACTIVITY_1, "Fail", critical_error=1, learner=TEST_LEARNER)
+	_new_evidence(ACTIVITY_1, "Pass", learner=TEST_LEARNER)
+	_new_evidence(ACTIVITY_2, "Pass", learner=TEST_LEARNER)
 	_assert(
-		_state() == "Practising",
-		f"Two independent passes lifted a standing critical error to {_state()}",
+		_state(TEST_LEARNER) == "Practising",
+		f"Two independent passes lifted a standing critical error to {_state(TEST_LEARNER)}",
 	)
 
 	def certify():
 		doc = frappe.new_doc("Sparsh Certification Record")
-		doc.learner = LEARNER
+		doc.learner = TEST_LEARNER
 		doc.competency = COMPETENCY
 		doc.certification_status = "Full"
 		doc.insert(ignore_permissions=True)
@@ -823,8 +824,6 @@ def check_only_review_clears_critical_error():
 
 	review = frappe.new_doc("Sparsh Human Review")
 	review.evidence = critical.name
-	review.learner = LEARNER
-	review.competency = COMPETENCY
 	review.review_status = "Approved"
 	review.clears_critical_error = 1
 	review.reviewer_comments = "Remediation observed."
@@ -834,8 +833,8 @@ def check_only_review_clears_critical_error():
 	critical.reload()
 	_assert(critical.critical_error_cleared == 1, "The review did not clear the critical error")
 	_assert(
-		_state() in ("Demonstrated", "Mastered"),
-		f"After a reviewed clearance the state is {_state()}",
+		_state(TEST_LEARNER) in ("Demonstrated", "Mastered"),
+		f"After a reviewed clearance the state is {_state(TEST_LEARNER)}",
 	)
 	frappe.db.commit()
 
@@ -1119,26 +1118,29 @@ def check_clearance_must_be_backed_by_review():
 def check_cancelling_review_restores_block():
 	"""Withdrawing a clearance restores the block it lifted."""
 	_reset_competency()
-	critical = _new_evidence(ACTIVITY_1, "Fail", critical_error=1)
-	_new_evidence(ACTIVITY_1, "Pass")
-	_assert(_state() == "Practising", f"Expected Practising, got {_state()}")
+	_make_learner(TEST_LEARNER)
+	frappe.db.commit()
+	critical = _new_evidence(ACTIVITY_1, "Fail", critical_error=1, learner=TEST_LEARNER)
+	_new_evidence(ACTIVITY_1, "Pass", learner=TEST_LEARNER)
+	_assert(_state(TEST_LEARNER) == "Practising", f"Expected Practising, got {_state(TEST_LEARNER)}")
 
 	review = frappe.new_doc("Sparsh Human Review")
 	review.evidence = critical.name
-	review.learner = LEARNER
-	review.competency = COMPETENCY
 	review.review_status = "Approved"
 	review.clears_critical_error = 1
 	review.insert(ignore_permissions=True)
 	review.submit()
-	_assert(_state() == "Demonstrated", f"After clearance expected Demonstrated, got {_state()}")
+	_assert(
+		_state(TEST_LEARNER) == "Demonstrated",
+		f"After clearance expected Demonstrated, got {_state(TEST_LEARNER)}",
+	)
 
 	review.cancel()
 	critical.reload()
 	_assert(not critical.critical_error_cleared, "Cancelling the review left the clearance in place")
 	_assert(
-		_state() == "Practising",
-		f"Cancelling the review left the state at {_state()}",
+		_state(TEST_LEARNER) == "Practising",
+		f"Cancelling the review left the state at {_state(TEST_LEARNER)}",
 	)
 	frappe.db.commit()
 
@@ -1257,7 +1259,17 @@ def check_human_review_activity_completes():
 	activity.save(ignore_permissions=True)
 	frappe.db.commit()
 
-	result = runner.submit(ACTIVITY_2, "I would explore what makes this hard for them first.")
+	# The attempt must belong to somebody other than the reviewer running this check.
+	_make_learner(TEST_LEARNER)
+	frappe.db.commit()
+
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+		result = runner.submit(ACTIVITY_2, "I would explore what makes this hard for them first.")
+	finally:
+		frappe.set_user(original_user)
+
 	_assert(result["outcome"] == "Not Evaluated", "A reviewed activity was auto-graded")
 	_assert("evidence" not in result, "A reviewed activity produced evidence without a reviewer")
 
@@ -1270,6 +1282,10 @@ def check_human_review_activity_completes():
 	recorded = review.record_evidence(result["attempt"], "Pass", assistance_level=0)
 	_assert(recorded["evidence"], "The reviewer could not record evidence")
 	_assert(recorded["state"] == "Demonstrated", f"After review the state is {recorded['state']}")
+	_assert(
+		frappe.db.get_value("Sparsh Attempt", result["attempt"], "outcome") == "Not Evaluated",
+		"Recording evidence rewrote the attempt, which is meant to be immutable",
+	)
 
 	# It leaves the queue, and cannot be recorded twice.
 	still_waiting = review.pending(competency=COMPETENCY)

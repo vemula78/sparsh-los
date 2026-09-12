@@ -27,6 +27,7 @@ permission_query_conditions = {
 	"Sparsh Mastery State": "sparsh_los.permissions.mastery_state_query",
 	"Sparsh Certification Record": "sparsh_los.permissions.certification_record_query",
 	"Sparsh Escalation Question": "sparsh_los.permissions.escalation_question_query",
+	"Sparsh Refresher Assignment": "sparsh_los.permissions.refresher_assignment_query",
 }
 
 has_permission = {
@@ -35,6 +36,7 @@ has_permission = {
 	"Sparsh Mastery State": "sparsh_los.permissions.has_permission",
 	"Sparsh Certification Record": "sparsh_los.permissions.has_permission",
 	"Sparsh Escalation Question": "sparsh_los.permissions.has_permission",
+	"Sparsh Refresher Assignment": "sparsh_los.permissions.has_permission",
 }
 
 # Scheduled jobs

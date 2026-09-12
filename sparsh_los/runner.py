@@ -55,13 +55,17 @@ def _governing_rule(competency):
 	return active[0] if active else (links[0] if links else None)
 
 
+def _lines(text):
+	return [line.strip() for line in (text or "").splitlines() if line.strip()]
+
+
 def _hint_for(activity, level):
-	"""The strongest hint at or below `level`, or None when the ladder has nothing."""
-	steps = sorted(
-		(s for s in activity.hint_ladder if (s.level or 0) <= level),
-		key=lambda s: s.level or 0,
-	)
-	return steps[-1].hint_text if steps else None
+	"""The hint at `level`, or the strongest below it. Line 1 is level 1."""
+	hints = _lines(activity.hints)
+	if not hints or level < 1:
+		return None
+
+	return hints[min(level, len(hints)) - 1]
 
 
 NEGATIONS = ("not", "never", "dont", "don't", "avoid", "without", "shouldnt", "shouldn't")
@@ -81,8 +85,8 @@ def _is_critical(activity, response):
 		return False
 
 	words = answer.split()
-	for row in activity.critical_errors:
-		marker = _normalise(row.error_description)
+	for marker_text in _lines(activity.critical_markers):
+		marker = _normalise(marker_text)
 		if not marker:
 			continue
 
@@ -137,8 +141,10 @@ def start(activity):
 def _session_position(learner, activity):
 	"""Assistance level and retry index, counted from the record, not from the caller.
 
-	Trusting the caller here let a learner claim an unaided pass after reading the
-	hints: assistance is a fact about the session, so the server owns it.
+	Assistance never falls. Once a learner has been shown a hint for an activity,
+	every later answer on it is assisted: resetting the count after a pass let them
+	take a hint, pass with it, and immediately resubmit the now-known answer as an
+	independent pass. Demonstrating unaided competence needs a different activity.
 	"""
 	attempts = frappe.get_all(
 		"Sparsh Attempt",
@@ -147,14 +153,10 @@ def _session_position(learner, activity):
 		order_by="creation asc",
 	)
 
-	failures_since_pass = 0
-	for row in attempts:
-		if row.outcome == "Pass":
-			failures_since_pass = 0
-		else:
-			failures_since_pass += 1
+	failures = sum(1 for row in attempts if row.outcome not in ("Pass", "Not Evaluated"))
+	seen = max((row.hint_level_used or 0) for row in attempts) if attempts else 0
 
-	return min(failures_since_pass, MAX_HINT_LEVEL), len(attempts)
+	return min(max(failures, seen), MAX_HINT_LEVEL), len(attempts)
 
 
 @frappe.whitelist()

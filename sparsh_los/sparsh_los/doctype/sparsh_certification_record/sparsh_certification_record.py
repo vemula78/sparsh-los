@@ -102,6 +102,11 @@ class SparshCertificationRecord(Document):
 @frappe.whitelist()
 def current(learner, competency):
 	"""The certification that stands right now, or None. The authoritative answer."""
+	from sparsh_los.permissions import is_restricted
+
+	if learner != frappe.session.user and is_restricted():
+		frappe.throw(_("You can only view your own certification"), frappe.PermissionError)
+
 	rows = frappe.get_all(
 		"Sparsh Certification Record",
 		filters={

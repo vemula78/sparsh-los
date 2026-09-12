@@ -14,7 +14,7 @@ which is what makes it testable.
 
 import frappe
 
-from sparsh_los.mastery import DEMONSTRATED, MASTERED, REFRESH_DUE, derive_state
+from sparsh_los.mastery import DEMONSTRATED, MASTERED, REFRESH_DUE, derive_state, recompute_mastery
 
 TIME_ELAPSED = "Time elapsed"
 RULE_CHANGED = "Rule changed"
@@ -56,6 +56,10 @@ def evaluate_time_based():
 	):
 		if derive_state(row.learner, row.competency) != REFRESH_DUE:
 			continue
+
+		# Persist the regression: without this the stored state and any standing
+		# certification stayed as they were, so a certificate outlived its currency.
+		recompute_mastery(row.learner, row.competency)
 
 		name = assign(
 			row.learner,

@@ -19,6 +19,11 @@ class SparshHumanReview(Document):
 				self.competency = row.competency
 
 	def before_submit(self):
+		if self.learner == frappe.session.user:
+			frappe.throw(
+				frappe._("You cannot review your own evidence"), frappe.PermissionError
+			)
+
 		# Attribution belongs to the act of reviewing. Stamping it on every save meant
 		# whoever last edited a draft became the recorded reviewer.
 		self.reviewer = frappe.session.user

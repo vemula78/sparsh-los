@@ -22,9 +22,27 @@ LEARNER_SCOPED = {
 	"Sparsh Mastery State": "learner",
 	"Sparsh Certification Record": "learner",
 	"Sparsh Escalation Question": "learner",
+	"Sparsh Refresher Assignment": "learner",
 }
 
 UNRESTRICTED_ROLES = {"System Manager", "Sparsh Reviewer", "Administrator"}
+
+# Roles that may judge a learner's work. Membership is required, never assumed:
+# is_restricted() answers "is this a learner?", which is not the same question.
+REVIEWER_ROLES = {"Sparsh Reviewer", "System Manager", "Administrator"}
+
+
+def is_reviewer(user=None):
+	user = user or frappe.session.user
+	if user == "Administrator":
+		return True
+
+	return bool(set(frappe.get_roles(user)) & REVIEWER_ROLES)
+
+
+def require_reviewer():
+	if not is_reviewer():
+		frappe.throw(frappe._("This is a reviewer action"), frappe.PermissionError)
 
 
 def is_restricted(user=None):
@@ -78,6 +96,10 @@ def certification_record_query(user):
 
 def escalation_question_query(user):
 	return _conditions("Sparsh Escalation Question", user)
+
+
+def refresher_assignment_query(user):
+	return _conditions("Sparsh Refresher Assignment", user)
 
 
 def has_permission(doc, ptype=None, user=None):

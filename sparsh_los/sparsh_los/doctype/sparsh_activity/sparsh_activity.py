@@ -5,16 +5,26 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 
+MAX_HINTS = 4
+
 
 class SparshActivity(Document):
 	def validate(self):
-		seen = set()
-		for row in self.hint_ladder:
-			if row.level is None or row.level < 0 or row.level > 4:
-				frappe.throw(_("Hint ladder level must be between 0 and 4 (row {0})").format(row.idx))
-			if row.level in seen:
-				frappe.throw(_("Duplicate hint ladder level {0}").format(row.level))
-			seen.add(row.level)
+		# The ladder is one hint per line, weakest first: line 1 is hint level 1.
+		# It was a child table until a child table proved to be separately queryable
+		# by the person being assessed, which made the answer key readable.
+		hints = [line for line in (self.hints or "").splitlines() if line.strip()]
+		if len(hints) > MAX_HINTS:
+			frappe.throw(
+				_("A hint ladder has at most {0} rungs; this one has {1}").format(
+					MAX_HINTS, len(hints)
+				)
+			)
 
 		if (self.version or 0) < 1:
 			frappe.throw(_("Version must be 1 or greater"))
+
+		if self.evaluation_mode == "Deterministic" and not (self.expected_response or "").strip():
+			# Not an error: an activity can be authored before its answer is agreed.
+			# It simply cannot auto-pass anybody until it has one.
+			pass

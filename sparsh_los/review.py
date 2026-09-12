@@ -15,14 +15,13 @@ reviewer's judgement exactly as they apply to the engine's.
 import frappe
 from frappe import _
 
-from sparsh_los.permissions import is_restricted
+from sparsh_los.permissions import require_reviewer
 
 REVIEWABLE_OUTCOMES = ("Pass", "Partial", "Fail")
 
 
 def _require_reviewer():
-	if is_restricted():
-		frappe.throw(_("Recording evidence is a reviewer action"), frappe.PermissionError)
+	require_reviewer()
 
 
 @frappe.whitelist()
@@ -69,6 +68,9 @@ def record_evidence(attempt, outcome, assistance_level=None, critical_error=0, c
 		frappe.throw(_("{0} is not a reviewable outcome").format(outcome))
 
 	doc = frappe.get_doc("Sparsh Attempt", attempt)
+	if doc.learner == frappe.session.user:
+		frappe.throw(_("You cannot record evidence for your own attempt"), frappe.PermissionError)
+
 	if frappe.db.exists("Sparsh Evidence", {"attempt": doc.name}):
 		frappe.throw(_("This attempt has already been turned into evidence"))
 
@@ -93,8 +95,9 @@ def record_evidence(attempt, outcome, assistance_level=None, critical_error=0, c
 	evidence.insert(ignore_permissions=True)
 	evidence.submit()
 
-	# The attempt said "nobody has judged this yet". Somebody has now.
-	frappe.db.set_value("Sparsh Attempt", doc.name, "outcome", outcome)
+	# The attempt is not rewritten: it records what the learner did, and a reviewer's
+	# verdict is a separate fact. "Has this been judged?" is answered by whether
+	# Evidence cites the attempt, which is how pending() already asks it.
 
 	return {
 		"evidence": evidence.name,
