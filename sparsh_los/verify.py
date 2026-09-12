@@ -894,6 +894,72 @@ def check_identifiers_are_refused():
 	frappe.db.commit()
 
 
+def check_certification_readiness():
+	"""The platform says why someone is not ready, not merely that they failed."""
+	from sparsh_los import certification
+
+	_reset_competency()
+
+	early = certification.readiness(COMPETENCY, LEARNER)
+	_assert(
+		early["verdict"] == certification.INSUFFICIENT,
+		f"With no evidence the verdict was {early['verdict']}",
+	)
+	_assert(early["reason"], "No reason was given for a not-ready verdict")
+
+	_new_evidence(ACTIVITY_1, "Pass")
+	ready = certification.readiness(COMPETENCY, LEARNER)
+	_assert(ready["verdict"] == certification.READY, f"After a pass the verdict was {ready['verdict']}")
+	_assert(ready["independent_passes"] == 1, "The independent pass was not counted")
+	_assert(ACTIVITY_1 in ready["distinct_activities"], "The activity was not listed")
+
+	_new_evidence(ACTIVITY_1, "Fail", critical_error=1)
+	blocked = certification.readiness(COMPETENCY, LEARNER)
+	_assert(
+		blocked["verdict"] == certification.BLOCKED,
+		f"With a standing critical error the verdict was {blocked['verdict']}",
+	)
+	_assert(blocked["blocking_evidence"], "The blocking evidence was not named")
+
+	cohort = certification.cohort_readiness(COMPETENCY)
+	_assert(cohort["counts"][certification.BLOCKED] >= 1, "The cohort view did not count the block")
+	frappe.db.commit()
+
+
+def check_whitelisted_reads_are_scoped():
+	"""A learner cannot read another learner's record through a whitelisted method."""
+	from sparsh_los import certification, dashboard, orchestrator
+
+	_make_learner(TEST_LEARNER)
+	frappe.db.commit()
+
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+
+		for call, label in (
+			(lambda: dashboard.learner_view(LEARNER), "dashboard.learner_view"),
+			(lambda: orchestrator.next_experience(COMPETENCY, LEARNER), "orchestrator.next_experience"),
+			(lambda: certification.readiness(COMPETENCY, LEARNER), "certification.readiness"),
+			(lambda: dashboard.supervisor_view(), "dashboard.supervisor_view"),
+			(lambda: dashboard.competency_heatmap(), "dashboard.competency_heatmap"),
+			(lambda: certification.cohort_readiness(COMPETENCY), "certification.cohort_readiness"),
+		):
+			try:
+				call()
+				raise AssertionError(f"{label} was readable by a learner")
+			except frappe.PermissionError:
+				pass
+
+		# Their own record stays readable.
+		own = dashboard.learner_view()
+		_assert(own["learner"] == TEST_LEARNER, "A learner could not read their own record")
+	finally:
+		frappe.set_user(original_user)
+
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -933,6 +999,8 @@ CHECKS = (
 	("certification_suspended_on_regression", check_certification_suspended_on_regression),
 	("activityless_evidence_cannot_demonstrate", check_activityless_evidence_cannot_demonstrate),
 	("identifiers_are_refused", check_identifiers_are_refused),
+	("certification_readiness", check_certification_readiness),
+	("whitelisted_reads_are_scoped", check_whitelisted_reads_are_scoped),
 	("cleanup", check_cleanup),
 )
 

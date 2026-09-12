@@ -12,8 +12,10 @@ stored, so nothing can drift from the evidence it claims to summarise.
 """
 
 import frappe
+from frappe import _
 
 from sparsh_los.mastery import DEMONSTRATED, MASTERED, PRACTISING
+from sparsh_los.permissions import is_restricted
 
 CERTIFIABLE = (DEMONSTRATED, MASTERED)
 
@@ -22,6 +24,11 @@ CERTIFIABLE = (DEMONSTRATED, MASTERED)
 def learner_view(learner=None):
 	"""One learner's position: what they have shown, and what is waiting for them."""
 	learner = learner or frappe.session.user
+
+	# Every @frappe.whitelist() method is callable by any logged-in user, so an
+	# argument naming a learner is an access decision, not a convenience.
+	if learner != frappe.session.user and is_restricted():
+		frappe.throw(_("You can only view your own record"), frappe.PermissionError)
 
 	states = frappe.get_all(
 		"Sparsh Mastery State",
@@ -48,6 +55,12 @@ def learner_view(learner=None):
 	}
 
 
+def _require_supervisor():
+	"""Cohort-wide views are for people who supervise a cohort."""
+	if is_restricted():
+		frappe.throw(_("Cohort views require a reviewer role"), frappe.PermissionError)
+
+
 def _cohort_states(competency=None):
 	filters = {}
 	if competency:
@@ -63,6 +76,7 @@ def _cohort_states(competency=None):
 @frappe.whitelist()
 def supervisor_view(competency=None):
 	"""The four questions, answered from evidence."""
+	_require_supervisor()
 	states = _cohort_states(competency)
 
 	# Who is ready to progress.
@@ -113,6 +127,7 @@ def competency_heatmap():
 	A cell holds a state, never a percentage: the supervisor should click through to
 	the evidence, not read a score.
 	"""
+	_require_supervisor()
 	states = _cohort_states()
 	competencies = sorted({s.competency for s in states})
 

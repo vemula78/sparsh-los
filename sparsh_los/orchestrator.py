@@ -11,7 +11,9 @@ Selection is deterministic and cheap. Nothing here calls a model.
 """
 
 import frappe
+from frappe import _
 
+from sparsh_los.permissions import is_restricted
 from sparsh_los.mastery import (
 	DEMONSTRATED,
 	EXPLORING,
@@ -82,6 +84,9 @@ def next_experience(competency, learner=None):
 	the first time, and the record should say so.
 	"""
 	learner = learner or frappe.session.user
+
+	if learner != frappe.session.user and is_restricted():
+		frappe.throw(_("You can only request your own next activity"), frappe.PermissionError)
 
 	unmet = _prerequisites_unmet(learner, competency)
 	if unmet:
