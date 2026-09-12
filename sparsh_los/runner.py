@@ -172,6 +172,12 @@ def _session_position(learner, activity):
 	every later answer on it is assisted: resetting the count after a pass let them
 	take a hint, pass with it, and immediately resubmit the now-known answer as an
 	independent pass. Demonstrating unaided competence needs a different activity.
+
+	Two simultaneous submissions can both read the same position and both be shown
+	the same hint. That is deliberate rather than unhandled: because assistance only
+	ever rises, a race can overstate the help a learner received but never understate
+	it, so it cannot manufacture an independent pass. The cost is a hint rung
+	occasionally skipped, which is a worse lesson, not a false record.
 	"""
 	attempts = frappe.get_all(
 		"Sparsh Attempt",

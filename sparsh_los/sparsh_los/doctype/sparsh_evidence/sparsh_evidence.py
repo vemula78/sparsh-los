@@ -13,6 +13,15 @@ class SparshEvidence(Document):
 		if self.assistance_level is None or self.assistance_level < 0 or self.assistance_level > 4:
 			frappe.throw(_("Assistance level must be between 0 and 4"))
 
+		if self.critical_error and self.outcome == "Pass":
+			frappe.throw(_("Evidence carrying a critical error cannot record a passing outcome"))
+
+		self._no_self_evidence()
+		self._validate_clearance()
+		# Reconciliation first: it can inherit the activity from the attempt, and the
+		# provenance rule below should judge the record as it will be stored.
+		self._reconcile_with_attempt()
+
 		if self.outcome == "Pass" and not (self.assistance_level or 0) and not self.activity:
 			frappe.throw(
 				_(
@@ -22,12 +31,6 @@ class SparshEvidence(Document):
 				frappe.ValidationError,
 			)
 
-		if self.critical_error and self.outcome == "Pass":
-			frappe.throw(_("Evidence carrying a critical error cannot record a passing outcome"))
-
-		self._no_self_evidence()
-		self._validate_clearance()
-		self._reconcile_with_attempt()
 		self._validate_activity_competency()
 
 		if not self.recorded_at:
@@ -138,6 +141,11 @@ class SparshEvidence(Document):
 
 		if attempt.learner != self.learner:
 			frappe.throw(_("Evidence and the attempt it cites must belong to the same learner"))
+
+		if not self.activity and attempt.activity:
+			# Inherit rather than leave it blank: omitting the activity was a way past
+			# both the provenance rule and the competency check.
+			self.activity = attempt.activity
 
 		if self.activity and attempt.activity and attempt.activity != self.activity:
 			frappe.throw(_("Evidence and the attempt it cites must refer to the same activity"))

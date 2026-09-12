@@ -1266,6 +1266,23 @@ def check_evidence_cannot_contradict_the_attempt():
 		doc.insert(ignore_permissions=True)
 
 	_raises(understate_help, "Evidence claimed less assistance than the attempt recorded")
+
+	# Omitting the activity used to escape both the provenance rule and the
+	# competency check; it is inherited from the attempt instead.
+	sound = _new_attempt(None, outcome="Pass")
+	frappe.db.set_value("Sparsh Attempt", sound.name, "activity", ACTIVITY_1)
+	inherited = frappe.new_doc("Sparsh Evidence")
+	inherited.learner = LEARNER
+	inherited.competency = COMPETENCY
+	inherited.activity_version = 1
+	inherited.attempt = sound.name
+	inherited.outcome = "Pass"
+	inherited.assistance_level = 0
+	inherited.insert(ignore_permissions=True)
+	_assert(
+		inherited.activity == ACTIVITY_1,
+		f"Evidence did not inherit the attempt's activity, it has {inherited.activity}",
+	)
 	frappe.db.commit()
 
 
