@@ -21,18 +21,18 @@
   {
    "fieldname": "learner",
    "fieldtype": "Link",
+   "in_list_view": 1,
    "label": "Learner",
    "options": "User",
-   "reqd": 1,
-   "in_list_view": 1
+   "reqd": 1
   },
   {
    "fieldname": "competency",
    "fieldtype": "Link",
+   "in_list_view": 1,
    "label": "Competency",
    "options": "Sparsh Competency",
-   "reqd": 1,
-   "in_list_view": 1
+   "reqd": 1
   },
   {
    "fieldname": "column_break_head",
@@ -41,18 +41,18 @@
   {
    "fieldname": "trigger_reason",
    "fieldtype": "Select",
+   "in_list_view": 1,
    "label": "Trigger",
-   "options": "Time elapsed\nRule changed\nPerformance gap",
-   "reqd": 1,
-   "in_list_view": 1
+   "options": "Time elapsed\nRule changed\nResource changed\nPerformance gap",
+   "reqd": 1
   },
   {
+   "default": "Assigned",
    "fieldname": "status",
    "fieldtype": "Select",
+   "in_list_view": 1,
    "label": "Status",
-   "options": "Assigned\nCompleted\nCancelled",
-   "default": "Assigned",
-   "in_list_view": 1
+   "options": "Assigned\nCompleted\nCancelled"
   },
   {
    "fieldname": "assigned_on",
@@ -80,7 +80,7 @@
  "idx": 0,
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-12 22:06:03.705233",
+ "modified": "2026-09-13 18:10:00.000000",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Refresher Assignment",

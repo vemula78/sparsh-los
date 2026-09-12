@@ -18,6 +18,7 @@ from sparsh_los.mastery import DEMONSTRATED, MASTERED, REFRESH_DUE, derive_state
 
 TIME_ELAPSED = "Time elapsed"
 RULE_CHANGED = "Rule changed"
+RESOURCE_CHANGED = "Resource changed"
 PERFORMANCE_GAP = "Performance gap"
 
 
@@ -116,6 +117,44 @@ def on_rule_superseded(rule):
 			)
 			# The recompute that follows an assignment lives in the Refresher
 			# Assignment controller, so every trigger gets it, not just this one.
+			if name:
+				assigned.append(name)
+
+	return assigned
+
+
+def on_resource_superseded(resource):
+	"""A learning resource was replaced, so everyone who relied on it should see the new one.
+
+	Unlike a rule, a resource is not stamped on an Attempt — nothing records which
+	reading a learner actually did. So this cannot narrow to the people it concerns the
+	way `on_rule_superseded` can, and it schedules everyone currently holding the
+	competency instead. Scheduling somebody who did not need it costs them one short
+	piece of work; missing somebody who did leaves them certified against withdrawn
+	material.
+	"""
+	competencies = frappe.get_all(
+		"Sparsh Competency Resource Link",
+		filters={"resource": resource},
+		fields=["parent"],
+		pluck="parent",
+	)
+	if not competencies:
+		return []
+
+	assigned = []
+	for competency in set(competencies):
+		for row in frappe.get_all(
+			"Sparsh Mastery State",
+			filters={"competency": competency, "state": ("in", (DEMONSTRATED, MASTERED))},
+			fields=["learner"],
+		):
+			name = assign(
+				row.learner,
+				competency,
+				RESOURCE_CHANGED,
+				f"Learning resource {resource} was superseded after this competency was demonstrated.",
+			)
 			if name:
 				assigned.append(name)
 

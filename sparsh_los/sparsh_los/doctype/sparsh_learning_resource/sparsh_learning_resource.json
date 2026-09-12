@@ -1,0 +1,145 @@
+{
+ "actions": [],
+ "autoname": "format:{resource_id}-v{version}",
+ "creation": "2026-09-13 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "resource_id",
+  "version",
+  "title",
+  "resource_type",
+  "column_break_core",
+  "status",
+  "effective_date",
+  "source",
+  "section_break_location",
+  "url",
+  "lms_lesson",
+  "file_reference",
+  "section_break_lineage",
+  "supersedes",
+  "column_break_lineage",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "resource_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Resource ID",
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "version",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Version",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Title",
+   "reqd": 1
+  },
+  {
+   "description": "What kind of thing this is. The engine never reads this; it is how a person finds the right resource.",
+   "fieldname": "resource_type",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Resource Type",
+   "options": "Manual section\nExplainer\nReference card\nCase vignette\nSimulation\nRefresher case\nExternal link\nOther",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_core",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Draft",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Draft\nApproved\nCurrent\nSuperseded\nRetired",
+   "reqd": 1
+  },
+  {
+   "fieldname": "effective_date",
+   "fieldtype": "Date",
+   "label": "Effective Date"
+  },
+  {
+   "description": "Where the content came from, in the programme's own words.",
+   "fieldname": "source",
+   "fieldtype": "Small Text",
+   "label": "Source"
+  },
+  {
+   "fieldname": "section_break_location",
+   "fieldtype": "Section Break",
+   "label": "Where it lives"
+  },
+  {
+   "fieldname": "url",
+   "fieldtype": "Data",
+   "label": "URL",
+   "options": "URL"
+  },
+  {
+   "description": "Optional. An LMS lesson is one place a resource can live, not the only one.",
+   "fieldname": "lms_lesson",
+   "fieldtype": "Data",
+   "label": "LMS Lesson"
+  },
+  {
+   "fieldname": "file_reference",
+   "fieldtype": "Data",
+   "label": "File Reference"
+  },
+  {
+   "fieldname": "section_break_lineage",
+   "fieldtype": "Section Break",
+   "label": "Lineage"
+  },
+  {
+   "description": "The resource this one replaces. Superseding never deletes: earlier evidence must stay historically interpretable.",
+   "fieldname": "supersedes",
+   "fieldtype": "Link",
+   "label": "Supersedes",
+   "options": "Sparsh Learning Resource"
+  },
+  {
+   "fieldname": "column_break_lineage",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Text",
+   "label": "Notes"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-09-13 18:10:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sparsh LOS",
+ "name": "Sparsh Learning Resource",
+ "owner": "Administrator",
+ "permissions": [
+  {"amend": 0, "cancel": 0, "create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "submit": 0, "write": 1},
+  {"amend": 0, "cancel": 0, "create": 0, "delete": 0, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "Sparsh Reviewer", "share": 0, "submit": 0, "write": 0},
+  {"amend": 0, "cancel": 0, "create": 0, "delete": 0, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "Sparsh Learner", "share": 0, "submit": 0, "write": 0}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

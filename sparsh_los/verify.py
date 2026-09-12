@@ -1841,6 +1841,92 @@ def check_rejected_evidence_does_not_count():
 	frappe.db.commit()
 
 
+def check_superseded_resource_does_not_rewrite_history():
+	"""Replacing a learning resource marks readers Refresh Due; it rewrites nothing.
+
+	The programme owner's requirement in full: when approved content changes
+	materially, earlier evidence must stay historically interpretable and the
+	competency is marked Refresh Due instead of prior evidence or certification being
+	overwritten. Both halves are asserted here — the staleness, and the untouched
+	history.
+	"""
+	from sparsh_los import refresher
+
+	_reset_competency()
+	_delete_all("Sparsh Competency Resource Link", {"resource": ("like", PREFIX + "%")})
+
+	def _resource(version, supersedes=None, status="Current"):
+		name = f"{PREFIX}RES-v{version}"
+		if frappe.db.exists("Sparsh Learning Resource", name):
+			frappe.delete_doc(
+				"Sparsh Learning Resource", name, force=True, ignore_permissions=True
+			)
+		doc = frappe.new_doc("Sparsh Learning Resource")
+		doc.resource_id = PREFIX + "RES"
+		doc.version = version
+		doc.title = f"Verification resource v{version}"
+		doc.resource_type = "Manual section"
+		doc.status = "Draft" if supersedes else status
+		doc.supersedes = supersedes
+		doc.insert(ignore_permissions=True)
+		return doc
+
+	first = _resource(1)
+	competency = frappe.get_doc("Sparsh Competency", COMPETENCY)
+	competency.set("learning_resources", [])
+	competency.append("learning_resources", {"resource": first.name, "relevance": "Primary"})
+	competency.save(ignore_permissions=True)
+	frappe.db.commit()
+
+	_new_evidence(ACTIVITY_1, "Pass")
+	_assert(_state() == "Demonstrated", f"Expected Demonstrated, got {_state()}")
+	evidence_before = frappe.get_all(
+		"Sparsh Evidence", filters={"learner": LEARNER, "competency": COMPETENCY}, pluck="name"
+	)
+
+	try:
+		second = _resource(2, supersedes=first.name)
+		second.status = "Current"
+		second.save(ignore_permissions=True)
+		frappe.db.commit()
+
+		first.reload()
+		_assert(
+			first.status == "Superseded",
+			f"The replaced resource is still {first.status}",
+		)
+
+		assignments = frappe.get_all(
+			"Sparsh Refresher Assignment",
+			filters={
+				"competency": COMPETENCY,
+				"learner": LEARNER,
+				"trigger_reason": refresher.RESOURCE_CHANGED,
+			},
+			pluck="name",
+		)
+		_assert(assignments, "Superseding a learning resource scheduled nobody")
+		_assert(
+			_state() == "Refresh Due",
+			f"After the content changed underneath them the learner is {_state()}",
+		)
+
+		# The half that matters most: nothing about the learner's past was rewritten.
+		evidence_after = frappe.get_all(
+			"Sparsh Evidence", filters={"learner": LEARNER, "competency": COMPETENCY}, pluck="name"
+		)
+		_assert(
+			sorted(evidence_after) == sorted(evidence_before),
+			"Superseding a resource changed the learner's evidence history",
+		)
+	finally:
+		competency.reload()
+		competency.set("learning_resources", [])
+		competency.save(ignore_permissions=True)
+		_delete_all("Sparsh Refresher Assignment", {"competency": COMPETENCY})
+		frappe.db.commit()
+
+
 def check_unbuilt_evaluator_modes_fall_to_a_person():
 	"""A declared evaluator the engine cannot perform routes to a reviewer, never scores.
 
@@ -2492,6 +2578,7 @@ CHECKS = (
 	("pathway_walks_in_order", check_pathway_walks_in_order),
 	("pathway_does_not_hand_over_a_gated_activity", check_pathway_does_not_hand_over_a_gated_activity),
 	("unbuilt_evaluator_modes_fall_to_a_person", check_unbuilt_evaluator_modes_fall_to_a_person),
+	("superseded_resource_does_not_rewrite_history", check_superseded_resource_does_not_rewrite_history),
 	("nobody_judges_their_own_work", check_nobody_judges_their_own_work),
 	("unenrolled_user_is_shut_out", check_unenrolled_user_is_shut_out),
 	("mastery_cannot_be_deleted", check_mastery_cannot_be_deleted),

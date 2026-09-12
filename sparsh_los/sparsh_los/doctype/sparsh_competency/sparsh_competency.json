@@ -20,7 +20,8 @@
   "linked_rules",
   "section_break_lessons",
   "linked_lessons",
-  "refresh_interval_days"
+  "refresh_interval_days",
+  "learning_resources"
  ],
  "fields": [
   {
@@ -108,16 +109,23 @@
    "options": "Sparsh Competency Lesson Reference"
   },
   {
+   "default": "0",
+   "description": "0 means competence does not expire on time alone.",
    "fieldname": "refresh_interval_days",
    "fieldtype": "Int",
-   "label": "Refresh Interval (Days)",
-   "default": "0",
-   "description": "0 means competence does not expire on time alone."
+   "label": "Refresh Interval (Days)"
+  },
+  {
+   "description": "Many resources, versioned independently of the engine. A competency is not tied to one LMS lesson.",
+   "fieldname": "learning_resources",
+   "fieldtype": "Table",
+   "label": "Learning Resources",
+   "options": "Sparsh Competency Resource Link"
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-12 22:06:03.705233",
+ "modified": "2026-09-13 18:10:00.000000",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Competency",
