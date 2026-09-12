@@ -139,7 +139,15 @@ class SparshEvidence(Document):
 		recompute_mastery(self.learner, self.competency)
 
 	def on_cancel(self):
+		# Recompute the pair as it stands AND as it was stored. A cancellation payload
+		# can carry a different learner or competency, which would otherwise leave the
+		# original pair's mastery frozen at a value its evidence no longer supports.
+		stored = frappe.db.get_value(
+			"Sparsh Evidence", self.name, ["learner", "competency"], as_dict=True
+		)
 		recompute_mastery(self.learner, self.competency)
+		if stored and (stored.learner, stored.competency) != (self.learner, self.competency):
+			recompute_mastery(stored.learner, stored.competency)
 
 
 def on_doctype_update():

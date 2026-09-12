@@ -1635,6 +1635,31 @@ def check_programme_readiness_is_honest():
 	frappe.db.commit()
 
 
+def check_activity_cannot_change_competency():
+	"""An activity with evidence against it stays where it is."""
+	_reset_competency()
+	_new_evidence(ACTIVITY_1, "Pass")
+	frappe.db.commit()
+
+	def reassign():
+		doc = frappe.get_doc("Sparsh Activity", ACTIVITY_1)
+		doc.competency = COMPETENCY_2
+		doc.save(ignore_permissions=True)
+
+	_raises(reassign, "An activity with evidence was moved to another competency")
+
+	# An activity with no evidence may still be moved.
+	_reset_competency()
+	doc = frappe.get_doc("Sparsh Activity", ACTIVITY_2)
+	doc.competency = COMPETENCY_2
+	doc.save(ignore_permissions=True)
+	doc.reload()
+	_assert(doc.competency == COMPETENCY_2, "An unused activity could not be moved")
+	doc.competency = COMPETENCY
+	doc.save(ignore_permissions=True)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -1694,6 +1719,7 @@ CHECKS = (
 	("review_queue_page", check_review_queue_page),
 	("case_pack_loads_for_review_only", check_case_pack_loads_for_review_only),
 	("programme_readiness_is_honest", check_programme_readiness_is_honest),
+	("activity_cannot_change_competency", check_activity_cannot_change_competency),
 	("cleanup", check_cleanup),
 )
 
