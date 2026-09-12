@@ -633,6 +633,38 @@ def check_escalation_to_human_review():
 	frappe.db.commit()
 
 
+def check_dashboards():
+	"""The supervisor view answers its four questions from evidence."""
+	from sparsh_los import dashboard
+
+	_new_evidence(ACTIVITY_1, "Pass")
+	_new_evidence(ACTIVITY_2, "Pass")
+	frappe.db.commit()
+
+	learner = dashboard.learner_view(LEARNER)
+	_assert(learner["learner"] == LEARNER, "The learner view named the wrong learner")
+	_assert(
+		COMPETENCY in learner["demonstrated"],
+		f"A demonstrated competency is missing from {learner['demonstrated']}",
+	)
+
+	view = dashboard.supervisor_view(competency=COMPETENCY)
+	_assert(view["learners"] >= 1, "The supervisor view found no learners")
+	_assert(
+		any(r["learner"] == LEARNER for r in view["ready_to_progress"]),
+		"A demonstrated learner is not shown as ready to progress",
+	)
+	_assert(view["state_distribution"], "No state distribution was produced")
+
+	heatmap = dashboard.competency_heatmap()
+	_assert(COMPETENCY in heatmap["competencies"], "The heatmap is missing the competency")
+	_assert(
+		heatmap["rows"].get(LEARNER, {}).get(COMPETENCY) in ("Demonstrated", "Mastered"),
+		"The heatmap cell does not carry the mastery state",
+	)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -665,6 +697,7 @@ CHECKS = (
 	("runner_loop", check_runner_loop),
 	("runner_flags_critical_response", check_runner_flags_critical_response),
 	("escalation_to_human_review", check_escalation_to_human_review),
+	("dashboards", check_dashboards),
 	("cleanup", check_cleanup),
 )
 
