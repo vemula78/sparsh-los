@@ -140,3 +140,10 @@ class SparshEvidence(Document):
 
 	def on_cancel(self):
 		recompute_mastery(self.learner, self.competency)
+
+
+def on_doctype_update():
+	# Two reviewers judging the same attempt concurrently both passed the "already has
+	# evidence" check. NULL attempts do not collide, so evidence with no attempt is
+	# unaffected.
+	frappe.db.add_unique("Sparsh Evidence", ["attempt"], constraint_name="unique_evidence_per_attempt")

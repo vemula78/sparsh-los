@@ -86,6 +86,16 @@ def on_rule_superseded(rule):
 	if not competencies:
 		return []
 
+	# Who was actually judged under this rule. Attempts record the rule they were
+	# evaluated against, so the refresher can go to the people it concerns rather than
+	# to everyone who happens to hold the competency.
+	judged_under = {
+		row.learner
+		for row in frappe.get_all(
+			"Sparsh Attempt", filters={"rule": rule}, fields=["learner"]
+		)
+	}
+
 	assigned = []
 	for competency in set(competencies):
 		for row in frappe.get_all(
@@ -93,6 +103,11 @@ def on_rule_superseded(rule):
 			filters={"competency": competency, "state": ("in", (DEMONSTRATED, MASTERED))},
 			fields=["learner"],
 		):
+			# Nobody judged under the rule means we cannot tell who it affected, so
+			# everyone holding the competency is scheduled rather than nobody.
+			if judged_under and row.learner not in judged_under:
+				continue
+
 			name = assign(
 				row.learner,
 				competency,

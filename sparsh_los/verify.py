@@ -1428,6 +1428,102 @@ def check_practice_page_builds():
 	frappe.db.commit()
 
 
+def check_constraints_are_in_the_database():
+	"""The invariants that lose races are enforced where they cannot be raced."""
+
+	def unique_indexes(table):
+		rows = frappe.db.sql(f"show index from `tab{table}`", as_dict=1)
+		return {r["Key_name"] for r in rows if r["Non_unique"] == 0}
+
+	_assert(
+		"unique_learner_competency" in unique_indexes("Sparsh Mastery State"),
+		"Mastery State has no unique index on (learner, competency)",
+	)
+	_assert(
+		"unique_evidence_per_attempt" in unique_indexes("Sparsh Evidence"),
+		"Evidence has no unique index on attempt",
+	)
+	_assert(
+		"unique_standing_certification" in unique_indexes("Sparsh Certification Record"),
+		"Certification Record has no unique index on standing_key",
+	)
+
+	# And the constraint actually bites: a second evidence row for one attempt fails
+	# at the database, not merely at the controller.
+	_reset_competency()
+	attempt = _new_attempt(None, outcome="Pass")
+	first = _new_evidence(ACTIVITY_1, "Pass", submit=False)
+	first.attempt = attempt.name
+	first.save(ignore_permissions=True)
+	first.submit()
+
+	def duplicate_evidence():
+		second = frappe.new_doc("Sparsh Evidence")
+		second.learner = LEARNER
+		second.competency = COMPETENCY
+		second.activity = ACTIVITY_1
+		second.activity_version = 1
+		second.attempt = attempt.name
+		second.outcome = "Pass"
+		second.assistance_level = 0
+		# Bypass the controller check to prove the database is the backstop.
+		second.flags.ignore_validate = True
+		second.insert(ignore_permissions=True)
+
+	raised = False
+	try:
+		duplicate_evidence()
+	except Exception:
+		raised = True
+		frappe.db.rollback()
+	_assert(raised, "The database accepted two evidence rows for one attempt")
+	frappe.db.commit()
+
+
+def check_rule_refresher_uses_provenance():
+	"""A rule change schedules the people judged under that rule."""
+	from sparsh_los import refresher
+
+	_reset_competency()
+	_delete_all("Sparsh Refresher Assignment", {"competency": COMPETENCY})
+	_delete_all("Sparsh Source of Truth Rule", {"rule_id": RULE_ID})
+	frappe.db.commit()
+
+	rule_v1 = _new_rule(1)
+	competency = frappe.get_doc("Sparsh Competency", COMPETENCY)
+	competency.set("linked_rules", [])
+	competency.append("linked_rules", {"rule": rule_v1.name})
+	competency.save(ignore_permissions=True)
+
+	# Two learners hold the competency; only one was judged under this rule.
+	_make_learner(TEST_LEARNER)
+	_make_learner(OTHER_LEARNER)
+	frappe.db.commit()
+
+	judged = _new_attempt(rule_v1.name, outcome="Pass")
+	frappe.db.set_value("Sparsh Attempt", judged.name, "learner", TEST_LEARNER)
+	_new_evidence(ACTIVITY_1, "Pass", learner=TEST_LEARNER)
+	_new_evidence(ACTIVITY_1, "Pass", learner=OTHER_LEARNER)
+	frappe.db.commit()
+
+	_new_rule(2, supersedes=rule_v1.name)
+
+	scheduled = {
+		row.learner
+		for row in frappe.get_all(
+			"Sparsh Refresher Assignment",
+			filters={"competency": COMPETENCY, "trigger_reason": refresher.RULE_CHANGED},
+			fields=["learner"],
+		)
+	}
+	_assert(TEST_LEARNER in scheduled, "The learner judged under the old rule was not scheduled")
+	_assert(
+		OTHER_LEARNER not in scheduled,
+		"A learner never judged under the rule was scheduled anyway",
+	)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -1482,6 +1578,8 @@ CHECKS = (
 	("review_is_not_open_to_learners", check_review_is_not_open_to_learners),
 	("one_standing_certification", check_one_standing_certification),
 	("practice_page_builds", check_practice_page_builds),
+	("constraints_are_in_the_database", check_constraints_are_in_the_database),
+	("rule_refresher_uses_provenance", check_rule_refresher_uses_provenance),
 	("cleanup", check_cleanup),
 )
 

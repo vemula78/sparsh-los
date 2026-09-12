@@ -70,6 +70,7 @@ class SparshCertificationRecord(Document):
 
 		if self.certification_status == "Revoked":
 			self.certification_state = "Revoked"
+			self.standing_key = None
 			return
 
 		# One standing certification per learner and competency, or nothing can answer
@@ -92,11 +93,25 @@ class SparshCertificationRecord(Document):
 				frappe.ValidationError,
 			)
 
+		# The check above loses a race between two concurrent submissions; this key is
+		# what actually guarantees it, because the database rejects the duplicate.
+		self.standing_key = f"{self.learner}::{self.competency}"
+
 	def on_submit(self):
 		if self.certification_status == "Revoked" and self.revokes:
 			frappe.db.set_value(
-				"Sparsh Certification Record", self.revokes, "certification_state", "Revoked"
+				"Sparsh Certification Record",
+				self.revokes,
+				{"certification_state": "Revoked", "standing_key": None},
 			)
+
+
+def on_doctype_update():
+	# One standing certification per learner and competency, enforced where it cannot
+	# be raced: standing_key is NULL once revoked, and NULLs do not collide.
+	frappe.db.add_unique(
+		"Sparsh Certification Record", ["standing_key"], constraint_name="unique_standing_certification"
+	)
 
 
 @frappe.whitelist()
