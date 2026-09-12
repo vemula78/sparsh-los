@@ -1,0 +1,155 @@
+[
+ {
+  "rule_id": "RISK-LEVEL-1-DEFINITION",
+  "rule_statement": "Current candidate definition exists in programme materials and analyses; exact current wording to be confirmed.",
+  "applies_to": "Risk Level 1 definition",
+  "source": "Approved programme rule / curriculum input",
+  "criticality": "High-risk",
+  "automation_status": "Do not automate",
+  "notes": "Confirm current criteria and examples."
+ },
+ {
+  "rule_id": "RISK-LEVEL-2-DEFINITION",
+  "rule_statement": "Current candidate definition exists; boundary with Level 1 and Level 3 needs explicit programme-owner wording.",
+  "applies_to": "Risk Level 2 definition",
+  "source": "Approved programme rule / curriculum input",
+  "criticality": "High-risk",
+  "automation_status": "Do not automate",
+  "notes": "Particularly important for pre-disease/risk-factor cases."
+ },
+ {
+  "rule_id": "RISK-LEVEL-3-DEFINITION",
+  "rule_statement": "Current candidate definition exists; exact treatment of established but stable disease must be confirmed.",
+  "applies_to": "Risk Level 3 definition",
+  "source": "Approved programme rule / curriculum input",
+  "criticality": "High-risk",
+  "automation_status": "Do not automate",
+  "notes": "Confirm how controlled disease is classified."
+ },
+ {
+  "rule_id": "RISK-LEVEL-4-DEFINITION",
+  "rule_statement": "Current candidate definition exists; acute/critical/post-procedure boundaries require confirmation.",
+  "applies_to": "Risk Level 4 definition",
+  "source": "Approved programme rule / curriculum input",
+  "criticality": "Safety-critical",
+  "automation_status": "Do not automate",
+  "notes": "Confirm whether Level 4 is temporary and transition rules."
+ },
+ {
+  "rule_id": "S-MODIFIER",
+  "rule_statement": "Used as a special/surgical/context modifier in working materials; exact indications and duration are not yet locked for the platform.",
+  "applies_to": "S modifier",
+  "source": "Programme rule / field-query input",
+  "criticality": "High-risk",
+  "automation_status": "Do not automate",
+  "notes": "Confirm which histories qualify and whether all surgeries do."
+ },
+ {
+  "rule_id": "RED-FLAG-SYMPTOMS-AND-REFERRAL",
+  "rule_statement": "Volunteers must recognise situations that require stopping routine coaching and seeking medical help.",
+  "applies_to": "Red-flag symptoms and referral",
+  "source": "Programme safety rule",
+  "criticality": "Safety-critical",
+  "automation_status": "Human review required",
+  "notes": "Insert only approved symptom list and urgency rules."
+ },
+ {
+  "rule_id": "BP-HANDLING-AND-ESCALATION",
+  "rule_statement": "BP measurement/interpretation guidance is used in training, but platform thresholds and escalation timing require clinical sign-off.",
+  "applies_to": "BP handling and escalation",
+  "source": "Programme safety rule",
+  "criticality": "Safety-critical",
+  "automation_status": "Do not automate",
+  "notes": "Separate measurement technique from clinical escalation."
+ },
+ {
+  "rule_id": "HYPOGLYCAEMIA-RESPONSE-SCOPE",
+  "rule_statement": "Working analyses include a response protocol; confirm what volunteers are authorised and trained to do.",
+  "applies_to": "Hypoglycaemia response scope",
+  "source": "Programme safety rule",
+  "criticality": "Safety-critical",
+  "automation_status": "Do not automate",
+  "notes": "Clarify when to treat, refer, or call emergency services."
+ },
+ {
+  "rule_id": "70-CONFIDENCE-RULE",
+  "rule_statement": "Low-confidence pledges should be explored and often reduced; confirm whether 70%/7-of-10 is a hard threshold or a coaching heuristic.",
+  "applies_to": "70% confidence rule",
+  "source": "Coaching framework / field experience",
+  "criticality": "Normal",
+  "automation_status": "AI may advise",
+  "notes": "Do not block progression solely on an unvalidated numeric cut-off."
+ },
+ {
+  "rule_id": "IMMUTABLE-BASELINE",
+  "rule_statement": "Baseline data should remain unchanged so follow-up does not overwrite the original programme state.",
+  "applies_to": "Immutable baseline",
+  "source": "Programme data rule",
+  "criticality": "High-risk",
+  "automation_status": "Safe as fixed logic",
+  "notes": "Align with existing SAI SPARSH database policy."
+ },
+ {
+  "rule_id": "MISSING-DATA",
+  "rule_statement": "Unconfirmed or unavailable follow-up data should not automatically be recorded as a negative response.",
+  "applies_to": "Missing data",
+  "source": "Programme data rule / field-query input",
+  "criticality": "High-risk",
+  "automation_status": "Safe as fixed logic",
+  "notes": "Confirm official missing-value and denominator treatment."
+ },
+ {
+  "rule_id": "PARTIAL-ACHIEVEMENT",
+  "rule_statement": "Partial progress should be distinguished from complete failure; exact labels need confirmation.",
+  "applies_to": "Partial achievement",
+  "source": "Programme coaching/data rule",
+  "criticality": "Normal",
+  "automation_status": "Safe as fixed logic",
+  "notes": "Confirm categories such as Partially Achieved / Self-Modified."
+ },
+ {
+  "rule_id": "MEDICATION-QUESTIONS",
+  "rule_statement": "Volunteers should not independently prescribe, stop or change medicines; specific escalation wording/timing needs approval.",
+  "applies_to": "Medication questions",
+  "source": "Scope-of-practice rule",
+  "criticality": "Safety-critical",
+  "automation_status": "Human review required",
+  "notes": "Keep medication adjustment outside volunteer scope unless explicitly authorised."
+ },
+ {
+  "rule_id": "OILS-FATS-RULES",
+  "rule_statement": "Specific oils, quantities and tiering have appeared in working materials; exact current programme guidance must be verified before encoding.",
+  "applies_to": "Oils/fats rules",
+  "source": "Curriculum input",
+  "criticality": "Normal",
+  "automation_status": "Human review required",
+  "notes": "Version with date because evidence/guidance may change."
+ },
+ {
+  "rule_id": "RISK-STRATIFICATION-MVP-COMPETENCY",
+  "rule_statement": "First MVP competency candidate because it tests judgement and branching scenarios.",
+  "applies_to": "Risk-stratification MVP competency",
+  "source": "Curriculum/competency analysis",
+  "criticality": "High-risk",
+  "automation_status": "Human review required",
+  "notes": "Keep core engine generic."
+ },
+ {
+  "rule_id": "PLEDGE-CO-CREATION-MVP-COMPETENCY",
+  "rule_statement": "First MVP competency candidate because it tests coaching, barrier exploration and adaptive hints.",
+  "applies_to": "Pledge co-creation MVP competency",
+  "source": "Curriculum/competency analysis + field queries",
+  "criticality": "Normal",
+  "automation_status": "Human review required",
+  "notes": "Use de-identified scenarios."
+ },
+ {
+  "rule_id": "SCOPE-ESCALATION-MVP-COMPETENCY",
+  "rule_statement": "First MVP competency candidate because it tests safety boundaries and human handoff.",
+  "applies_to": "Scope/escalation MVP competency",
+  "source": "Curriculum/competency analysis + field queries",
+  "criticality": "Safety-critical",
+  "automation_status": "Human review required",
+  "notes": "Human escalation workflow is required."
+ }
+]

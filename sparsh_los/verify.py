@@ -1030,6 +1030,38 @@ def check_refresher_on_rule_change():
 	frappe.db.commit()
 
 
+def check_matrix_loads_as_draft():
+	"""The programme matrix is loaded as Draft and nothing arrives pre-validated."""
+	from sparsh_los import seed
+
+	created, skipped = seed.load_matrix()
+	_assert(created or skipped, "The matrix loader produced nothing")
+
+	status = seed.matrix_status()
+	_assert(status["total"] >= 17, f"Only {status['total']} matrix rules are present")
+	_assert(
+		status["by_status"].get("Validated", 0) == 0,
+		"A matrix rule arrived already Validated",
+	)
+	_assert(
+		status["unvalidated_safety_critical"],
+		"No safety-critical rule is flagged as awaiting validation",
+	)
+	_assert(
+		not status["ready_to_automate"],
+		f"Rules are marked ready to automate before validation: {status['ready_to_automate']}",
+	)
+
+	# Re-running must not duplicate.
+	before = frappe.db.count("Sparsh Source of Truth Rule")
+	seed.load_matrix()
+	_assert(
+		frappe.db.count("Sparsh Source of Truth Rule") == before,
+		"Re-running the matrix loader duplicated rules",
+	)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -1073,6 +1105,7 @@ CHECKS = (
 	("whitelisted_reads_are_scoped", check_whitelisted_reads_are_scoped),
 	("refresher_time_based", check_refresher_time_based),
 	("refresher_on_rule_change", check_refresher_on_rule_change),
+	("matrix_loads_as_draft", check_matrix_loads_as_draft),
 	("cleanup", check_cleanup),
 )
 
