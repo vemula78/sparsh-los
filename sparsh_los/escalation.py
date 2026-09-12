@@ -19,7 +19,7 @@ import json
 import frappe
 from frappe import _
 
-from sparsh_los.permissions import is_restricted, require_reviewer, throttle
+from sparsh_los.permissions import is_restricted, is_reviewer, require_enrolment, require_reviewer, throttle
 
 DISPOSITIONS = (
 	"Private answer",
@@ -59,6 +59,11 @@ def _context(activity, attempt):
 @frappe.whitelist()
 def raise_question(question_text, activity=None, attempt=None, reason="Unknown"):
 	"""A learner asks for expert guidance. Context is packaged here, not by the caller."""
+	# This endpoint writes, and its response embeds Activity fields that a learner may
+	# not read directly — so it needs the same enrolment gate as every other own-record
+	# endpoint, not just the own-attempt check below.
+	require_enrolment()
+
 	if not (question_text or "").strip():
 		frappe.throw(_("A question cannot be empty"))
 
@@ -89,6 +94,9 @@ def route(question, reviewer):
 	"""Put the question in a named reviewer's queue."""
 	require_reviewer()
 
+	if not is_reviewer(reviewer):
+		frappe.throw(_("{0} is not a reviewer").format(reviewer))
+
 	doc = frappe.get_doc("Sparsh Escalation Question", question)
 	doc.routed_to = reviewer
 	doc.status = "Routed to Human"
@@ -112,6 +120,10 @@ def answer(question, answer_text, disposition):
 	require_reviewer()
 
 	doc = frappe.get_doc("Sparsh Escalation Question", question)
+	if doc.status == "Answered":
+		# Overwriting an answer erases what the learner was actually told.
+		frappe.throw(_("This question has already been answered"))
+
 	if doc.learner == frappe.session.user:
 		frappe.throw(_("You cannot answer your own question"), frappe.PermissionError)
 

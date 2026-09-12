@@ -340,3 +340,59 @@ on (learner, activity)). A reassuring comment is worse than an undocumented gap.
 Three of nine Codex runs hung (0.07-0.08s CPU, zero bytes, killed at 25-40 minutes). One was refused
 outright by OpenAI's cybersecurity classifier for adversarial phrasing; rewording the same request
 as the internal quality review it is produced a full result.
+
+## Audit 8 — 13-Sep-2026 — non-independent Claude review against HEAD `51fa385`
+
+Codex hung for the fourth time in ten runs (5h, 0.47s CPU, zero bytes). This audit is the
+documented fallback: a Claude agent, explicitly **non-independent** — it shares the reasoning
+lineage of the code it reviewed, so it is a strong lint, not a second opinion. It was told to
+read `CLAUDE.md` but not this log until after forming its own view, then mark each finding NEW
+or ALREADY KNOWN. An external review by a model outside this lineage has been prepared for the
+programme owner to run separately; its findings will be logged as audit 9.
+
+Plan hash unchanged: `50553ad04e854e932a6f5895f16a726f2cea756223df02dff73ec2495ea27274`.
+
+Nine code defects and nine harness weaknesses, all reproduced against source before action.
+
+### Confirmed and fixed — code
+
+| # | Finding | Disposition |
+|---|---|---|
+| F1 | `escalation.raise_question` ungated: any logged-in account could write a question, and `_context()` returned Activity fields learners may not read | Fixed — `require_enrolment()` |
+| F2 | `seed.matrix_status` / `case_pack_status` ungated; only the `programme_readiness` wrapper was gated | Fixed — reviewer gate on both; wrapper calls internals |
+| F3 | `SparshEscalationQuestion.before_insert` returned early for unrestricted users, so a learner+reviewer could insert a self-answered question in one write | Fixed — reviewer-side fields reset unconditionally; `is_restricted` answers the wrong question here |
+| F4 | `next_in_pathway` built `dict(suggestion, activity=step.activity)`, forcing a gated activity back in over a prerequisite block | Fixed — a suggestion with `activity is None` is returned intact |
+| F5 | Mandatory-step completion counted rejected and fully-assisted evidence | Fixed — same filters as `mastery._independent_passes` |
+| F6 | `certification._evidence_summary` omitted the rejected-review filter, so readiness and the certificate disagreed with the state machine | Fixed |
+| F7 | `certification_record.current` opened an `in_sparsh_certification` window from a whitelisted read — the one flag rule the app states plainly | Fixed — lapse is reported, not persisted; reconciliation and the daily job own the write |
+| F8 | `escalation.route` accepted any user as `routed_to`; `answer` could overwrite an existing answer | Fixed — reviewer check on the target, refuse a second answer |
+| F9 | `runner.start` lets an enrolled learner enumerate activity ids | Deferred — content disclosure to an enrolled learner, no answer-key fields returned, no integrity break |
+
+`certificate_detail` also had no enrolment gate. That was not in the review; the new
+shut-out check found it. Fixed.
+
+### Confirmed and fixed — harness
+
+The more valuable half: a weak check is how a regression gets back in.
+
+| # | Finding | Disposition |
+|---|---|---|
+| V1 | `check_nobody_judges_their_own_work` self-review case had no critical evidence, so `critical[0]` was never evaluated — a direct recurrence of audit 7's own self-certification finding | Fixed — real critical evidence on a second competency; `except` narrowed to `PermissionError` |
+| V2 | Guarantee 8 had no biting assertion: no submission followed a pass on the same activity | Fixed — a third submit asserts assistance does not fall |
+| V3 | `check_learner_cannot_read_answer_key` asserted on `critical_errors`; the field is `critical_markers`, so the line could never fail | Fixed |
+| V4 | `_raises` accepted any `ValidationError`, and `PermissionError` subclasses it — checks passed on unrelated refusals | Fixed — optional `expect` fragment |
+| V5 | The forged-clearance check asserted the save objected, never that the `db_set` write failed to land | Fixed — re-reads the field and re-asserts the block |
+| V6 | Pathway coverage was one shape; the prerequisite case was invisible | Fixed — new check `pathway_does_not_hand_over_a_gated_activity` |
+| V7 | `check_unenrolled_user_is_shut_out` enumerated the gates that existed, not the surface needing them | Fixed — six more endpoints, which is how the `certificate_detail` gap surfaced |
+| V8, V9 | `check_no_domain_strings` scope; mid-check commits | Deferred — minor, no guarantee rests on either |
+
+### Acceptance
+
+`sparsh_los.verify.run` — **59 passed, 0 failed** (was 58; `MIN_CHECKS` raised to 59).
+
+The new pathway check was proved to bite rather than assumed to: reverting the F4 fix alone
+produced `FAIL pathway_does_not_hand_over_a_gated_activity: A gated activity was handed to the
+learner anyway: ZZV-ACT-GATED`, 58/1. The fix was restored and 59/59 re-confirmed.
+
+Code changed after this audit, so audit 8 does not cover the fixed version. Audit 9 (external,
+outside this reasoning lineage) is the re-audit.

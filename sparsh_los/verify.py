@@ -61,12 +61,20 @@ def _assert(condition, message):
 		raise AssertionError(message)
 
 
-def _raises(fn, message):
+def _raises(fn, message, expect=None):
+	"""Assert fn is refused — and, when `expect` is given, refused for the stated reason.
+
+	Without `expect` this only proves something in the validation stack objected.
+	frappe.PermissionError subclasses ValidationError, so a check could delete the rule
+	it tests and still pass on an unrelated refusal further down.
+	"""
 	frappe.db.savepoint("sparsh_verify")
 	try:
 		fn()
-	except frappe.ValidationError:
+	except frappe.ValidationError as exc:
 		frappe.db.rollback(save_point="sparsh_verify")
+		if expect and expect.lower() not in str(exc).lower():
+			raise AssertionError(f"{message} (refused, but for another reason: {exc})") from None
 		return
 	except Exception as exc:  # noqa: BLE001
 		frappe.db.rollback(save_point="sparsh_verify")
@@ -649,6 +657,18 @@ def check_runner_loop():
 	assistance = frappe.db.get_value("Sparsh Evidence", right["evidence"], "assistance_level")
 	_assert(assistance == 1, f"Assistance level recorded as {assistance}, expected 1")
 
+	# The regression this guards: take a hint, pass with it, then resubmit the now-known
+	# answer and have the counter reset because the last attempt was a pass. Nothing
+	# above catches that — no submission there follows a pass on the same activity.
+	again = _submit(ACTIVITY_1, "level two")
+	repeat_assistance = frappe.db.get_value(
+		"Sparsh Evidence", again["evidence"], "assistance_level"
+	)
+	_assert(
+		repeat_assistance >= 1,
+		f"Assistance fell to {repeat_assistance} on a repeat pass after a hint was shown",
+	)
+
 	# An unaided pass is what moves the learner to Demonstrated. A fresh activity is
 	# needed: assistance is now counted from the record, and this one has a failure.
 	independent = _submit(ACTIVITY_2, "level two")
@@ -1172,7 +1192,21 @@ def check_clearance_must_be_backed_by_review():
 		evidence.reload()
 		evidence.save(ignore_permissions=True)
 
-	_raises(forge_clearance, "A clearance without a review was accepted")
+	_raises(forge_clearance, "A clearance without a review was accepted", expect="review")
+
+	# The forgery went in through db_set, which bypasses validate. Proving the save
+	# objected says nothing about whether the flag is still sitting in the row.
+	evidence.reload()
+	_assert(
+		not evidence.critical_error_cleared,
+		"A forged clearance survived in the database after the save was refused",
+	)
+	from sparsh_los.mastery import has_blocking_critical_error
+
+	_assert(
+		has_blocking_critical_error(LEARNER, COMPETENCY),
+		"A forged clearance lifted the block even though the save was refused",
+	)
 
 	# And a safety error cannot be made to vanish by cancelling the record.
 	evidence.reload()
@@ -1227,7 +1261,7 @@ def check_learner_cannot_read_answer_key():
 		# This is what the REST and desk layers do before handing a document to a user.
 		doc.apply_fieldlevel_read_permissions()
 		_assert(not doc.get("expected_response"), "A learner could read the expected response")
-		_assert(not doc.get("critical_errors"), "A learner could read the critical-error markers")
+		_assert(not doc.get("critical_markers"), "A learner could read the critical-error markers")
 
 		levels = frappe.get_meta("Sparsh Activity").get_permlevel_access("read", user=TEST_LEARNER)
 		_assert(1 not in levels, f"A learner holds permlevel-1 read on Activity: {levels}")
@@ -1774,6 +1808,75 @@ def check_rejected_evidence_does_not_count():
 	frappe.db.commit()
 
 
+def check_pathway_does_not_hand_over_a_gated_activity():
+	"""A mandatory step whose prerequisite is unmet is reported blocked, not offered.
+
+	The pathway walker builds its answer as dict(suggestion, activity=step.activity),
+	which forced the step's activity back in even when the suggestion had deliberately
+	set it to None with a prerequisite block. The learner page branches on `activity`,
+	so a gated activity was rendered with its instruction.
+	"""
+	from sparsh_los import orchestrator
+
+	_reset_competency()
+	_delete_all("Sparsh Pathway", {"name": PATHWAY})
+
+	# A learner of its own. COMPETENCY_2 carries a critical error from earlier checks,
+	# and safety outranks the sequence — which would answer "remediation" before the
+	# prerequisite is ever read. Critical evidence cannot be deleted by design, so the
+	# check takes a clean subject rather than trying to unwind one.
+	subject = PREFIX + "pathway@example.invalid"
+	_make_learner(subject)
+	frappe.db.commit()
+
+	gated = PREFIX + "ACT-GATED"
+	if not frappe.db.exists("Sparsh Activity", gated):
+		doc = frappe.new_doc("Sparsh Activity")
+		doc.activity_id = gated
+		doc.title = "Gated activity"
+		doc.competency = COMPETENCY_2
+		doc.activity_type = "Knowledge check"
+		doc.instruction = "Verification instruction."
+		doc.version = 1
+		doc.evaluation_mode = "Human review"
+		doc.insert(ignore_permissions=True)
+
+	# COMPETENCY_2 now requires COMPETENCY, which this learner has not demonstrated.
+	competency = frappe.get_doc("Sparsh Competency", COMPETENCY_2)
+	competency.set("prerequisites", [])
+	competency.append("prerequisites", {"prerequisite": COMPETENCY})
+	competency.save(ignore_permissions=True)
+
+	pathway = frappe.new_doc("Sparsh Pathway")
+	pathway.pathway_id = PATHWAY
+	pathway.title = "Verification pathway"
+	pathway.status = "Active"
+	pathway.append(
+		"steps",
+		{"step_order": 1, "activity": gated, "competency": COMPETENCY_2, "is_mandatory": 1},
+	)
+	pathway.insert(ignore_permissions=True)
+	frappe.db.commit()
+
+	try:
+		result = orchestrator.next_in_pathway(PATHWAY, subject)
+		_assert(
+			result.get("reason") == orchestrator.PREREQUISITE,
+			f"An unmet prerequisite on a mandatory step gave reason {result.get('reason')}",
+		)
+		_assert(
+			result.get("activity") is None,
+			f"A gated activity was handed to the learner anyway: {result.get('activity')}",
+		)
+		_assert(result.get("blocked_by"), "A prerequisite block named nothing it was blocked by")
+	finally:
+		competency.reload()
+		competency.set("prerequisites", [])
+		competency.save(ignore_permissions=True)
+		_delete_all("Sparsh Pathway", {"name": PATHWAY})
+		frappe.db.commit()
+
+
 def check_pathway_walks_in_order():
 	"""A pathway is walked in order, and safety still outranks the sequence."""
 	from sparsh_los import orchestrator
@@ -1849,7 +1952,28 @@ def check_nobody_judges_their_own_work():
 	_reset_competency()
 	_new_evidence(ACTIVITY_1, "Pass", learner=dual)
 	_new_evidence(ACTIVITY_2, "Pass", learner=dual)
+	# Critical evidence of their own, so the self-review attempt below actually reaches
+	# the clearing path. Without it `critical[0]` was never evaluated and the check
+	# passed on an unrelated refusal.
+	# On a second competency, and on an activity that genuinely belongs to it: a
+	# critical error on COMPETENCY would block the self-certification case below, and
+	# it would then be refused for safety rather than for judging your own work.
+	critical_activity = PREFIX + "ACT-DUAL-C2"
+	if not frappe.db.exists("Sparsh Activity", critical_activity):
+		act = frappe.new_doc("Sparsh Activity")
+		act.activity_id = critical_activity
+		act.title = "Dual-role critical activity"
+		act.competency = COMPETENCY_2
+		act.activity_type = "Knowledge check"
+		act.instruction = "Verification instruction."
+		act.version = 1
+		act.evaluation_mode = "Human review"
+		act.insert(ignore_permissions=True)
+	own_critical = _new_evidence(
+		critical_activity, "Fail", critical_error=1, learner=dual, competency=COMPETENCY_2
+	)
 	frappe.db.commit()
+	_assert(own_critical.name, "The dual-role fixture has no critical evidence to review")
 
 	original_user = frappe.session.user
 	try:
@@ -1891,8 +2015,10 @@ def check_nobody_judges_their_own_work():
 				filters={"learner": dual, "critical_error": 1, "docstatus": 1},
 				pluck="name",
 			)
+			_assert(critical, "The self-review case has no critical evidence to act on")
 			doc = frappe.new_doc("Sparsh Human Review")
-			doc.evidence = critical[0] if critical else None
+			doc.evidence = critical[0]
+			doc.clears_critical_error = 1
 			doc.learner = dual
 			doc.competency = COMPETENCY
 			doc.review_status = "Approved"
@@ -1902,7 +2028,7 @@ def check_nobody_judges_their_own_work():
 		try:
 			self_review()
 			raise AssertionError("A learner-reviewer reviewed their own evidence")
-		except (frappe.PermissionError, frappe.ValidationError, IndexError, TypeError):
+		except frappe.PermissionError:
 			pass
 	finally:
 		frappe.set_user(original_user)
@@ -1913,7 +2039,10 @@ def check_nobody_judges_their_own_work():
 
 def check_unenrolled_user_is_shut_out():
 	"""A signed-in account with no programme role reaches nothing."""
-	from sparsh_los import certification, dashboard, escalation, orchestrator, runner
+	from sparsh_los import certification, dashboard, escalation, orchestrator, runner, seed
+	from sparsh_los.sparsh_los.doctype.sparsh_certification_record import (
+		sparsh_certification_record as cert_record,
+	)
 
 	stranger = "zzv-stranger@example.invalid"
 	if not frappe.db.exists("User", stranger):
@@ -1935,6 +2064,12 @@ def check_unenrolled_user_is_shut_out():
 			(lambda: escalation.open_queue(), "escalation.open_queue"),
 			(lambda: runner.start(ACTIVITY_1), "runner.start"),
 			(lambda: runner.submit(ACTIVITY_1, "anything"), "runner.submit"),
+			(lambda: escalation.raise_question("anything"), "escalation.raise_question"),
+			(lambda: seed.matrix_status(), "seed.matrix_status"),
+			(lambda: seed.case_pack_status(), "seed.case_pack_status"),
+			(lambda: certification.certificate_detail("any"), "certification.certificate_detail"),
+			(lambda: orchestrator.next_in_pathway(PATHWAY, LEARNER), "orchestrator.next_in_pathway"),
+			(lambda: cert_record.current(LEARNER, COMPETENCY), "certification_record.current"),
 		):
 			try:
 				call()
@@ -2270,6 +2405,7 @@ CHECKS = (
 	("activity_cannot_change_competency", check_activity_cannot_change_competency),
 	("rejected_evidence_does_not_count", check_rejected_evidence_does_not_count),
 	("pathway_walks_in_order", check_pathway_walks_in_order),
+	("pathway_does_not_hand_over_a_gated_activity", check_pathway_does_not_hand_over_a_gated_activity),
 	("nobody_judges_their_own_work", check_nobody_judges_their_own_work),
 	("unenrolled_user_is_shut_out", check_unenrolled_user_is_shut_out),
 	("mastery_cannot_be_deleted", check_mastery_cannot_be_deleted),

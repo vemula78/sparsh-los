@@ -156,8 +156,9 @@ def on_doctype_update():
 @frappe.whitelist()
 def current(learner, competency):
 	"""The certification that stands right now, or None. The authoritative answer."""
-	from sparsh_los.permissions import is_restricted
+	from sparsh_los.permissions import is_restricted, require_enrolment
 
+	require_enrolment()
 	if learner != frappe.session.user and is_restricted():
 		frappe.throw(_("You can only view your own certification"), frappe.PermissionError)
 
@@ -182,16 +183,11 @@ def current(learner, competency):
 
 	row = rows[0]
 	if derive_state(learner, competency) not in (DEMONSTRATED, MASTERED):
-		# Persist it rather than only reporting it, or certificate_detail and the
-		# stored record keep saying Active until the daily job runs.
-		previous = frappe.flags.in_sparsh_certification
-		frappe.flags.in_sparsh_certification = True
-		try:
-			frappe.db.set_value(
-				"Sparsh Certification Record", row["name"], "certification_state", "Suspended"
-			)
-		finally:
-			frappe.flags.in_sparsh_certification = previous
+		# Reported, not persisted. Writing here meant a read endpoint any learner can
+		# call opened an in_sparsh_certification window — the one flag rule the app
+		# states plainly. The stored record is reconciled by evidence changes and by
+		# the daily expiry job; this answer is derived, so it does not go stale.
 		row["certification_state"] = "Suspended"
+		row["state_is_derived"] = True
 
 	return row

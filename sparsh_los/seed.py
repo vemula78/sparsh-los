@@ -76,7 +76,18 @@ def load_matrix(force=False):
 
 @frappe.whitelist()
 def matrix_status():
-	"""How much of the matrix is still waiting on the programme owner."""
+	"""How much of the matrix is still waiting on the programme owner.
+
+	Reviewer-gated: the rule inventory is programme internals, and gating only the
+	`programme_readiness` wrapper left the same data callable directly.
+	"""
+	from sparsh_los.permissions import require_reviewer
+
+	require_reviewer()
+	return _matrix_status()
+
+
+def _matrix_status():
 	# The current version of each rule lineage, not version 1. A v1 superseded by a
 	# validated v2 was still reported as unvalidated and blocking.
 	# Only the matrix's own rules. Widening this to every rule swept up anything else
@@ -193,6 +204,13 @@ def load_case_pack():
 @frappe.whitelist()
 def case_pack_status():
 	"""What the case pack looks like in the system, and what it still needs."""
+	from sparsh_los.permissions import require_reviewer
+
+	require_reviewer()
+	return _case_pack_status()
+
+
+def _case_pack_status():
 	activities = frappe.get_all(
 		"Sparsh Activity",
 		filters={"activity_id": ("like", "SC-%")},
@@ -216,8 +234,8 @@ def programme_readiness():
 
 	require_reviewer()
 
-	matrix = matrix_status()
-	cases = case_pack_status()
+	matrix = _matrix_status()
+	cases = _case_pack_status()
 
 	competencies = frappe.get_all(
 		"Sparsh Competency", fields=["name", "competency_name"], order_by="name asc"

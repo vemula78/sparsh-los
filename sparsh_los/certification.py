@@ -35,12 +35,23 @@ def _evidence_summary(learner, competency):
 			"assistance_level",
 			"critical_error",
 			"critical_error_cleared",
+			"human_review_status",
 			"recorded_at",
 		],
 		order_by="creation asc",
 	)
 
-	independent = [r for r in rows if r.outcome == "Pass" and not r.critical_error and not r.assistance_level]
+	# Same filter as mastery._independent_passes, including the rejected-review
+	# exclusion. Without it readiness and the certificate answered a question about the
+	# same learner differently from the state machine that gates them.
+	independent = [
+		r
+		for r in rows
+		if r.outcome == "Pass"
+		and not r.critical_error
+		and not r.assistance_level
+		and r.human_review_status != "Rejected"
+	]
 	return {
 		"evidence_count": len(rows),
 		"independent_passes": len(independent),
@@ -122,6 +133,7 @@ def certificate_detail(name):
 	Section 16 requires certification to be traceable to specific competency evidence
 	and human sign-off. A certificate that cannot show its working is a scorecard.
 	"""
+	require_enrolment()
 	doc = frappe.get_doc("Sparsh Certification Record", name)
 	if doc.learner != frappe.session.user and is_restricted():
 		frappe.throw(_("You can only view your own certificate"), frappe.PermissionError)

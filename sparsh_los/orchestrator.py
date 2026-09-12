@@ -230,6 +230,9 @@ def next_in_pathway(pathway, learner=None):
 		# A mandatory step names an activity, and demonstrating the competency by some
 		# other route does not complete that step.
 		if step.is_mandatory and step.activity:
+			# A rejected review, or a pass carried by hints, does not complete a
+			# mandatory step — the same filters mastery.py applies to an independent
+			# pass, applied here too so the two modules cannot disagree.
 			done = frappe.db.count(
 				"Sparsh Evidence",
 				{
@@ -237,11 +240,23 @@ def next_in_pathway(pathway, learner=None):
 					"activity": step.activity,
 					"outcome": "Pass",
 					"critical_error": 0,
+					"assistance_level": 0,
+					"human_review_status": ("!=", "Rejected"),
 					"docstatus": 1,
 				},
 			)
 			if not done:
 				suggestion = next_experience(competency, learner)
+				# Do not hand back the step's activity when the suggestion says the
+				# learner may not reach it yet. Overwriting `activity` unconditionally
+				# turned a prerequisite block into a rendered instruction.
+				if suggestion.get("activity") is None:
+					return dict(
+						suggestion,
+						competency=competency,
+						step=step.step_order,
+						pathway=pathway,
+					)
 				return dict(
 					suggestion,
 					activity=step.activity,
