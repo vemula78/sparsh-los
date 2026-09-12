@@ -1229,6 +1229,72 @@ def check_runner_records_the_governing_rule():
 	frappe.db.commit()
 
 
+def check_human_review_activity_completes():
+	"""A reviewed activity has a path from recorded attempt to evidence."""
+	from sparsh_los import review, runner
+
+	_reset_competency()
+
+	activity = frappe.get_doc("Sparsh Activity", ACTIVITY_2)
+	activity.evaluation_mode = "Human review"
+	activity.save(ignore_permissions=True)
+	frappe.db.commit()
+
+	result = runner.submit(ACTIVITY_2, "I would explore what makes this hard for them first.")
+	_assert(result["outcome"] == "Not Evaluated", "A reviewed activity was auto-graded")
+	_assert("evidence" not in result, "A reviewed activity produced evidence without a reviewer")
+
+	waiting = review.pending(competency=COMPETENCY)
+	_assert(
+		any(w["name"] == result["attempt"] for w in waiting),
+		"The recorded attempt is not in the reviewer's queue",
+	)
+
+	recorded = review.record_evidence(result["attempt"], "Pass", assistance_level=0)
+	_assert(recorded["evidence"], "The reviewer could not record evidence")
+	_assert(recorded["state"] == "Demonstrated", f"After review the state is {recorded['state']}")
+
+	# It leaves the queue, and cannot be recorded twice.
+	still_waiting = review.pending(competency=COMPETENCY)
+	_assert(
+		not any(w["name"] == result["attempt"] for w in still_waiting),
+		"A reviewed attempt is still queued",
+	)
+	_raises(
+		lambda: review.record_evidence(result["attempt"], "Pass"),
+		"The same attempt was turned into evidence twice",
+	)
+
+	activity.reload()
+	activity.evaluation_mode = "Deterministic"
+	activity.save(ignore_permissions=True)
+	frappe.db.commit()
+
+
+def check_review_is_not_open_to_learners():
+	"""Recording evidence is a reviewer action."""
+	from sparsh_los import review
+
+	_make_learner(TEST_LEARNER)
+	frappe.db.commit()
+
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+		for call, label in (
+			(lambda: review.pending(), "review.pending"),
+			(lambda: review.record_evidence("nonexistent", "Pass"), "review.record_evidence"),
+		):
+			try:
+				call()
+				raise AssertionError(f"{label} was callable by a learner")
+			except frappe.PermissionError:
+				pass
+	finally:
+		frappe.set_user(original_user)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -1279,6 +1345,8 @@ CHECKS = (
 	("critical_response_reaches_a_person", check_critical_response_reaches_a_person),
 	("evidence_cannot_contradict_the_attempt", check_evidence_cannot_contradict_the_attempt),
 	("runner_records_the_governing_rule", check_runner_records_the_governing_rule),
+	("human_review_activity_completes", check_human_review_activity_completes),
+	("review_is_not_open_to_learners", check_review_is_not_open_to_learners),
 	("cleanup", check_cleanup),
 )
 
