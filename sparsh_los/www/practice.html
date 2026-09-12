@@ -1,0 +1,107 @@
+{% extends "templates/web.html" %}
+
+{% block title %}Practice{% endblock %}
+
+{% block page_content %}
+<style>
+	.sp-wrap { max-width: 720px; margin: 0 auto; }
+	.sp-task { border: 1px solid #d8dde3; border-left: 3px solid #E07B39; padding: 20px 24px; margin-bottom: 28px; }
+	.sp-eyebrow { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: #6C6C6C; margin-bottom: 6px; }
+	.sp-instruction { font-size: 17px; line-height: 1.5; margin: 8px 0 18px; }
+	.sp-response { width: 100%; min-height: 96px; padding: 10px; border: 1px solid #c7ced6; font: inherit; }
+	.sp-actions { margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
+	.sp-feedback { margin-top: 16px; padding: 12px 16px; border-left: 3px solid #1A5276; background: #F4F4F4; display: none; }
+	.sp-feedback.is-critical { border-left-color: #C0392B; }
+	.sp-feedback.is-pass { border-left-color: #1E8449; }
+	.sp-states { border-collapse: collapse; width: 100%; font-size: 14px; }
+	.sp-states th { text-align: left; background: #003366; color: #fff; padding: 8px 12px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+	.sp-states td { padding: 8px 12px; border-top: 1px solid #e2e5e9; }
+	.sp-badge { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 2px 8px; border-radius: 2px; background: #F4F4F4; }
+	.sp-badge.is-strong { background: #1E8449; color: #fff; }
+	.sp-badge.is-due { background: #D4AC0D; color: #2C2C2C; }
+	.sp-empty { color: #6C6C6C; }
+</style>
+
+<div class="sp-wrap">
+	<h1>Practice</h1>
+
+	{% if next_up %}
+	<div class="sp-task">
+		<div class="sp-eyebrow">
+			{% if next_up.reason == "remediation" %}Working through an unsafe response
+			{% elif next_up.reason == "consolidation" %}Consolidating
+			{% else %}Today's task{% endif %}
+		</div>
+		<strong>{{ next_up.title or next_up.activity }}</strong>
+		<p class="sp-instruction">{{ next_up.instruction or "" }}</p>
+
+		<textarea class="sp-response" id="sp-response" placeholder="Your answer"></textarea>
+		<div class="sp-actions">
+			<button class="btn btn-primary btn-sm" id="sp-submit"
+				data-activity="{{ next_up.activity }}">Submit</button>
+		</div>
+
+		<div class="sp-feedback" id="sp-feedback"></div>
+	</div>
+	{% else %}
+	<p class="sp-empty">Nothing is waiting for you right now.</p>
+	{% endif %}
+
+	<h3>What you have shown</h3>
+	{% if view.competencies %}
+	<table class="sp-states">
+		<thead><tr><th>Competency</th><th>State</th><th>Last demonstrated</th></tr></thead>
+		<tbody>
+		{% for row in view.competencies %}
+			<tr>
+				<td>{{ row.competency }}</td>
+				<td><span class="sp-badge {% if row.state in ('Demonstrated', 'Mastered') %}is-strong{% elif row.state == 'Refresh Due' %}is-due{% endif %}">{{ row.state }}</span></td>
+				<td>{{ frappe.utils.format_datetime(row.last_demonstrated, "dd-MMM-yyyy") if row.last_demonstrated else "—" }}</td>
+			</tr>
+		{% endfor %}
+		</tbody>
+	</table>
+	{% else %}
+	<p class="sp-empty">You have not started a competency yet.</p>
+	{% endif %}
+</div>
+
+<script>
+frappe.ready(function () {
+	const button = document.getElementById("sp-submit");
+	if (!button) return;
+
+	button.addEventListener("click", function () {
+		const response = document.getElementById("sp-response").value;
+		const box = document.getElementById("sp-feedback");
+		if (!response.trim()) return;
+
+		button.disabled = true;
+		frappe.call({
+			method: "sparsh_los.runner.submit",
+			args: { activity: button.dataset.activity, response: response },
+			callback: function (r) {
+				button.disabled = false;
+				const d = r.message || {};
+				box.style.display = "block";
+				box.className = "sp-feedback" +
+					(d.critical_error ? " is-critical" : d.outcome === "Pass" ? " is-pass" : "");
+
+				if (d.critical_error) {
+					box.textContent = d.message;
+				} else if (d.outcome === "Pass") {
+					box.textContent = "Recorded. " + (d.state ? "You are now at: " + d.state : "");
+					setTimeout(function () { window.location.reload(); }, 1400);
+				} else if (d.hint) {
+					box.textContent = d.hint;
+					document.getElementById("sp-response").value = "";
+				} else {
+					box.textContent = d.message || "Recorded.";
+				}
+			},
+			error: function () { button.disabled = false; }
+		});
+	});
+});
+</script>
+{% endblock %}

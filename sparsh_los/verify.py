@@ -1375,6 +1375,43 @@ def check_one_standing_certification():
 	frappe.db.commit()
 
 
+def check_practice_page_builds():
+	"""The learner page assembles from the same read models as everything else."""
+	from sparsh_los.www import practice
+
+	_reset_competency()
+	_new_evidence(ACTIVITY_1, "Pass")
+	frappe.db.commit()
+
+	context = frappe._dict()
+	practice.get_context(context)
+
+	_assert(context.learner == frappe.session.user, "The page named the wrong learner")
+	_assert(context.view["competencies"], "The page shows no competencies")
+	_assert(
+		any(c["competency"] == COMPETENCY for c in context.view["competencies"]),
+		"The page is missing the competency just demonstrated",
+	)
+
+	# The page must offer the next thing to do, with an instruction to show.
+	if context.next_up:
+		_assert(context.next_up.get("activity"), "next_up carries no activity")
+		_assert("reason" in context.next_up, "next_up does not say why")
+
+	# A guest gets nothing.
+	original_user = frappe.session.user
+	try:
+		frappe.set_user("Guest")
+		try:
+			practice.get_context(frappe._dict())
+			raise AssertionError("The practice page rendered for Guest")
+		except frappe.PermissionError:
+			pass
+	finally:
+		frappe.set_user(original_user)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -1428,6 +1465,7 @@ CHECKS = (
 	("human_review_activity_completes", check_human_review_activity_completes),
 	("review_is_not_open_to_learners", check_review_is_not_open_to_learners),
 	("one_standing_certification", check_one_standing_certification),
+	("practice_page_builds", check_practice_page_builds),
 	("cleanup", check_cleanup),
 )
 
