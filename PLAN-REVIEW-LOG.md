@@ -202,3 +202,54 @@ DEFERRED
 
 ### Coverage
 Audits 1-4 all ran at `sol`; `astra` is unavailable on this account. No audit covers HEAD.
+
+## 2026-09-12 · Audit 5 and close of session
+Acceptance 38 -> 39 checks, `failed=0`, twice, and on a from-zero install.
+Final shape: 13 top-level doctypes, 6 child (two child doctypes deleted, see below).
+
+### Audit 5 (gpt-5.6-sol) — 4 blockers, 9 major, 3 minor
+BLOCKERS, ALL CONFIRMED AND FIXED
+- `is_restricted()` is fail-open: it answers "is this a learner?", not "may this person judge one".
+  Any authenticated non-learner could call `review.record_evidence` and advance mastery. Reviewer
+  actions now require explicit reviewer membership; the same shape was fixed in the cohort views and
+  the escalation queue.
+- The answer key was readable through child tables. permlevel on a parent Table field does not
+  protect the child doctype, which a learner could query directly by naming Sparsh Activity as its
+  parent; and filters on a permlevel-1 field still work as a prefix oracle. Hint ladder and critical
+  markers became permlevel-1 text fields, both child doctypes were deleted, and learner read on
+  Activity and Scenario was removed outright.
+- Assistance reset to zero after an assisted pass, so a learner could take a hint, pass with it, and
+  resubmit the known answer as an independent pass. Assistance never falls now.
+- Cancelling cleared critical evidence and then its review left nothing to reimpose the block.
+  Critical evidence cannot be cancelled at all, cleared or not.
+
+MAJOR, CONFIRMED AND FIXED
+- `record_evidence` rewrote the immutable attempt; it no longer does — whether an attempt has been
+  judged is answered by whether Evidence cites it.
+- A dual-role user could grade their own work or clear their own critical error.
+- A time-based regression never persisted or reconciled certifications, so a certificate outlived
+  its currency indefinitely.
+- Refresher assignments had no row scoping; `certification.current()` had no self-access check.
+
+DEFERRED, WITH REASONS
+- Concurrency (majors 6 and 7): the "already has evidence" and "one standing certification" checks
+  are `db.exists()` without a lock or unique constraint. Both need database constraints, which is a
+  schema decision, not a patch.
+- Critical-marker matching (major 11) remains defeatable by punctuation and fooled by "do not
+  hesitate to stop the medicine". Free-text safety detection cannot be made reliable; this is why
+  every critical result is escalated to a person rather than left to stand alone.
+- The identifier guard (major 12) cannot catch names, addresses or dates. De-identified scenarios
+  are the actual control; the guard stops accidents.
+- Rule-change refreshers (major 13) assign by competency rather than by the rule each learner was
+  actually assessed under. Now that attempts record a governing rule, provenance-based selection is
+  possible and should replace it.
+- Minors 14-16 logged, not actioned.
+
+### Session close
+Five audits, all at `gpt-5.6-sol`; `astra` is unavailable on this account. Two Codex processes hung
+outright (0.07-0.08s CPU, zero output, killed at 25 and 40 minutes) — treat the tool as flaky.
+No audit covers the current HEAD: audit 5's fixes landed after its snapshot.
+
+The engine is built and proven on the demo site. It has no validated clinical content: all 17 matrix
+rules are Draft and `matrix_status()` reports zero rules cleared to become fixed logic, which is the
+correct state until the programme owner decides otherwise.
