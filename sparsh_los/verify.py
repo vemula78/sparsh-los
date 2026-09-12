@@ -864,6 +864,36 @@ def check_activityless_evidence_cannot_demonstrate():
 	frappe.db.commit()
 
 
+def check_identifiers_are_refused():
+	"""Training records must not carry patient identifiers."""
+	from sparsh_los import escalation
+
+	def mrn_in_response():
+		attempt = frappe.new_doc("Sparsh Attempt")
+		attempt.learner = LEARNER
+		attempt.activity = ACTIVITY_1
+		attempt.hint_level_used = 0
+		attempt.response = "Discussed with WS123456 about diet"
+		attempt.insert(ignore_permissions=True)
+
+	_raises(mrn_in_response, "An MRN-shaped identifier was accepted in an attempt")
+
+	def aadhaar_in_question():
+		escalation.raise_question("Caregiver quoted 123456789012, what do I do?", activity=ACTIVITY_1)
+
+	_raises(aadhaar_in_question, "A 12-digit identifier was accepted in an escalation")
+
+	# Ordinary clinical prose must still be accepted.
+	attempt = frappe.new_doc("Sparsh Attempt")
+	attempt.learner = LEARNER
+	attempt.activity = ACTIVITY_1
+	attempt.hint_level_used = 0
+	attempt.response = "BP was 150/90 and waist 102 cm, so I would assign level 2"
+	attempt.insert(ignore_permissions=True)
+	_assert(attempt.name, "Ordinary clinical prose was rejected")
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -902,6 +932,7 @@ CHECKS = (
 	("only_review_clears_critical_error", check_only_review_clears_critical_error),
 	("certification_suspended_on_regression", check_certification_suspended_on_regression),
 	("activityless_evidence_cannot_demonstrate", check_activityless_evidence_cannot_demonstrate),
+	("identifiers_are_refused", check_identifiers_are_refused),
 	("cleanup", check_cleanup),
 )
 

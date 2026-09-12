@@ -11,12 +11,12 @@ CERTIFIABLE_STATES = ("Demonstrated", "Mastered")
 
 
 class SparshCertificationRecord(Document):
-	def validate(self):
-		# Attribution is a fact about who certified, not a field the caller may choose.
+	def before_submit(self):
+		# Attribution belongs to the act of certifying, not to the last draft save.
 		self.certified_by = frappe.session.user
-		if not self.certified_on:
-			self.certified_on = frappe.utils.now_datetime()
+		self.certified_on = frappe.utils.now_datetime()
 
+	def validate(self):
 		if self.certification_status == "Revoked":
 			# Revocation must stay available precisely when competence has regressed.
 			# Requiring Demonstrated to revoke would lock the record open after a

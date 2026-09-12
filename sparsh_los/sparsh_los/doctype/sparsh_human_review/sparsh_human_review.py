@@ -7,11 +7,11 @@ from frappe.model.document import Document
 
 class SparshHumanReview(Document):
 
-	def validate(self):
-		# Attribution is a fact about who acted, not a field the caller may choose.
+	def before_submit(self):
+		# Attribution belongs to the act of reviewing. Stamping it on every save meant
+		# whoever last edited a draft became the recorded reviewer.
 		self.reviewer = frappe.session.user
-		if not self.reviewed_at:
-			self.reviewed_at = frappe.utils.now_datetime()
+		self.reviewed_at = frappe.utils.now_datetime()
 
 	def on_submit(self):
 		"""A submitted review may clear the safety error it examined."""

@@ -11,6 +11,8 @@ whose `learner` is the current user.
 Reviewers and System Managers are unrestricted: reviewing requires seeing the cohort.
 """
 
+import re
+
 import frappe
 
 # DocType -> the field naming the learner the row belongs to.
@@ -81,3 +83,33 @@ def escalation_question_query(user):
 def has_permission(doc, ptype=None, user=None):
 	"""A learner may only touch rows that are their own."""
 	return _permitted(doc, user or frappe.session.user)
+
+
+# Identifiers that must never reach a training record. Deliberately narrow: the
+# hospital's own MRN format and Aadhaar-length digit runs. A broad heuristic would
+# reject legitimate clinical prose and teach people to work around the check.
+IDENTIFIER_PATTERNS = (
+	re.compile(r"\b(?:WS|PN|PS)\s?\d{4,}\b", re.IGNORECASE),
+	re.compile(r"\b\d{12}\b"),
+)
+
+
+def reject_identifiers(*values):
+	"""Refuse text carrying a patient identifier.
+
+	Scenarios are de-identified by policy; this stops the obvious accidents rather
+	than pretending to detect every identifier.
+	"""
+	for value in values:
+		if not value:
+			continue
+
+		for pattern in IDENTIFIER_PATTERNS:
+			if pattern.search(str(value)):
+				frappe.throw(
+					frappe._(
+						"This text looks like it contains a patient identifier. "
+						"Training records must not carry identifiable data."
+					),
+					frappe.ValidationError,
+				)

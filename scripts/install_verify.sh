@@ -10,6 +10,7 @@ SSH_KEY="${SSH_KEY:-~/Downloads/sssihms-web-vm2023_key.pem}"
 SSH_HOST="${SSH_HOST:-azureuser@20.219.253.136}"
 SSH_PORT="${SSH_PORT:-2222}"
 SKIP_VERIFY="${SKIP_VERIFY:-0}"
+MIN_CHECKS="${MIN_CHECKS:-24}"
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH_DIR="/home/frappe/frappe-bench"
@@ -64,6 +65,13 @@ if [ "${SKIP_VERIFY}" != "1" ]; then
 		echo "FAIL: verify harness did not print a RESULT line" >&2
 		exit 1
 	fi
+	# An empty CHECKS tuple would print "passed=0 failed=0" and look like success.
+	PASSED=$(echo "${OUTPUT}" | sed -n 's/.*RESULT passed=\([0-9]*\).*/\1/p')
+	if [ "${PASSED:-0}" -lt "${MIN_CHECKS:-1}" ]; then
+		echo "FAIL: only ${PASSED:-0} checks ran, expected at least ${MIN_CHECKS:-1}" >&2
+		exit 1
+	fi
+
 	if echo "${OUTPUT}" | grep -E 'RESULT passed=[0-9]+ failed=[1-9]'; then
 		echo "FAIL: verify harness reported failures" >&2
 		exit 1

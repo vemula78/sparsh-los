@@ -49,7 +49,8 @@
    "fieldname": "reviewer",
    "fieldtype": "Link",
    "label": "Reviewer",
-   "options": "User"
+   "options": "User",
+   "no_copy": 1
   },
   {
    "default": "Pending",
@@ -63,7 +64,8 @@
   {
    "fieldname": "reviewed_at",
    "fieldtype": "Datetime",
-   "label": "Reviewed At"
+   "label": "Reviewed At",
+   "no_copy": 1
   },
   {
    "fieldname": "section_break_comments",
@@ -84,7 +86,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-12 21:55:38.160994",
+ "modified": "2026-09-12 22:00:00.990884",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Human Review",

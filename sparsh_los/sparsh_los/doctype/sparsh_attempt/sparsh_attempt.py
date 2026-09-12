@@ -5,7 +5,7 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 
-from sparsh_los.permissions import is_restricted
+from sparsh_los.permissions import is_restricted, reject_identifiers
 
 
 class SparshAttempt(Document):
@@ -42,6 +42,8 @@ class SparshAttempt(Document):
 		self.critical_error = 0
 
 	def validate(self):
+		reject_identifiers(self.response)
+
 		if self.hint_level_used is None or self.hint_level_used < 0 or self.hint_level_used > 4:
 			frappe.throw(_("Hint level used must be between 0 and 4"))
 
