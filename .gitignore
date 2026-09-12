@@ -1,0 +1,8 @@
+*.pyc
+__pycache__/
+*.xlsx
+*.docx
+*.csv
+.DS_Store
+*.egg-info/
+node_modules/

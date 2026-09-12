@@ -1,0 +1,104 @@
+{
+ "actions": [],
+ "autoname": "field:scenario_id",
+ "creation": "2026-09-12 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "scenario_id",
+  "title",
+  "competency",
+  "column_break_head",
+  "difficulty",
+  "version",
+  "section_break_detail",
+  "context_description",
+  "expected_reasoning"
+ ],
+ "fields": [
+  {
+   "fieldname": "scenario_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Scenario ID",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Title",
+   "reqd": 1
+  },
+  {
+   "fieldname": "competency",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Competency",
+   "options": "Sparsh Competency"
+  },
+  {
+   "fieldname": "column_break_head",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Foundational",
+   "fieldname": "difficulty",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Difficulty",
+   "options": "Foundational\nIntermediate\nAdvanced"
+  },
+  {
+   "default": "1",
+   "fieldname": "version",
+   "fieldtype": "Int",
+   "label": "Version",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "section_break_detail",
+   "fieldtype": "Section Break",
+   "label": "Detail"
+  },
+  {
+   "fieldname": "context_description",
+   "fieldtype": "Text",
+   "label": "Context Description",
+   "reqd": 1
+  },
+  {
+   "fieldname": "expected_reasoning",
+   "fieldtype": "Text",
+   "label": "Expected Reasoning"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-09-12 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sparsh LOS",
+ "name": "Sparsh Scenario",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "title",
+ "track_changes": 1
+}

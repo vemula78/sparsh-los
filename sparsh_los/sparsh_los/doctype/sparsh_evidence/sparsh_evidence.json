@@ -1,0 +1,151 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-09-12 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "learner",
+  "competency",
+  "activity",
+  "activity_version",
+  "column_break_head",
+  "attempt",
+  "outcome",
+  "assistance_level",
+  "critical_error",
+  "recorded_at",
+  "section_break_review",
+  "ai_feedback_summary",
+  "human_review_status",
+  "amended_from"
+ ],
+ "fields": [
+  {
+   "fieldname": "learner",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Learner",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "fieldname": "competency",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Competency",
+   "options": "Sparsh Competency",
+   "reqd": 1
+  },
+  {
+   "fieldname": "activity",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Activity",
+   "options": "Sparsh Activity"
+  },
+  {
+   "fieldname": "activity_version",
+   "fieldtype": "Int",
+   "label": "Activity Version",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "column_break_head",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "attempt",
+   "fieldtype": "Link",
+   "label": "Attempt",
+   "options": "Sparsh Attempt"
+  },
+  {
+   "default": "Not Evaluated",
+   "fieldname": "outcome",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Outcome",
+   "options": "Not Evaluated\nPass\nPartial\nFail",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "assistance_level",
+   "fieldtype": "Int",
+   "label": "Assistance Level",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "critical_error",
+   "fieldtype": "Check",
+   "label": "Critical Error"
+  },
+  {
+   "fieldname": "recorded_at",
+   "fieldtype": "Datetime",
+   "label": "Recorded At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_review",
+   "fieldtype": "Section Break",
+   "label": "Review"
+  },
+  {
+   "fieldname": "ai_feedback_summary",
+   "fieldtype": "Small Text",
+   "label": "Automated Feedback Summary"
+  },
+  {
+   "default": "Not Required",
+   "fieldname": "human_review_status",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Human Review Status",
+   "options": "Not Required\nPending\nApproved\nRejected"
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "ignore_user_permissions": 1,
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Sparsh Evidence",
+   "print_hide": 1,
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2026-09-12 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sparsh LOS",
+ "name": "Sparsh Evidence",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "amend": 1,
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

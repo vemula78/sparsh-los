@@ -1,0 +1,101 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-09-12 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "learner",
+  "competency",
+  "column_break_head",
+  "state",
+  "last_demonstrated",
+  "evidence_count",
+  "section_break_evidence",
+  "supporting_evidence"
+ ],
+ "fields": [
+  {
+   "fieldname": "learner",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Learner",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "fieldname": "competency",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Competency",
+   "options": "Sparsh Competency",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_head",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Not Started",
+   "fieldname": "state",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "State",
+   "options": "Not Started\nExploring\nPractising\nDemonstrated\nMastered\nRefresh Due",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_demonstrated",
+   "fieldtype": "Datetime",
+   "label": "Last Demonstrated",
+   "read_only": 1
+  },
+  {
+   "fieldname": "evidence_count",
+   "fieldtype": "Int",
+   "label": "Evidence Count",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_evidence",
+   "fieldtype": "Section Break",
+   "label": "Supporting Evidence"
+  },
+  {
+   "fieldname": "supporting_evidence",
+   "fieldtype": "Table",
+   "label": "Supporting Evidence",
+   "options": "Sparsh Mastery Evidence Link",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-09-12 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sparsh LOS",
+ "name": "Sparsh Mastery State",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

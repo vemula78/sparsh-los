@@ -1,0 +1,136 @@
+{
+ "actions": [],
+ "autoname": "field:competency_id",
+ "creation": "2026-09-12 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "competency_id",
+  "competency_name",
+  "domain",
+  "column_break_head",
+  "criticality",
+  "description",
+  "section_break_behaviours",
+  "observable_behaviours",
+  "section_break_prereq",
+  "prerequisites",
+  "section_break_rules",
+  "linked_rules",
+  "section_break_lessons",
+  "linked_lessons"
+ ],
+ "fields": [
+  {
+   "fieldname": "competency_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Competency ID",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "competency_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Competency Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "domain",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Domain",
+   "options": "Sparsh Competency Domain"
+  },
+  {
+   "fieldname": "column_break_head",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Normal",
+   "fieldname": "criticality",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Criticality",
+   "options": "Normal\nHigh-risk\nSafety-critical"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Text",
+   "label": "Description"
+  },
+  {
+   "fieldname": "section_break_behaviours",
+   "fieldtype": "Section Break",
+   "label": "Observable Behaviours"
+  },
+  {
+   "fieldname": "observable_behaviours",
+   "fieldtype": "Table",
+   "label": "Observable Behaviours",
+   "options": "Sparsh Observable Behaviour"
+  },
+  {
+   "fieldname": "section_break_prereq",
+   "fieldtype": "Section Break",
+   "label": "Prerequisites"
+  },
+  {
+   "fieldname": "prerequisites",
+   "fieldtype": "Table",
+   "label": "Prerequisites",
+   "options": "Sparsh Competency Prerequisite"
+  },
+  {
+   "fieldname": "section_break_rules",
+   "fieldtype": "Section Break",
+   "label": "Linked Rules"
+  },
+  {
+   "fieldname": "linked_rules",
+   "fieldtype": "Table",
+   "label": "Linked Rules",
+   "options": "Sparsh Competency Rule Link"
+  },
+  {
+   "fieldname": "section_break_lessons",
+   "fieldtype": "Section Break",
+   "label": "Linked Lessons"
+  },
+  {
+   "fieldname": "linked_lessons",
+   "fieldtype": "Table",
+   "label": "Linked Lessons",
+   "options": "Sparsh Competency Lesson Reference"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-09-12 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sparsh LOS",
+ "name": "Sparsh Competency",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "competency_name",
+ "track_changes": 1
+}

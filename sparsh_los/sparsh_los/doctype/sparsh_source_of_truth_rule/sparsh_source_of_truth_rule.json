@@ -1,0 +1,145 @@
+{
+ "actions": [],
+ "autoname": "format:{rule_id}-v{version}",
+ "creation": "2026-09-12 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "rule_id",
+  "version",
+  "rule_statement",
+  "applies_to",
+  "column_break_core",
+  "status",
+  "rule_owner",
+  "effective_date",
+  "source",
+  "section_break_governance",
+  "criticality",
+  "automation_status",
+  "column_break_governance",
+  "supersedes",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "rule_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Rule ID",
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "version",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Version",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "rule_statement",
+   "fieldtype": "Text",
+   "label": "Rule Statement",
+   "reqd": 1
+  },
+  {
+   "fieldname": "applies_to",
+   "fieldtype": "Small Text",
+   "label": "Applies To"
+  },
+  {
+   "fieldname": "column_break_core",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Draft",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Draft\nValidated\nSuperseded\nContext-dependent\nDo not automate",
+   "reqd": 1
+  },
+  {
+   "fieldname": "rule_owner",
+   "fieldtype": "Link",
+   "label": "Rule Owner",
+   "options": "User"
+  },
+  {
+   "fieldname": "effective_date",
+   "fieldtype": "Date",
+   "label": "Effective Date"
+  },
+  {
+   "fieldname": "source",
+   "fieldtype": "Small Text",
+   "label": "Source"
+  },
+  {
+   "fieldname": "section_break_governance",
+   "fieldtype": "Section Break",
+   "label": "Governance"
+  },
+  {
+   "default": "Normal",
+   "fieldname": "criticality",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Criticality",
+   "options": "Normal\nHigh-risk\nSafety-critical"
+  },
+  {
+   "default": "Human review required",
+   "fieldname": "automation_status",
+   "fieldtype": "Select",
+   "label": "Automation Status",
+   "options": "Safe as fixed logic\nAI may advise\nHuman review required\nDo not automate"
+  },
+  {
+   "fieldname": "column_break_governance",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "supersedes",
+   "fieldtype": "Link",
+   "label": "Supersedes",
+   "options": "Sparsh Source of Truth Rule"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Text",
+   "label": "Notes"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-09-12 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sparsh LOS",
+ "name": "Sparsh Source of Truth Rule",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

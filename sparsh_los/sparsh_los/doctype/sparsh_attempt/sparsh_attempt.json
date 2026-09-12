@@ -1,0 +1,153 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-09-12 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "learner",
+  "activity",
+  "scenario",
+  "column_break_head",
+  "rule",
+  "rule_version",
+  "attempted_at",
+  "section_break_response",
+  "response",
+  "section_break_result",
+  "outcome",
+  "hint_level_used",
+  "retry_index",
+  "column_break_result",
+  "critical_error",
+  "independent"
+ ],
+ "fields": [
+  {
+   "fieldname": "learner",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Learner",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "fieldname": "activity",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Activity",
+   "options": "Sparsh Activity",
+   "reqd": 1
+  },
+  {
+   "fieldname": "scenario",
+   "fieldtype": "Link",
+   "label": "Scenario",
+   "options": "Sparsh Scenario"
+  },
+  {
+   "fieldname": "column_break_head",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "rule",
+   "fieldtype": "Link",
+   "label": "Rule",
+   "options": "Sparsh Source of Truth Rule"
+  },
+  {
+   "description": "Snapshot of the rule version at the time of the attempt.",
+   "fieldname": "rule_version",
+   "fieldtype": "Int",
+   "label": "Rule Version",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "attempted_at",
+   "fieldtype": "Datetime",
+   "label": "Attempted At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_response",
+   "fieldtype": "Section Break",
+   "label": "Response"
+  },
+  {
+   "fieldname": "response",
+   "fieldtype": "Text",
+   "label": "Response"
+  },
+  {
+   "fieldname": "section_break_result",
+   "fieldtype": "Section Break",
+   "label": "Result"
+  },
+  {
+   "default": "Not Evaluated",
+   "fieldname": "outcome",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Outcome",
+   "options": "Not Evaluated\nPass\nPartial\nFail"
+  },
+  {
+   "default": "0",
+   "fieldname": "hint_level_used",
+   "fieldtype": "Int",
+   "label": "Hint Level Used",
+   "non_negative": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "retry_index",
+   "fieldtype": "Int",
+   "label": "Retry Index",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "column_break_result",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "critical_error",
+   "fieldtype": "Check",
+   "label": "Critical Error"
+  },
+  {
+   "fieldname": "independent",
+   "fieldtype": "Check",
+   "label": "Independent",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-09-12 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sparsh LOS",
+ "name": "Sparsh Attempt",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
