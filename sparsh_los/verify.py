@@ -87,6 +87,7 @@ def teardown():
 	# recreates the Mastery row, so deleting Mastery first leaves one behind.
 	_delete_all("Sparsh Evidence", {"competency": ("in", competencies)})
 	_delete_all("Sparsh Mastery State", {"competency": ("in", competencies)})
+	_delete_all("Sparsh Escalation Question", {"learner": ("in", [LEARNER, TEST_LEARNER, OTHER_LEARNER])})
 	_delete_all("Sparsh Attempt", {"activity": ("in", [ACTIVITY_1, ACTIVITY_2])})
 	_delete_all("Sparsh Activity", {"name": ("in", [ACTIVITY_1, ACTIVITY_2])})
 	_delete_all("Sparsh Competency", {"name": ("in", competencies)})
@@ -575,6 +576,63 @@ def check_runner_flags_critical_response():
 	frappe.db.commit()
 
 
+def check_escalation_to_human_review():
+	"""A learner escalates; only a reviewer answers; the answer is classified."""
+	from sparsh_los import escalation
+
+	_make_learner(TEST_LEARNER)
+	frappe.db.commit()
+
+	attempt = _new_attempt(None, outcome="Fail")
+	frappe.db.commit()
+
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+		question = escalation.raise_question(
+			"Should I advise stopping this medicine?",
+			activity=ACTIVITY_1,
+			attempt=attempt.name,
+			reason="Safety critical",
+		)
+		doc = frappe.get_doc("Sparsh Escalation Question", question)
+		_assert(doc.learner == TEST_LEARNER, "The question was not attributed to the learner")
+		_assert(doc.status == "Open", f"A raised question opened at {doc.status}")
+		_assert(doc.context_snapshot, "No context was packaged with the question")
+		_assert(ACTIVITY_1 in doc.context_snapshot, "The activity was not captured in the context")
+
+		# Answering is a reviewer action.
+		try:
+			escalation.answer(question, "No. Refer to the clinician.", "Private answer")
+			raise AssertionError("A learner answered their own escalation")
+		except frappe.PermissionError:
+			pass
+	finally:
+		frappe.set_user(original_user)
+
+	result = escalation.answer(
+		question, "Outside volunteer scope. Refer to the clinician.", "Source-of-truth update"
+	)
+	_assert(result["disposition"] == "Source-of-truth update", "The disposition was not recorded")
+	_assert(result["programme_change_required"], "A programme-level disposition was not flagged")
+
+	doc = frappe.get_doc("Sparsh Escalation Question", question)
+	_assert(doc.status == "Answered", f"An answered question sits at {doc.status}")
+	_assert(doc.answered_by == frappe.session.user, "The answer was not attributed")
+
+	def bad_disposition():
+		escalation.answer(question, "text", "Something else")
+
+	_raises(bad_disposition, "An unrecognised disposition was accepted")
+
+	queue = escalation.open_queue()
+	_assert(
+		all(q["name"] != question for q in queue),
+		"An answered question is still in the open queue",
+	)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -606,6 +664,7 @@ CHECKS = (
 	("evidence_activity_must_match_competency", check_evidence_activity_must_match_competency),
 	("runner_loop", check_runner_loop),
 	("runner_flags_critical_response", check_runner_flags_critical_response),
+	("escalation_to_human_review", check_escalation_to_human_review),
 	("cleanup", check_cleanup),
 )
 

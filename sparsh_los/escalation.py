@@ -1,0 +1,129 @@
+# Copyright (c) 2026, SSSIHMS and contributors
+# For license information, please see license.txt
+
+"""Human escalation: a core path, not an exception.
+
+When a learner meets something the engine should not resolve — an ambiguous case, a
+question outside the approved rules, anything touching medication or safety — the
+question goes to a person, with enough context for that person to answer it in one
+sitting.
+
+The reviewer's answer is then classified by what it is worth beyond this learner:
+private to them, a reusable answer, a change to the source of truth, or a change to
+the curriculum. That classification is what turns a support queue into a feedback
+loop on the programme itself.
+"""
+
+import json
+
+import frappe
+from frappe import _
+
+DISPOSITIONS = (
+	"Private answer",
+	"Reusable FAQ",
+	"Source-of-truth update",
+	"Curriculum change",
+)
+
+# Dispositions that say the programme, not the learner, needs to change.
+PROGRAMME_DISPOSITIONS = ("Source-of-truth update", "Curriculum change")
+
+
+def _context(activity, attempt):
+	"""A compact snapshot of what the learner was doing. No caregiver data."""
+	snapshot = {}
+
+	if activity:
+		row = frappe.db.get_value(
+			"Sparsh Activity", activity, ["title", "competency", "activity_type", "version"], as_dict=True
+		)
+		if row:
+			snapshot["activity"] = dict(row, name=activity)
+
+	if attempt:
+		row = frappe.db.get_value(
+			"Sparsh Attempt",
+			attempt,
+			["outcome", "hint_level_used", "retry_index", "critical_error", "rule", "rule_version"],
+			as_dict=True,
+		)
+		if row:
+			snapshot["attempt"] = dict(row, name=attempt)
+
+	return json.dumps(snapshot, indent=1, default=str)
+
+
+@frappe.whitelist()
+def raise_question(question_text, activity=None, attempt=None, reason="Unknown"):
+	"""A learner asks for expert guidance. Context is packaged here, not by the caller."""
+	if not (question_text or "").strip():
+		frappe.throw(_("A question cannot be empty"))
+
+	question = frappe.new_doc("Sparsh Escalation Question")
+	question.learner = frappe.session.user
+	question.activity = activity
+	question.attempt = attempt
+	question.escalation_reason = reason
+	question.question_text = question_text
+	question.status = "Open"
+	question.context_snapshot = _context(activity, attempt)
+	question.insert(ignore_permissions=True)
+
+	return question.name
+
+
+@frappe.whitelist()
+def route(question, reviewer):
+	"""Put the question in a named reviewer's queue."""
+	doc = frappe.get_doc("Sparsh Escalation Question", question)
+	doc.routed_to = reviewer
+	doc.status = "Routed to Human"
+	doc.save()
+	return doc.name
+
+
+@frappe.whitelist()
+def answer(question, answer_text, disposition):
+	"""Answer a question and classify what the answer is worth.
+
+	Answering is a reviewer action: the write permission on the DocType is the gate,
+	so a learner calling this is refused by the ordinary permission check.
+	"""
+	if disposition not in DISPOSITIONS:
+		frappe.throw(_("{0} is not a recognised disposition").format(disposition))
+
+	if not (answer_text or "").strip():
+		frappe.throw(_("An answer cannot be empty"))
+
+	doc = frappe.get_doc("Sparsh Escalation Question", question)
+	doc.answer_text = answer_text
+	doc.disposition = disposition
+	doc.answered_by = frappe.session.user
+	doc.answered_at = frappe.utils.now_datetime()
+	doc.status = "Answered"
+	doc.save()
+
+	return {
+		"question": doc.name,
+		"disposition": disposition,
+		# A programme-level disposition is the signal that content or rules must change.
+		# Acting on it — marking activities for review, setting learners Refresh Due —
+		# is deliberately not automated yet: it is a programme decision, not a code one.
+		"programme_change_required": disposition in PROGRAMME_DISPOSITIONS,
+	}
+
+
+@frappe.whitelist()
+def open_queue(reviewer=None):
+	"""The reviewer's queue: oldest first, because a waiting learner is blocked."""
+	filters = {"status": ("in", ("Open", "Routed to Human"))}
+	if reviewer:
+		filters["routed_to"] = reviewer
+
+	return frappe.get_all(
+		"Sparsh Escalation Question",
+		filters=filters,
+		fields=["name", "learner", "activity", "escalation_reason", "question_text", "raised_at", "status"],
+		order_by="creation asc",
+	)

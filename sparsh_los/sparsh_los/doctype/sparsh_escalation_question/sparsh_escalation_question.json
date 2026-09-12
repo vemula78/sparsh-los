@@ -16,7 +16,11 @@
   "raised_at",
   "section_break_body",
   "question_text",
-  "answer_text"
+  "answer_text",
+  "disposition",
+  "answered_by",
+  "answered_at",
+  "context_snapshot"
  ],
  "fields": [
   {
@@ -87,11 +91,39 @@
    "fieldname": "answer_text",
    "fieldtype": "Text",
    "label": "Answer Text"
+  },
+  {
+   "fieldname": "disposition",
+   "fieldtype": "Select",
+   "label": "Disposition",
+   "options": "\nPrivate answer\nReusable FAQ\nSource-of-truth update\nCurriculum change",
+   "description": "What the reviewer's answer is worth beyond this learner.",
+   "read_only": 1
+  },
+  {
+   "fieldname": "answered_by",
+   "fieldtype": "Link",
+   "label": "Answered By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "answered_at",
+   "fieldtype": "Datetime",
+   "label": "Answered At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "context_snapshot",
+   "fieldtype": "Long Text",
+   "label": "Context Snapshot",
+   "read_only": 1,
+   "description": "What the learner was doing when the question was raised."
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-12 21:23:21.047757",
+ "modified": "2026-09-12 21:50:17.377309",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Escalation Question",
