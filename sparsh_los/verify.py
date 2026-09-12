@@ -720,6 +720,53 @@ def check_other_domain_runs_unchanged():
 	frappe.db.commit()
 
 
+def check_orchestrator_selects_next():
+	"""The engine picks what produces the next evidence, and says why."""
+	from sparsh_los import orchestrator, runner
+
+	_delete_all("Sparsh Evidence", {"competency": COMPETENCY})
+	_delete_all("Sparsh Mastery State", {"competency": COMPETENCY})
+	frappe.db.commit()
+
+	first = orchestrator.next_experience(COMPETENCY, LEARNER)
+	_assert(first["activity"], "No first activity was offered")
+	_assert(first["reason"] == orchestrator.PRACTICE, f"First activity offered as {first['reason']}")
+
+	# A critical error outranks sequence: the learner is sent back, not forward.
+	_new_evidence(ACTIVITY_1, "Fail", critical_error=1)
+	blocked = orchestrator.next_experience(COMPETENCY, LEARNER)
+	_assert(
+		blocked["reason"] == orchestrator.REMEDIATION,
+		f"After a critical error the reason was {blocked['reason']}",
+	)
+	_assert(blocked["activity"] == ACTIVITY_1, "Remediation did not return to the activity that failed")
+
+	# Clearing it with an independent pass restores ordinary progression.
+	_new_evidence(ACTIVITY_1, "Pass")
+	after = orchestrator.next_experience(COMPETENCY, LEARNER)
+	_assert(
+		after["reason"] != orchestrator.REMEDIATION,
+		"Remediation persisted after an independent pass answered the critical error",
+	)
+	_assert(after["activity"] == ACTIVITY_2, "The next unseen activity was not offered")
+
+	# Prerequisites block before anything else is considered.
+	competency = frappe.get_doc("Sparsh Competency", COMPETENCY_2)
+	competency.append("prerequisites", {"prerequisite": COMPETENCY})
+	competency.save(ignore_permissions=True)
+	_delete_all("Sparsh Evidence", {"competency": COMPETENCY})
+	_delete_all("Sparsh Mastery State", {"competency": COMPETENCY})
+	frappe.db.commit()
+
+	gated = orchestrator.next_experience(COMPETENCY_2, LEARNER)
+	_assert(
+		gated["reason"] == orchestrator.PREREQUISITE,
+		f"An unmet prerequisite gave reason {gated['reason']}",
+	)
+	_assert(COMPETENCY in gated["blocked_by"], "The blocking prerequisite was not named")
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -754,6 +801,7 @@ CHECKS = (
 	("escalation_to_human_review", check_escalation_to_human_review),
 	("dashboards", check_dashboards),
 	("other_domain_runs_unchanged", check_other_domain_runs_unchanged),
+	("orchestrator_selects_next", check_orchestrator_selects_next),
 	("cleanup", check_cleanup),
 )
 
