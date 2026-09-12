@@ -1885,6 +1885,42 @@ def check_mastery_cannot_be_deleted():
 	frappe.db.commit()
 
 
+def check_certification_standing_is_not_editable():
+	"""Standing is decided by reconciliation and revocation, never by editing."""
+	_reset_competency()
+	_new_evidence(ACTIVITY_1, "Pass")
+
+	certificate = frappe.new_doc("Sparsh Certification Record")
+	certificate.learner = LEARNER
+	certificate.competency = COMPETENCY
+	certificate.certification_status = "Full"
+	certificate.insert(ignore_permissions=True)
+	certificate.submit()
+	_assert(certificate.standing_key, "A submitted certificate has no standing key")
+
+	def edit_standing():
+		doc = frappe.get_doc("Sparsh Certification Record", certificate.name)
+		doc.standing_key = None
+		doc.save(ignore_permissions=True)
+
+	_raises(edit_standing, "Certification standing was edited directly")
+
+	# Cancelling frees the slot, so another certification becomes possible.
+	certificate.reload()
+	certificate.cancel()
+	certificate.reload()
+	_assert(not certificate.standing_key, "Cancelling left the standing key occupied")
+
+	replacement = frappe.new_doc("Sparsh Certification Record")
+	replacement.learner = LEARNER
+	replacement.competency = COMPETENCY
+	replacement.certification_status = "Full"
+	replacement.insert(ignore_permissions=True)
+	replacement.submit()
+	_assert(replacement.standing_key, "A replacement certificate could not be submitted")
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -1950,6 +1986,7 @@ CHECKS = (
 	("nobody_judges_their_own_work", check_nobody_judges_their_own_work),
 	("unenrolled_user_is_shut_out", check_unenrolled_user_is_shut_out),
 	("mastery_cannot_be_deleted", check_mastery_cannot_be_deleted),
+	("certification_standing_is_not_editable", check_certification_standing_is_not_editable),
 	("cleanup", check_cleanup),
 )
 

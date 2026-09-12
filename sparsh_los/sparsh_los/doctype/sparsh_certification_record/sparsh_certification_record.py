@@ -100,19 +100,44 @@ class SparshCertificationRecord(Document):
 		# what actually guarantees it, because the database rejects the duplicate.
 		self.standing_key = f"{self.learner}::{self.competency}"
 
+	def on_update_after_submit(self):
+		"""Standing is decided by reconciliation and revocation, not by editing.
+
+		Both fields have to be allow-on-submit for the engine to maintain them, which
+		would otherwise let anyone with write access hand themselves a standing
+		certificate by nulling somebody else's key.
+		"""
+		if frappe.flags.in_mastery_recompute or frappe.flags.in_sparsh_certification:
+			return
+
+		frappe.throw(
+			_("Certification standing is maintained by the system, not edited directly"),
+			frappe.ValidationError,
+		)
+
 	def on_cancel(self):
 		# Otherwise the unique key stays occupied by a cancelled record and no future
 		# certification for this pair can be submitted.
-		self.db_set("standing_key", None)
-		self.db_set("certification_state", "Revoked")
+		previous = frappe.flags.in_sparsh_certification
+		frappe.flags.in_sparsh_certification = True
+		try:
+			self.db_set("standing_key", None)
+			self.db_set("certification_state", "Revoked")
+		finally:
+			frappe.flags.in_sparsh_certification = previous
 
 	def on_submit(self):
 		if self.certification_status == "Revoked" and self.revokes:
-			frappe.db.set_value(
-				"Sparsh Certification Record",
-				self.revokes,
-				{"certification_state": "Revoked", "standing_key": None},
-			)
+			previous = frappe.flags.in_sparsh_certification
+			frappe.flags.in_sparsh_certification = True
+			try:
+				frappe.db.set_value(
+					"Sparsh Certification Record",
+					self.revokes,
+					{"certification_state": "Revoked", "standing_key": None},
+				)
+			finally:
+				frappe.flags.in_sparsh_certification = previous
 
 
 def on_doctype_update():
