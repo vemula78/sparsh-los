@@ -32,6 +32,7 @@ def _submitted_evidence(learner, competency):
 			"outcome",
 			"assistance_level",
 			"critical_error",
+			"critical_error_cleared",
 			"recorded_at",
 			"creation",
 		],
@@ -48,27 +49,29 @@ def _sort_key(row):
 
 
 def _independent_passes(rows):
+	"""Unaided passes that cite the activity they were earned on.
+
+	Evidence with no activity carries no provenance, so it cannot establish that a
+	learner demonstrated anything in particular.
+	"""
 	return [
 		r
 		for r in rows
-		if r.outcome == "Pass" and not r.critical_error and (r.assistance_level or 0) == 0
+		if r.outcome == "Pass"
+		and not r.critical_error
+		and (r.assistance_level or 0) == 0
+		and r.activity
 	]
 
 
 def has_blocking_critical_error(learner, competency) -> bool:
 	"""True when a critical error stands unanswered by a later independent pass."""
 	rows = _submitted_evidence(learner, competency)
-	critical = [r for r in rows if r.critical_error]
-	if not critical:
-		return False
 
-	passes = _independent_passes(rows)
-	if not passes:
-		return True
-
-	# max() by the same key on both sides: taking list[-1] assumed the query order
-	# matched the comparison key, which it did not.
-	return _sort_key(max(critical, key=_sort_key)) > _sort_key(max(passes, key=_sort_key))
+	# A safety error is cleared by a reviewer deciding it is cleared, never by the
+	# learner performing well afterwards. Progression on aggregate performance is
+	# exactly what the gate exists to prevent.
+	return any(r.critical_error and not r.critical_error_cleared for r in rows)
 
 
 def derive_state(learner, competency) -> str:
@@ -145,4 +148,28 @@ def recompute_mastery(learner, competency):
 	finally:
 		frappe.flags.in_mastery_recompute = previous_flag
 
+	_reconcile_certifications(learner, competency, doc.state)
+
 	return doc.name
+
+
+def _reconcile_certifications(learner, competency, state):
+	"""A certificate must not outlive the evidence that justified it.
+
+	Certification records are submitted and therefore immutable, so the current
+	standing is carried on an allow-on-submit field rather than by editing history.
+	"""
+	supported = state in (DEMONSTRATED, MASTERED) and not has_blocking_critical_error(
+		learner, competency
+	)
+	target = "Active" if supported else "Suspended"
+
+	for row in frappe.get_all(
+		"Sparsh Certification Record",
+		filters={"learner": learner, "competency": competency, "docstatus": 1},
+		fields=["name", "certification_state", "certification_status"],
+	):
+		if row.certification_status == "Revoked" or row.certification_state == target:
+			continue
+
+		frappe.db.set_value("Sparsh Certification Record", row.name, "certification_state", target)

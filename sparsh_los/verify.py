@@ -82,9 +82,31 @@ def _delete_all(doctype, filters):
 		frappe.delete_doc(doctype, name, force=True, ignore_permissions=True)
 
 
+def _reset_competency(competency=None):
+	"""Clear evidence-derived state for one competency, back-links first."""
+	competency = competency or COMPETENCY
+	for name in frappe.get_all("Sparsh Evidence", filters={"competency": competency}, pluck="name"):
+		frappe.db.set_value("Sparsh Evidence", name, "cleared_by_review", None)
+	frappe.db.commit()
+
+	_delete_all("Sparsh Human Review", {"competency": competency})
+	_delete_all("Sparsh Certification Record", {"competency": competency})
+	_delete_all("Sparsh Evidence", {"competency": competency})
+	_delete_all("Sparsh Mastery State", {"competency": competency})
+	frappe.db.commit()
+
+
 def teardown():
 	"""Delete fixtures in dependency order. Safe to call when nothing exists."""
 	competencies = [COMPETENCY, COMPETENCY_2, OTHER_COMPETENCY]
+	# Evidence and Human Review point at each other; break the back-link first or
+	# neither can be deleted.
+	for name in frappe.get_all(
+		"Sparsh Evidence", filters={"competency": ("in", competencies)}, pluck="name"
+	):
+		frappe.db.set_value("Sparsh Evidence", name, "cleared_by_review", None)
+	frappe.db.commit()
+	_delete_all("Sparsh Human Review", {"competency": ("in", competencies)})
 	_delete_all("Sparsh Certification Record", {"competency": ("in", competencies)})
 	# Evidence before Mastery State: cancelling Evidence triggers a recompute that
 	# recreates the Mastery row, so deleting Mastery first leaves one behind.
@@ -486,6 +508,8 @@ def check_learner_cannot_escape_scope():
 
 def check_mastery_requires_distinct_activities():
 	"""Two passes on one activity is not mastery; two on distinct activities is."""
+	# Earlier checks leave a standing critical error, which no longer self-clears.
+	_reset_competency()
 	_new_evidence(ACTIVITY_1, "Pass")
 	_assert(_state() == "Demonstrated", f"One pass gave {_state()}, expected Demonstrated")
 
@@ -516,9 +540,7 @@ def check_runner_loop():
 
 	# Start from a known baseline: earlier checks leave this competency at Mastered,
 	# and a test that depends on the order of other tests proves nothing.
-	_delete_all("Sparsh Evidence", {"competency": COMPETENCY})
-	_delete_all("Sparsh Mastery State", {"competency": COMPETENCY})
-	frappe.db.commit()
+	_reset_competency()
 	_assert(_state() is None, "Baseline was not clear before the runner check")
 
 	activity = frappe.get_doc("Sparsh Activity", ACTIVITY_1)
@@ -640,6 +662,7 @@ def check_dashboards():
 	"""The supervisor view answers its four questions from evidence."""
 	from sparsh_los import dashboard
 
+	_reset_competency()
 	_new_evidence(ACTIVITY_1, "Pass")
 	_new_evidence(ACTIVITY_2, "Pass")
 	frappe.db.commit()
@@ -724,9 +747,7 @@ def check_orchestrator_selects_next():
 	"""The engine picks what produces the next evidence, and says why."""
 	from sparsh_los import orchestrator, runner
 
-	_delete_all("Sparsh Evidence", {"competency": COMPETENCY})
-	_delete_all("Sparsh Mastery State", {"competency": COMPETENCY})
-	frappe.db.commit()
+	_reset_competency()
 
 	first = orchestrator.next_experience(COMPETENCY, LEARNER)
 	_assert(first["activity"], "No first activity was offered")
@@ -741,22 +762,19 @@ def check_orchestrator_selects_next():
 	)
 	_assert(blocked["activity"] == ACTIVITY_1, "Remediation did not return to the activity that failed")
 
-	# Clearing it with an independent pass restores ordinary progression.
+	# A later pass must NOT clear a safety error on its own.
 	_new_evidence(ACTIVITY_1, "Pass")
-	after = orchestrator.next_experience(COMPETENCY, LEARNER)
+	still_blocked = orchestrator.next_experience(COMPETENCY, LEARNER)
 	_assert(
-		after["reason"] != orchestrator.REMEDIATION,
-		"Remediation persisted after an independent pass answered the critical error",
+		still_blocked["reason"] == orchestrator.REMEDIATION,
+		"A later pass silently cleared a critical safety error",
 	)
-	_assert(after["activity"] == ACTIVITY_2, "The next unseen activity was not offered")
 
 	# Prerequisites block before anything else is considered.
 	competency = frappe.get_doc("Sparsh Competency", COMPETENCY_2)
 	competency.append("prerequisites", {"prerequisite": COMPETENCY})
 	competency.save(ignore_permissions=True)
-	_delete_all("Sparsh Evidence", {"competency": COMPETENCY})
-	_delete_all("Sparsh Mastery State", {"competency": COMPETENCY})
-	frappe.db.commit()
+	_reset_competency()
 
 	gated = orchestrator.next_experience(COMPETENCY_2, LEARNER)
 	_assert(
@@ -764,6 +782,85 @@ def check_orchestrator_selects_next():
 		f"An unmet prerequisite gave reason {gated['reason']}",
 	)
 	_assert(COMPETENCY in gated["blocked_by"], "The blocking prerequisite was not named")
+	frappe.db.commit()
+
+
+def check_only_review_clears_critical_error():
+	"""A safety error is cleared by a reviewer, never by performing well afterwards."""
+	_reset_competency()
+
+	critical = _new_evidence(ACTIVITY_1, "Fail", critical_error=1)
+	_new_evidence(ACTIVITY_1, "Pass")
+	_new_evidence(ACTIVITY_2, "Pass")
+	_assert(
+		_state() == "Practising",
+		f"Two independent passes lifted a standing critical error to {_state()}",
+	)
+
+	def certify():
+		doc = frappe.new_doc("Sparsh Certification Record")
+		doc.learner = LEARNER
+		doc.competency = COMPETENCY
+		doc.certification_status = "Full"
+		doc.insert(ignore_permissions=True)
+
+	_raises(certify, "Certification was allowed while a critical error stood")
+
+	review = frappe.new_doc("Sparsh Human Review")
+	review.evidence = critical.name
+	review.learner = LEARNER
+	review.competency = COMPETENCY
+	review.review_status = "Approved"
+	review.clears_critical_error = 1
+	review.reviewer_comments = "Remediation observed."
+	review.insert(ignore_permissions=True)
+	review.submit()
+
+	critical.reload()
+	_assert(critical.critical_error_cleared == 1, "The review did not clear the critical error")
+	_assert(
+		_state() in ("Demonstrated", "Mastered"),
+		f"After a reviewed clearance the state is {_state()}",
+	)
+	frappe.db.commit()
+
+
+def check_certification_suspended_on_regression():
+	"""A certificate does not outlive the evidence that justified it."""
+	_reset_competency()
+
+	_new_evidence(ACTIVITY_1, "Pass")
+	_new_evidence(ACTIVITY_2, "Pass")
+	_assert(_state() == "Mastered", f"Expected Mastered, got {_state()}")
+
+	certificate = frappe.new_doc("Sparsh Certification Record")
+	certificate.learner = LEARNER
+	certificate.competency = COMPETENCY
+	certificate.certification_status = "Full"
+	certificate.insert(ignore_permissions=True)
+	certificate.submit()
+	_assert(certificate.certification_state == "Active", "A new certificate is not Active")
+
+	_new_evidence(ACTIVITY_1, "Fail", critical_error=1)
+
+	certificate.reload()
+	_assert(
+		certificate.certification_state == "Suspended",
+		f"After a critical error the certificate is {certificate.certification_state}",
+	)
+	frappe.db.commit()
+
+
+def check_activityless_evidence_cannot_demonstrate():
+	"""Evidence with no activity carries no provenance and proves nothing."""
+	_reset_competency()
+
+	_new_evidence(None, "Pass")
+	_new_evidence(None, "Pass")
+	_assert(
+		_state() not in ("Demonstrated", "Mastered"),
+		f"Evidence with no activity reached {_state()}",
+	)
 	frappe.db.commit()
 
 
@@ -802,6 +899,9 @@ CHECKS = (
 	("dashboards", check_dashboards),
 	("other_domain_runs_unchanged", check_other_domain_runs_unchanged),
 	("orchestrator_selects_next", check_orchestrator_selects_next),
+	("only_review_clears_critical_error", check_only_review_clears_critical_error),
+	("certification_suspended_on_regression", check_certification_suspended_on_regression),
+	("activityless_evidence_cannot_demonstrate", check_activityless_evidence_cannot_demonstrate),
 	("cleanup", check_cleanup),
 )
 

@@ -19,7 +19,9 @@
   "section_break_review",
   "ai_feedback_summary",
   "human_review_status",
-  "amended_from"
+  "amended_from",
+  "critical_error_cleared",
+  "cleared_by_review"
  ],
  "fields": [
   {
@@ -117,12 +119,29 @@
    "options": "Sparsh Evidence",
    "print_hide": 1,
    "read_only": 1
+  },
+  {
+   "fieldname": "critical_error_cleared",
+   "fieldtype": "Check",
+   "label": "Critical Error Cleared",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "depends_on": "critical_error",
+   "description": "Set only by a submitted human review. A later pass does not clear a safety error."
+  },
+  {
+   "fieldname": "cleared_by_review",
+   "fieldtype": "Link",
+   "label": "Cleared By Review",
+   "options": "Sparsh Human Review",
+   "read_only": 1,
+   "allow_on_submit": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-09-12 21:23:21.047757",
+ "modified": "2026-09-12 21:55:38.160994",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Evidence",

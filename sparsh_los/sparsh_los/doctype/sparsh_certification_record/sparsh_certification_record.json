@@ -15,7 +15,8 @@
   "certified_by",
   "section_break_remarks",
   "remarks",
-  "amended_from"
+  "amended_from",
+  "certification_state"
  ],
  "fields": [
   {
@@ -84,12 +85,22 @@
    "options": "Sparsh Certification Record",
    "print_hide": 1,
    "read_only": 1
+  },
+  {
+   "fieldname": "certification_state",
+   "fieldtype": "Select",
+   "label": "Certification State",
+   "options": "Active\nSuspended",
+   "default": "Active",
+   "read_only": 1,
+   "allow_on_submit": 1,
+   "description": "Suspended automatically when the supporting evidence no longer holds."
   }
  ],
  "index_web_pages_for_search": 0,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-09-12 21:23:21.047757",
+ "modified": "2026-09-12 21:55:38.160994",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Certification Record",
