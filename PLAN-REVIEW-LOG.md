@@ -113,3 +113,45 @@ DEFERRED
 ### Coverage note
 Both audits ran at `sol`. Neither covers the current HEAD: code changed after the re-audit. A third
 audit would be needed to call HEAD reviewed.
+
+## 2026-09-12 · Third audit + phases 3-6
+Commits `5c900c1` runner, `973afb3` escalation, dashboards, `6b35159` domain proof,
+`8bf3d70` orchestrator, `e26c2bc` safety clearance, HEAD audit-3 closure.
+Acceptance moved 14 -> 24 checks, `failed=0`, twice consecutively at each step.
+
+### Audit 3 (gpt-5.6-sol; astra still unavailable) — 2 blockers, 7 major, 5 minor
+CONFIRMED AND FIXED
+- BLOCKER: a later independent pass silently cleared a standing critical error. This was
+  progression on aggregate performance — the one thing the gate exists to prevent. Clearance now
+  requires a submitted, approved Human Review with `clears_critical_error`. Human Review became
+  submittable because a clearance is a governance act.
+- BLOCKER: Full certifications survived later critical errors. `recompute_mastery` now suspends an
+  active certificate when the state regresses or a critical error stands, via an allow-on-submit
+  field rather than by editing submitted history.
+- MAJOR: activity-less Evidence could reach Demonstrated. An independent pass must now cite the
+  activity it was earned on.
+- MAJOR: attribution was rewritten on every save; moved to `before_submit`, fields marked no_copy.
+- MAJOR: Mastery State was deletable; delete removed from every role.
+- MAJOR: no identifier enforcement. Narrow guard added for the hospital MRN format and 12-digit runs.
+- MINOR: the shell harness accepted `passed=0 failed=0`. It now asserts a minimum check count.
+
+OBSOLETE
+- MINOR tie-break on equal `creation`: there is no longer any ordering comparison in the gate.
+
+ACCEPTED AS DESIGNED, NOT FIXED
+- `is_restricted()` treats a privileged role as winning over Sparsh Learner. Inverting it would stop
+  reviewers seeing their cohort and stop the runner grading. Documented rather than changed; revisit
+  if a custom DocPerm ever grants create to an untrusted role.
+- Learner field correction runs after Frappe's permission and link checks, so a learner must already
+  send their own learner value. Safe, but it is the permission veto doing the work, not the
+  controller.
+
+DEFERRED
+- No current-certification concept: parallel submitted Full and Revoked rows can coexist, and
+  `derived_state` is a snapshot at last validation. Needs a certification ledger design.
+- Evidence cancellation payloads that also change learner/competency leave the original pair stale.
+- Activity.competency remains editable after Evidence cites it.
+- Attempts remain deletable/discardable by System Manager.
+
+### Coverage
+No audit covers the current HEAD: three rounds of fixes landed after audit 3 ran.
