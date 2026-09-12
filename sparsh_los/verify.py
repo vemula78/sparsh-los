@@ -1147,6 +1147,88 @@ def check_learner_cannot_read_answer_key():
 	frappe.db.commit()
 
 
+def check_critical_response_reaches_a_person():
+	"""A critical result is escalated, not merely logged."""
+	from sparsh_los import runner
+
+	_reset_competency()
+	_delete_all("Sparsh Escalation Question", {"learner": LEARNER})
+	frappe.db.commit()
+
+	result = runner.submit(ACTIVITY_1, "I would tell them to stop the medicine")
+	_assert(result["critical_error"] == 1, "A critical response was not flagged")
+	_assert(result.get("escalation"), "A critical response raised no escalation")
+
+	question = frappe.get_doc("Sparsh Escalation Question", result["escalation"])
+	_assert(question.status == "Open", "The automatic escalation is not open")
+	_assert(question.escalation_reason == "Safety critical", "The escalation reason is wrong")
+
+	# A negated mention of the same phrase is not unsafe.
+	negated = runner.submit(ACTIVITY_1, "I would tell them to not stop the medicine")
+	_assert(
+		not negated["critical_error"],
+		"A negated mention of a critical marker was flagged as unsafe",
+	)
+	frappe.db.commit()
+
+
+def check_evidence_cannot_contradict_the_attempt():
+	"""Evidence cannot upgrade a failed or assisted attempt into a clean pass."""
+	_reset_competency()
+	attempt = _new_attempt(None, outcome="Fail")
+
+	def upgrade():
+		doc = frappe.new_doc("Sparsh Evidence")
+		doc.learner = LEARNER
+		doc.competency = COMPETENCY
+		doc.activity = ACTIVITY_1
+		doc.activity_version = 1
+		doc.attempt = attempt.name
+		doc.outcome = "Pass"
+		doc.assistance_level = 0
+		doc.insert(ignore_permissions=True)
+
+	_raises(upgrade, "Evidence upgraded a failed attempt to a pass")
+
+	assisted = _new_attempt(None, outcome="Pass", hint_level=3)
+
+	def understate_help():
+		doc = frappe.new_doc("Sparsh Evidence")
+		doc.learner = LEARNER
+		doc.competency = COMPETENCY
+		doc.activity = ACTIVITY_1
+		doc.activity_version = 1
+		doc.attempt = assisted.name
+		doc.outcome = "Pass"
+		doc.assistance_level = 0
+		doc.insert(ignore_permissions=True)
+
+	_raises(understate_help, "Evidence claimed less assistance than the attempt recorded")
+	frappe.db.commit()
+
+
+def check_runner_records_the_governing_rule():
+	"""An attempt identifies the rule it was judged under."""
+	from sparsh_los import runner
+
+	_reset_competency()
+	_delete_all("Sparsh Source of Truth Rule", {"rule_id": RULE_ID})
+	frappe.db.commit()
+
+	rule = _new_rule(1)
+	competency = frappe.get_doc("Sparsh Competency", COMPETENCY)
+	competency.set("linked_rules", [])
+	competency.append("linked_rules", {"rule": rule.name})
+	competency.save(ignore_permissions=True)
+	frappe.db.commit()
+
+	result = runner.submit(ACTIVITY_1, "level two")
+	attempt = frappe.get_doc("Sparsh Attempt", result["attempt"])
+	_assert(attempt.rule == rule.name, f"The attempt recorded rule {attempt.rule}")
+	_assert(attempt.rule_version == 1, f"The attempt recorded version {attempt.rule_version}")
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -1194,6 +1276,9 @@ CHECKS = (
 	("clearance_must_be_backed_by_review", check_clearance_must_be_backed_by_review),
 	("cancelling_review_restores_block", check_cancelling_review_restores_block),
 	("learner_cannot_read_answer_key", check_learner_cannot_read_answer_key),
+	("critical_response_reaches_a_person", check_critical_response_reaches_a_person),
+	("evidence_cannot_contradict_the_attempt", check_evidence_cannot_contradict_the_attempt),
+	("runner_records_the_governing_rule", check_runner_records_the_governing_rule),
 	("cleanup", check_cleanup),
 )
 

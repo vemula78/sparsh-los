@@ -33,6 +33,26 @@ def _accepted_responses(activity):
 	return [_normalise(line) for line in (activity.expected_response or "").splitlines() if line.strip()]
 
 
+def _governing_rule(competency):
+	"""The competency's current rule, so the attempt records what it was judged under.
+
+	Without this every runner attempt stored rule_version 0 and the immutable
+	snapshot identified nothing.
+	"""
+	if not competency:
+		return None
+
+	links = frappe.get_all(
+		"Sparsh Competency Rule Link", filters={"parent": competency}, fields=["rule"], pluck="rule"
+	)
+	active = [
+		r
+		for r in links
+		if frappe.db.get_value("Sparsh Source of Truth Rule", r, "status") != "Superseded"
+	]
+	return active[0] if active else (links[0] if links else None)
+
+
 def _hint_for(activity, level):
 	"""The strongest hint at or below `level`, or None when the ladder has nothing."""
 	steps = sorted(
@@ -42,15 +62,37 @@ def _hint_for(activity, level):
 	return steps[-1].hint_text if steps else None
 
 
+NEGATIONS = ("not", "never", "dont", "don't", "avoid", "without", "shouldnt", "shouldn't")
+
+
 def _is_critical(activity, response):
-	"""True when the response matches one of the activity's declared critical errors."""
+	"""True when the response matches one of the activity's declared critical errors.
+
+	Matching is on word boundaries and skips a match that is negated just before it:
+	plain substring matching flagged "do not stop the medicine" as unsafe, which is
+	the opposite of what the volunteer said. This is a blunt instrument either way —
+	free-text safety detection is advisory, which is why every critical result is
+	routed to a person rather than left to stand on its own.
+	"""
 	answer = _normalise(response)
 	if not answer:
 		return False
 
+	words = answer.split()
 	for row in activity.critical_errors:
 		marker = _normalise(row.error_description)
-		if marker and marker in answer:
+		if not marker:
+			continue
+
+		marker_words = marker.split()
+		for i in range(len(words) - len(marker_words) + 1):
+			if words[i : i + len(marker_words)] != marker_words:
+				continue
+
+			preceding = words[max(0, i - 3) : i]
+			if any(w in NEGATIONS for w in preceding):
+				continue
+
 			return True
 
 	return False
@@ -123,6 +165,11 @@ def submit(activity, response):
 	"""
 	doc = _activity(activity)
 	learner = frappe.session.user
+
+	roles = set(frappe.get_roles(learner))
+	if not roles & {"Sparsh Learner", "Sparsh Reviewer", "System Manager", "Administrator"}:
+		frappe.throw(_("You are not enrolled in this programme"), frappe.PermissionError)
+
 	hint_level, retry_index = _session_position(learner, activity)
 
 	outcome, critical_error = evaluate(doc, response)
@@ -130,6 +177,7 @@ def submit(activity, response):
 	attempt = frappe.new_doc("Sparsh Attempt")
 	attempt.learner = learner
 	attempt.activity = doc.name
+	attempt.rule = _governing_rule(doc.competency)
 	attempt.response = response
 	attempt.hint_level_used = hint_level
 	attempt.retry_index = retry_index
@@ -138,11 +186,12 @@ def submit(activity, response):
 
 	# The runner decides the verdict, so the learner-input limits do not apply to it.
 	# The learner never supplies `outcome`; it is computed above from stored content.
+	previous_flag = frappe.flags.in_sparsh_runner
 	frappe.flags.in_sparsh_runner = True
 	try:
 		attempt.insert(ignore_permissions=True)
 	finally:
-		frappe.flags.in_sparsh_runner = False
+		frappe.flags.in_sparsh_runner = previous_flag
 
 	result = {
 		"attempt": attempt.name,
@@ -158,7 +207,12 @@ def submit(activity, response):
 			"Sparsh Mastery State", {"learner": learner, "competency": doc.competency}, "state"
 		)
 		if critical_error:
-			result["message"] = _("This response is outside safe practice. A reviewer has been notified.")
+			from sparsh_los.escalation import raise_for_critical_error
+
+			result["escalation"] = raise_for_critical_error(attempt.name, doc.name, learner)
+			result["message"] = _(
+				"This response is outside safe practice and has been sent to a reviewer."
+			)
 		return result
 
 	if outcome == "Not Evaluated":

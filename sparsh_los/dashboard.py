@@ -50,7 +50,9 @@ def learner_view(learner=None):
 		"certifications": frappe.get_all(
 			"Sparsh Certification Record",
 			filters={"learner": learner, "docstatus": 1},
-			fields=["competency", "certification_status", "certified_on"],
+			# certification_state matters more than status here: a suspended Full
+			# certificate is not a valid one, and hiding that misleads the learner.
+			fields=["competency", "certification_status", "certification_state", "certified_on"],
 		),
 	}
 

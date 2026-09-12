@@ -7,6 +7,17 @@ from frappe.model.document import Document
 
 class SparshHumanReview(Document):
 
+	def validate(self):
+		# Provenance is copied from the evidence, never taken on trust: a review could
+		# otherwise name one learner while clearing another's record.
+		if self.evidence:
+			row = frappe.db.get_value(
+				"Sparsh Evidence", self.evidence, ["learner", "competency"], as_dict=True
+			)
+			if row:
+				self.learner = row.learner
+				self.competency = row.competency
+
 	def before_submit(self):
 		# Attribution belongs to the act of reviewing. Stamping it on every save meant
 		# whoever last edited a draft became the recorded reviewer.

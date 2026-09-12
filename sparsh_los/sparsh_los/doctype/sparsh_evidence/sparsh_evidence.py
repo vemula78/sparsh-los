@@ -98,7 +98,7 @@ class SparshEvidence(Document):
 		attempt = frappe.db.get_value(
 			"Sparsh Attempt",
 			self.attempt,
-			["learner", "activity", "critical_error"],
+			["learner", "activity", "critical_error", "outcome", "hint_level_used"],
 			as_dict=True,
 		)
 		if not attempt:
@@ -109,6 +109,18 @@ class SparshEvidence(Document):
 
 		if self.activity and attempt.activity and attempt.activity != self.activity:
 			frappe.throw(_("Evidence and the attempt it cites must refer to the same activity"))
+
+		if attempt.outcome and attempt.outcome != "Not Evaluated" and self.outcome != attempt.outcome:
+			frappe.throw(
+				_("Evidence outcome {0} contradicts the attempt it cites, which was {1}").format(
+					self.outcome, attempt.outcome
+				)
+			)
+
+		if (self.assistance_level or 0) < (attempt.hint_level_used or 0):
+			frappe.throw(
+				_("Evidence cannot claim less assistance than the attempt it cites recorded")
+			)
 
 		if attempt.critical_error and not self.critical_error:
 			# Inherit rather than reject: the critical error is a fact about what happened.

@@ -139,3 +139,25 @@ def open_queue(reviewer=None):
 		fields=["name", "learner", "activity", "escalation_reason", "question_text", "raised_at", "status"],
 		order_by="creation asc",
 	)
+
+
+def raise_for_critical_error(attempt, activity, learner):
+	"""Put a critical result in front of a person.
+
+	The runner used to tell the learner a reviewer had been notified when nothing was
+	notified and the event only surfaced if a supervisor happened to open a dashboard.
+	"""
+	question = frappe.new_doc("Sparsh Escalation Question")
+	question.learner = learner
+	question.activity = activity
+	question.attempt = attempt
+	question.escalation_reason = "Safety critical"
+	question.question_text = (
+		"Automatic escalation: this response matched a declared critical error for the activity. "
+		"A reviewer should confirm whether the response was genuinely unsafe and, if it was not, "
+		"clear the evidence."
+	)
+	question.status = "Open"
+	question.context_snapshot = _context(activity, attempt)
+	question.insert(ignore_permissions=True)
+	return question.name
