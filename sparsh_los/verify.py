@@ -2213,6 +2213,84 @@ def check_dual_role_cannot_forge_their_own_attempt():
 		frappe.db.commit()
 
 
+def check_model_ledger_records_cost_and_makes_no_call():
+	"""The cost and privacy ledger works, and the engine still makes no model call.
+
+	The programme owner asked for per-interaction provider, model and prompt version,
+	tokens, cost, latency, fallback status and a de-identification assertion to be
+	queryable *before* a provider is chosen. A gateway added afterwards is a gateway
+	somebody routes around.
+
+	The second assertion is the one that must never weaken: no module in this app may
+	import a network client or a provider SDK.
+	"""
+	import pathlib
+
+	from sparsh_los import gateway
+
+	_delete_all("Sparsh Model Interaction", {"provider": "zzv-test"})
+	frappe.db.commit()
+
+	name = gateway.record(
+		provider="zzv-test",
+		model_id="zzv-model-1",
+		model_version="2026-09",
+		purpose="Feedback phrasing",
+		learner=LEARNER,
+		competency=COMPETENCY,
+		prompt_template="zzv-template",
+		prompt_version="3",
+		input_tokens=1200,
+		output_tokens=300,
+		estimated_cost=1.5,
+		latency_ms=820,
+		deidentified=1,
+	)
+	_assert(name, "The gateway recorded nothing")
+
+	report = gateway.spend(days=1)
+	_assert(report["interactions"] >= 1, "The spend report counted no interactions")
+	_assert(report["total_cost"] >= 1.5, f"The spend report totalled {report['total_cost']}")
+	_assert(
+		report["cost_is_partly_estimated"],
+		"An estimate-only interaction was reported as an actual cost",
+	)
+	_assert(
+		report["without_deidentification_assertion"] == 0,
+		"An interaction asserting de-identification was counted as not asserting it",
+	)
+
+	# The ledger is a ledger: not writable by hand, even by a System Manager.
+	def hand_written():
+		doc = frappe.new_doc("Sparsh Model Interaction")
+		doc.occurred_at = frappe.utils.now_datetime()
+		doc.provider = "zzv-forged"
+		doc.model_id = "zzv-forged"
+		doc.purpose = "Other"
+		doc.deidentified = 1
+		doc.insert(ignore_permissions=True)
+
+	_raises(hand_written, "A model interaction could be written by hand", expect="gateway")
+
+	# And the determinism guarantee, checked against the source rather than asserted.
+	root = pathlib.Path(frappe.get_app_path("sparsh_los"))
+	banned = ("import requests", "import httpx", "import urllib", "import socket", "from anthropic", "from openai")
+	for path in root.rglob("*.py"):
+		# Skip this file (it names the tokens it forbids) and compiled artefacts, which
+		# are not utf-8 and are not source.
+		if "verify.py" in str(path) or "__pycache__" in str(path):
+			continue
+		text = path.read_text(encoding="utf-8", errors="ignore")
+		for token in banned:
+			_assert(
+				token not in text,
+				f"{path.name} imports a network client ({token}); the engine must make no call",
+			)
+
+	_delete_all("Sparsh Model Interaction", {"provider": "zzv-test"})
+	frappe.db.commit()
+
+
 def check_answered_refresher_is_not_reassigned():
 	"""The daily job must not re-suspend a learner who has answered their refresher.
 
@@ -3033,6 +3111,7 @@ CHECKS = (
 	("pathway_walks_in_order", check_pathway_walks_in_order),
 	("pathway_does_not_hand_over_a_gated_activity", check_pathway_does_not_hand_over_a_gated_activity),
 	("dual_role_cannot_forge_their_own_attempt", check_dual_role_cannot_forge_their_own_attempt),
+	("model_ledger_records_cost_and_makes_no_call", check_model_ledger_records_cost_and_makes_no_call),
 	("answered_refresher_is_not_reassigned", check_answered_refresher_is_not_reassigned),
 	("draft_rule_cannot_auto_score", check_draft_rule_cannot_auto_score),
 	("unbuilt_evaluator_modes_fall_to_a_person", check_unbuilt_evaluator_modes_fall_to_a_person),

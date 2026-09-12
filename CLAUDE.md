@@ -53,7 +53,7 @@ schema work — run it after touching any DocType JSON.
 
 ## Architecture
 
-Seventeen modules over 15 top-level DocTypes and 7 child tables, all prefixed `Sparsh `.
+Eighteen modules over 16 top-level DocTypes and 7 child tables, all prefixed `Sparsh `.
 
 | Module | Role |
 |---|---|
@@ -67,6 +67,7 @@ Seventeen modules over 15 top-level DocTypes and 7 child tables, all prefixed `S
 | `dashboard.py` | Learner view, supervisor view, heatmap, programme summary |
 | `permissions.py` | Row scoping, role gates, the identifier guard, burst throttle |
 | `events.py` | The lightweight usage log: counts and states, never content |
+| `gateway.py` | The model-interaction ledger: cost, versions, de-identification assertion. Makes no call |
 | `seed.py` | Loads the Source-of-Truth Matrix and Starter Case Pack; programme readiness |
 | `verify.py` | The acceptance harness |
 | `www/practice.py`, `www/queue.py` | Learner page and reviewer queue |
@@ -108,7 +109,9 @@ proven otherwise.
 - **One certificate stands per learner and competency**, forced Active at submission, suspended when
   its evidence stops supporting it, and a revoked one is never resurrected by later evidence.
 - **Deterministic.** No network or model call anywhere at runtime. `ai_feedback_summary` exists for a
-  future caller to fill. `Activity.evaluation_mode` declares six evaluator types, but only
+  future caller to fill. `gateway.py` records what a model call *cost* and what was asserted
+  about it; it makes no call itself, imports no provider SDK, and a check greps the whole app
+  for network imports rather than trusting this sentence. `Activity.evaluation_mode` declares six evaluator types, but only
   `Deterministic` is dispatched — every other mode returns `Not Evaluated` and waits for a person.
   An unbuilt mode must never fall through to the string comparison.
 - **Content is versioned apart from the engine.** `Sparsh Learning Resource` carries its own
@@ -120,8 +123,9 @@ proven otherwise.
 
 ### Trusted-code flags
 
-Five flags mark "this is the engine acting, not a user": `in_mastery_recompute`,
-`in_sparsh_runner`, `in_sparsh_certification`, `in_sparsh_maintenance`, `in_sparsh_event`. They are set only inside
+Six flags mark "this is the engine acting, not a user": `in_mastery_recompute`,
+`in_sparsh_runner`, `in_sparsh_certification`, `in_sparsh_maintenance`, `in_sparsh_event`,
+`in_sparsh_gateway`. They are set only inside
 trusted server code and restored (not cleared) in a `finally`. Never set one from a whitelisted
 function reachable by a request.
 
