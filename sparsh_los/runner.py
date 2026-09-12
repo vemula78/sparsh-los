@@ -18,6 +18,8 @@ them on the Attempt.
 import frappe
 from frappe import _
 
+from sparsh_los.permissions import throttle
+
 MAX_HINT_LEVEL = 4
 
 
@@ -170,6 +172,7 @@ def submit(activity, response):
 	if not roles & {"Sparsh Learner", "Sparsh Reviewer", "System Manager", "Administrator"}:
 		frappe.throw(_("You are not enrolled in this programme"), frappe.PermissionError)
 
+	throttle("Sparsh Attempt")
 	hint_level, retry_index = _session_position(learner, activity)
 
 	outcome, critical_error = evaluate(doc, response)

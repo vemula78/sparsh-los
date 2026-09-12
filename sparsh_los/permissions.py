@@ -118,3 +118,21 @@ def reject_identifiers(*values):
 					),
 					frappe.ValidationError,
 				)
+
+
+def throttle(doctype, field="learner", limit=60, minutes=10):
+	"""Refuse an implausible burst of records from one user.
+
+	Not a security control — the permission checks are. This stops one stuck client
+	or one bored account filling the evidence tables with noise, which would make the
+	programme's own reporting useless long before it caused any other harm.
+	"""
+	since = frappe.utils.add_to_date(frappe.utils.now_datetime(), minutes=-minutes)
+	recent = frappe.db.count(
+		doctype, {field: frappe.session.user, "creation": (">", since)}
+	)
+	if recent >= limit:
+		frappe.throw(
+			frappe._("Too many submissions in a short time. Please wait a moment."),
+			frappe.ValidationError,
+		)

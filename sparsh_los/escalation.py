@@ -19,7 +19,7 @@ import json
 import frappe
 from frappe import _
 
-from sparsh_los.permissions import is_restricted
+from sparsh_los.permissions import is_restricted, throttle
 
 DISPOSITIONS = (
 	"Private answer",
@@ -61,6 +61,8 @@ def raise_question(question_text, activity=None, attempt=None, reason="Unknown")
 	"""A learner asks for expert guidance. Context is packaged here, not by the caller."""
 	if not (question_text or "").strip():
 		frappe.throw(_("A question cannot be empty"))
+
+	throttle("Sparsh Escalation Question", limit=20)
 
 	if attempt:
 		owner = frappe.db.get_value("Sparsh Attempt", attempt, "learner")
