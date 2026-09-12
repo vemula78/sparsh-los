@@ -1660,6 +1660,26 @@ def check_activity_cannot_change_competency():
 	frappe.db.commit()
 
 
+def check_rejected_evidence_does_not_count():
+	"""Evidence a reviewer rejected is not evidence of competence."""
+	_reset_competency()
+
+	evidence = _new_evidence(ACTIVITY_1, "Pass", submit=False)
+	evidence.human_review_status = "Rejected"
+	evidence.save(ignore_permissions=True)
+	evidence.submit()
+
+	_assert(
+		_state() not in ("Demonstrated", "Mastered"),
+		f"A rejected pass reached {_state()}",
+	)
+
+	# An approved one does count.
+	_new_evidence(ACTIVITY_1, "Pass")
+	_assert(_state() == "Demonstrated", f"An approved pass gave {_state()}")
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -1720,6 +1740,7 @@ CHECKS = (
 	("case_pack_loads_for_review_only", check_case_pack_loads_for_review_only),
 	("programme_readiness_is_honest", check_programme_readiness_is_honest),
 	("activity_cannot_change_competency", check_activity_cannot_change_competency),
+	("rejected_evidence_does_not_count", check_rejected_evidence_does_not_count),
 	("cleanup", check_cleanup),
 )
 

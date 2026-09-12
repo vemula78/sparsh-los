@@ -35,6 +35,7 @@ def _submitted_evidence(learner, competency):
 			"assistance_level",
 			"critical_error",
 			"critical_error_cleared",
+			"human_review_status",
 			"recorded_at",
 			"creation",
 		],
@@ -50,11 +51,17 @@ def _sort_key(row):
 	return (row.creation, row.name)
 
 
+# Evidence a reviewer has explicitly rejected is not evidence of competence.
+REJECTED = "Rejected"
+
+
 def _independent_passes(rows):
 	"""Unaided passes that cite the activity they were earned on.
 
 	Evidence with no activity carries no provenance, so it cannot establish that a
-	learner demonstrated anything in particular.
+	learner demonstrated anything in particular. Evidence a reviewer rejected does
+	not count either: the field existed and nothing read it, so a rejected pass
+	counted exactly like an approved one.
 	"""
 	return [
 		r
@@ -63,6 +70,7 @@ def _independent_passes(rows):
 		and not r.critical_error
 		and (r.assistance_level or 0) == 0
 		and r.activity
+		and r.human_review_status != REJECTED
 	]
 
 
@@ -91,7 +99,9 @@ def derive_state(learner, competency) -> str:
 		state = MASTERED
 	elif passes:
 		state = DEMONSTRATED
-	elif any(r.outcome in ("Pass", "Partial") for r in rows):
+	elif any(
+		r.outcome in ("Pass", "Partial") and r.human_review_status != REJECTED for r in rows
+	):
 		state = PRACTISING
 	else:
 		state = EXPLORING
