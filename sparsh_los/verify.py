@@ -1524,6 +1524,36 @@ def check_rule_refresher_uses_provenance():
 	frappe.db.commit()
 
 
+def check_review_queue_page():
+	"""The reviewer's page assembles, and is closed to learners."""
+	from sparsh_los.www import queue
+
+	_reset_competency()
+	_new_evidence(ACTIVITY_1, "Fail", critical_error=1)
+	frappe.db.commit()
+
+	context = frappe._dict()
+	queue.get_context(context)
+	_assert(context.reviewer == frappe.session.user, "The queue named the wrong reviewer")
+	_assert(context.critical, "A standing critical error is missing from the queue")
+	_assert("pending_reviews" in context, "The queue has no pending-review list")
+	_assert("cohort" in context, "The queue has no cohort summary")
+
+	_make_learner(TEST_LEARNER)
+	frappe.db.commit()
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+		try:
+			queue.get_context(frappe._dict())
+			raise AssertionError("The review queue rendered for a learner")
+		except frappe.PermissionError:
+			pass
+	finally:
+		frappe.set_user(original_user)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -1580,6 +1610,7 @@ CHECKS = (
 	("practice_page_builds", check_practice_page_builds),
 	("constraints_are_in_the_database", check_constraints_are_in_the_database),
 	("rule_refresher_uses_provenance", check_rule_refresher_uses_provenance),
+	("review_queue_page", check_review_queue_page),
 	("cleanup", check_cleanup),
 )
 

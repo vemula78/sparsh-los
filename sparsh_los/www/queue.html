@@ -1,0 +1,109 @@
+{% extends "templates/web.html" %}
+
+{% block title %}Review queue{% endblock %}
+
+{% block page_content %}
+<style>
+	.rq-wrap { max-width: 900px; margin: 0 auto; }
+	.rq-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: #e2e5e9; border: 1px solid #e2e5e9; margin: 20px 0 32px; }
+	.rq-tile { background: #fff; padding: 14px 16px; }
+	.rq-tile .n { font-size: 26px; line-height: 1.1; font-variant-numeric: tabular-nums; color: #1A5276; }
+	.rq-tile .n.is-alert { color: #C0392B; }
+	.rq-tile .l { font-size: 12px; color: #6C6C6C; margin-top: 4px; }
+	.rq-section { margin-bottom: 32px; }
+	.rq-section h3 { font-size: 17px; margin-bottom: 4px; }
+	.rq-lede { font-size: 13px; color: #6C6C6C; margin-bottom: 10px; }
+	table.rq { border-collapse: collapse; width: 100%; font-size: 14px; }
+	table.rq th { text-align: left; background: #003366; color: #fff; padding: 8px 12px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+	table.rq td { padding: 8px 12px; border-top: 1px solid #e2e5e9; vertical-align: top; }
+	table.rq tr.is-critical td { background: #fdf0ee; }
+	.rq-empty { color: #6C6C6C; font-size: 14px; }
+</style>
+
+<div class="rq-wrap">
+	<h1>Review queue</h1>
+
+	<div class="rq-tiles">
+		<div class="rq-tile"><div class="n {% if critical %}is-alert{% endif %}">{{ critical|length }}</div><div class="l">Standing critical errors</div></div>
+		<div class="rq-tile"><div class="n">{{ pending_reviews|length }}</div><div class="l">Attempts awaiting judgement</div></div>
+		<div class="rq-tile"><div class="n">{{ escalations|length }}</div><div class="l">Open questions</div></div>
+		<div class="rq-tile"><div class="n">{{ cohort.ready_to_progress|length }}</div><div class="l">Ready to progress</div></div>
+		<div class="rq-tile"><div class="n">{{ cohort.stuck|length }}</div><div class="l">Stuck</div></div>
+	</div>
+
+	<div class="rq-section">
+		<h3>Standing critical errors</h3>
+		<p class="rq-lede">A safety error blocks the learner until a reviewer clears it. Nothing else does.</p>
+		{% if critical %}
+		<table class="rq">
+			<thead><tr><th>Learner</th><th>Competency</th><th>Activity</th><th>Recorded</th></tr></thead>
+			<tbody>
+			{% for row in critical %}
+				<tr class="is-critical">
+					<td>{{ row.learner }}</td>
+					<td>{{ row.competency }}</td>
+					<td>{{ row.activity or "—" }}</td>
+					<td>{{ frappe.utils.format_datetime(row.recorded_at, "dd-MMM-yyyy HH:mm") if row.recorded_at else "—" }}</td>
+				</tr>
+			{% endfor %}
+			</tbody>
+		</table>
+		{% else %}<p class="rq-empty">None outstanding.</p>{% endif %}
+	</div>
+
+	<div class="rq-section">
+		<h3>Awaiting judgement</h3>
+		<p class="rq-lede">Recorded attempts on activities a person has to assess.</p>
+		{% if pending_reviews %}
+		<table class="rq">
+			<thead><tr><th>Learner</th><th>Activity</th><th>Response</th><th>Help used</th></tr></thead>
+			<tbody>
+			{% for row in pending_reviews %}
+				<tr>
+					<td>{{ row.learner }}</td>
+					<td>{{ row.title or row.activity }}</td>
+					<td>{{ row.response or "—" }}</td>
+					<td>{{ row.hint_level_used or 0 }}</td>
+				</tr>
+			{% endfor %}
+			</tbody>
+		</table>
+		{% else %}<p class="rq-empty">Nothing waiting.</p>{% endif %}
+	</div>
+
+	<div class="rq-section">
+		<h3>Open questions</h3>
+		<p class="rq-lede">Oldest first — a learner with an unanswered question is blocked.</p>
+		{% if escalations %}
+		<table class="rq">
+			<thead><tr><th>Learner</th><th>Reason</th><th>Question</th><th>Status</th></tr></thead>
+			<tbody>
+			{% for row in escalations %}
+				<tr>
+					<td>{{ row.learner }}</td>
+					<td>{{ row.escalation_reason }}</td>
+					<td>{{ row.question_text }}</td>
+					<td>{{ row.status }}</td>
+				</tr>
+			{% endfor %}
+			</tbody>
+		</table>
+		{% else %}<p class="rq-empty">No open questions.</p>{% endif %}
+	</div>
+
+	{% if cohort.programme_signals %}
+	<div class="rq-section">
+		<h3>Signals for the programme</h3>
+		<p class="rq-lede">Answers a reviewer classified as needing a rule or curriculum change.</p>
+		<table class="rq">
+			<thead><tr><th>Disposition</th><th>Activity</th><th>Question</th></tr></thead>
+			<tbody>
+			{% for row in cohort.programme_signals %}
+				<tr><td>{{ row.disposition }}</td><td>{{ row.activity or "—" }}</td><td>{{ row.question_text }}</td></tr>
+			{% endfor %}
+			</tbody>
+		</table>
+	</div>
+	{% endif %}
+</div>
+{% endblock %}
