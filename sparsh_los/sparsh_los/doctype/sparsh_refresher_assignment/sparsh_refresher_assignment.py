@@ -24,11 +24,29 @@ class SparshRefresherAssignment(Document):
 		if before and before.status == self.status:
 			return
 
+		from sparsh_los import events
 		from sparsh_los.mastery import recompute_mastery
 
+		if self.status == "Completed":
+			events.emit(
+				events.REFRESHER_COMPLETED,
+				learner=self.learner,
+				competency=self.competency,
+				reference_doctype=self.doctype,
+				reference_name=self.name,
+			)
 		recompute_mastery(self.learner, self.competency)
 
 	def after_insert(self):
+		from sparsh_los import events
 		from sparsh_los.mastery import recompute_mastery
 
+		events.emit(
+			events.REFRESHER_ASSIGNED,
+			learner=self.learner,
+			competency=self.competency,
+			detail=f"trigger={self.trigger_reason}",
+			reference_doctype=self.doctype,
+			reference_name=self.name,
+		)
 		recompute_mastery(self.learner, self.competency)

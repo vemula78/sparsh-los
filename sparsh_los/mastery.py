@@ -189,6 +189,8 @@ def recompute_mastery(learner, competency):
 			doc.learner = learner
 			doc.competency = competency
 
+		previous_state = doc.get("state") if name else None
+
 		# state is recomputed inside the controller's validate()
 		doc.last_demonstrated = _last_demonstrated(learner, competency)
 		doc.evidence_count = len(rows)
@@ -205,6 +207,20 @@ def recompute_mastery(learner, competency):
 		doc.save(ignore_permissions=True)
 	finally:
 		frappe.flags.in_mastery_recompute = previous_flag
+
+	if doc.state != previous_state:
+		# Emitted after the save, so a failed recompute cannot leave a transition
+		# recorded that never happened.
+		from sparsh_los import events
+
+		events.emit(
+			events.MASTERY_STATE_CHANGED,
+			learner=learner,
+			competency=competency,
+			detail=f"{previous_state or 'none'} -> {doc.state}",
+			reference_doctype="Sparsh Mastery State",
+			reference_name=doc.name,
+		)
 
 	_reconcile_certifications(learner, competency, doc.state)
 
@@ -236,3 +252,14 @@ def _reconcile_certifications(learner, competency, state):
 			continue
 
 		frappe.db.set_value("Sparsh Certification Record", row.name, "certification_state", target)
+
+		from sparsh_los import events
+
+		events.emit(
+			events.CERTIFICATION_STATE_CHANGED,
+			learner=learner,
+			competency=competency,
+			detail=f"{row.certification_state} -> {target}",
+			reference_doctype="Sparsh Certification Record",
+			reference_name=row.name,
+		)

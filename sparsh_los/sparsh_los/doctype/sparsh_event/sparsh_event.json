@@ -1,0 +1,97 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-09-13 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "event_type",
+  "occurred_at",
+  "learner",
+  "column_break_core",
+  "competency",
+  "activity",
+  "reference_doctype",
+  "reference_name",
+  "section_break_detail",
+  "detail"
+ ],
+ "fields": [
+  {
+   "fieldname": "event_type",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Event Type",
+   "reqd": 1
+  },
+  {
+   "fieldname": "occurred_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Occurred At",
+   "reqd": 1
+  },
+  {
+   "fieldname": "learner",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Learner",
+   "options": "User"
+  },
+  {
+   "fieldname": "column_break_core",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "competency",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Competency",
+   "options": "Sparsh Competency"
+  },
+  {
+   "fieldname": "activity",
+   "fieldtype": "Link",
+   "label": "Activity",
+   "options": "Sparsh Activity"
+  },
+  {
+   "fieldname": "reference_doctype",
+   "fieldtype": "Data",
+   "label": "Reference DocType"
+  },
+  {
+   "fieldname": "reference_name",
+   "fieldtype": "Data",
+   "label": "Reference Name"
+  },
+  {
+   "fieldname": "section_break_detail",
+   "fieldtype": "Section Break"
+  },
+  {
+   "description": "Counts and states only. Never a learner's response, and never anything identifying a caregiver.",
+   "fieldname": "detail",
+   "fieldtype": "Small Text",
+   "label": "Detail"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-09-13 18:20:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sparsh LOS",
+ "name": "Sparsh Event",
+ "owner": "Administrator",
+ "permissions": [
+  {"amend": 0, "cancel": 0, "create": 0, "delete": 0, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 0, "submit": 0, "write": 0},
+  {"amend": 0, "cancel": 0, "create": 0, "delete": 0, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "Sparsh Reviewer", "share": 0, "submit": 0, "write": 0}
+ ],
+ "sort_field": "occurred_at",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

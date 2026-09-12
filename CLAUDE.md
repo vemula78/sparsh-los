@@ -53,7 +53,7 @@ schema work — run it after touching any DocType JSON.
 
 ## Architecture
 
-Sixteen modules over 13 top-level DocTypes and 6 child tables, all prefixed `Sparsh `.
+Seventeen modules over 15 top-level DocTypes and 7 child tables, all prefixed `Sparsh `.
 
 | Module | Role |
 |---|---|
@@ -66,6 +66,7 @@ Sixteen modules over 13 top-level DocTypes and 6 child tables, all prefixed `Spa
 | `refresher.py` | Refreshers by elapsed time or by a rule changing underneath the learner |
 | `dashboard.py` | Learner view, supervisor view, heatmap, programme summary |
 | `permissions.py` | Row scoping, role gates, the identifier guard, burst throttle |
+| `events.py` | The lightweight usage log: counts and states, never content |
 | `seed.py` | Loads the Source-of-Truth Matrix and Starter Case Pack; programme readiness |
 | `verify.py` | The acceptance harness |
 | `www/practice.py`, `www/queue.py` | Learner page and reviewer queue |
@@ -97,12 +98,20 @@ proven otherwise.
 - **One certificate stands per learner and competency**, forced Active at submission, suspended when
   its evidence stops supporting it, and a revoked one is never resurrected by later evidence.
 - **Deterministic.** No network or model call anywhere at runtime. `ai_feedback_summary` exists for a
-  future caller to fill.
+  future caller to fill. `Activity.evaluation_mode` declares six evaluator types, but only
+  `Deterministic` is dispatched — every other mode returns `Not Evaluated` and waits for a person.
+  An unbuilt mode must never fall through to the string comparison.
+- **Content is versioned apart from the engine.** `Sparsh Learning Resource` carries its own
+  version and supersession lineage, and a competency references many resources. Superseding
+  content marks affected learners `Refresh Due`; it never rewrites prior evidence or
+  certification history.
+- **The event log is a log.** No role may write one, `events.emit` never raises, and no learner
+  response or answer key goes into a `detail` string.
 
 ### Trusted-code flags
 
-Four flags mark "this is the engine acting, not a user": `in_mastery_recompute`,
-`in_sparsh_runner`, `in_sparsh_certification`, `in_sparsh_maintenance`. They are set only inside
+Five flags mark "this is the engine acting, not a user": `in_mastery_recompute`,
+`in_sparsh_runner`, `in_sparsh_certification`, `in_sparsh_maintenance`, `in_sparsh_event`. They are set only inside
 trusted server code and restored (not cleared) in a `finally`. Never set one from a whitelisted
 function reachable by a request.
 

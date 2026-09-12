@@ -21,6 +21,8 @@ import unicodedata
 import frappe
 from frappe import _
 
+from sparsh_los import events
+
 from sparsh_los.permissions import throttle
 
 MAX_HINT_LEVEL = 4
@@ -171,6 +173,12 @@ def start(activity):
 	"""Open a session on one activity. Returns the instruction and nothing more."""
 	_require_enrolment()
 	doc = _activity(activity)
+	events.emit(
+		events.ACTIVITY_STARTED,
+		learner=frappe.session.user,
+		competency=doc.competency,
+		activity=doc.name,
+	)
 	return {
 		"activity": doc.name,
 		"title": doc.title,
@@ -246,6 +254,33 @@ def submit(activity, response):
 	finally:
 		frappe.flags.in_sparsh_runner = previous_flag
 
+	events.emit(
+		events.ACTIVITY_COMPLETED,
+		learner=learner,
+		competency=doc.competency,
+		activity=doc.name,
+		detail=f"outcome={outcome} assistance={hint_level} retry={retry_index}",
+		reference_doctype="Sparsh Attempt",
+		reference_name=attempt.name,
+	)
+	if retry_index:
+		events.emit(
+			events.RETRY_MADE,
+			learner=learner,
+			competency=doc.competency,
+			activity=doc.name,
+			detail=f"retry={retry_index}",
+		)
+	if critical_error:
+		events.emit(
+			events.CRITICAL_ERROR_RECORDED,
+			learner=learner,
+			competency=doc.competency,
+			activity=doc.name,
+			reference_doctype="Sparsh Attempt",
+			reference_name=attempt.name,
+		)
+
 	result = {
 		"attempt": attempt.name,
 		"outcome": outcome,
@@ -279,6 +314,14 @@ def submit(activity, response):
 
 	next_level = min(hint_level + 1, MAX_HINT_LEVEL)
 	result["hint"] = _hint_for(doc, next_level)
+	if result["hint"]:
+		events.emit(
+			events.HINT_SHOWN,
+			learner=learner,
+			competency=doc.competency,
+			activity=doc.name,
+			detail=f"level={next_level}",
+		)
 	result["hint_level"] = next_level
 	result["retry_index"] = retry_index + 1
 	result["can_retry"] = next_level < MAX_HINT_LEVEL or bool(result["hint"])

@@ -1841,6 +1841,70 @@ def check_rejected_evidence_does_not_count():
 	frappe.db.commit()
 
 
+def check_events_are_recorded_and_hold_no_content():
+	"""The usage log records what happened, never what was said.
+
+	Kept from the start because these events cannot be invented retrospectively —
+	nobody can go back and observe what learners did last month. The second assertion
+	is the one that makes the log safe to keep: a learner's typed response and an
+	activity's answer key must never appear in it.
+	"""
+	from sparsh_los import events, runner
+
+	_reset_competency()
+	_delete_all("Sparsh Event", {"learner": LEARNER})
+	frappe.db.commit()
+
+	activity = frappe.get_doc("Sparsh Activity", ACTIVITY_1)
+	activity.evaluation_mode = "Deterministic"
+	activity.expected_response = "level two"
+	activity.save(ignore_permissions=True)
+	frappe.db.commit()
+
+	secret = "level two"
+	wrong_answer = "zzv unmistakable wrong answer"
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(LEARNER)
+		runner.start(ACTIVITY_1)
+	finally:
+		frappe.set_user(original_user)
+	_submit(ACTIVITY_1, wrong_answer)
+	_submit(ACTIVITY_1, secret)
+	frappe.db.commit()
+
+	rows = frappe.get_all(
+		"Sparsh Event",
+		filters={"learner": LEARNER},
+		fields=["event_type", "detail"],
+	)
+	seen = {r.event_type for r in rows}
+	for required in (
+		events.ACTIVITY_STARTED,
+		events.ACTIVITY_COMPLETED,
+		events.HINT_SHOWN,
+		events.MASTERY_STATE_CHANGED,
+	):
+		_assert(required in seen, f"No {required} event was recorded; saw {sorted(seen)}")
+
+	# Neither the learner's own words nor the answer key reach the log.
+	for row in rows:
+		blob = (row.detail or "").lower()
+		_assert(wrong_answer not in blob, f"An event carried the learner's response: {row.detail}")
+		_assert(secret not in blob, f"An event carried the answer key: {row.detail}")
+
+	# And the log is a log: not writable by hand, even by a System Manager.
+	def hand_written():
+		doc = frappe.new_doc("Sparsh Event")
+		doc.event_type = "forged"
+		doc.occurred_at = frappe.utils.now_datetime()
+		doc.learner = LEARNER
+		doc.insert(ignore_permissions=True)
+
+	_raises(hand_written, "An event could be written by hand", expect="engine")
+	frappe.db.commit()
+
+
 def check_superseded_resource_does_not_rewrite_history():
 	"""Replacing a learning resource marks readers Refresh Due; it rewrites nothing.
 
@@ -2579,6 +2643,7 @@ CHECKS = (
 	("pathway_does_not_hand_over_a_gated_activity", check_pathway_does_not_hand_over_a_gated_activity),
 	("unbuilt_evaluator_modes_fall_to_a_person", check_unbuilt_evaluator_modes_fall_to_a_person),
 	("superseded_resource_does_not_rewrite_history", check_superseded_resource_does_not_rewrite_history),
+	("events_are_recorded_and_hold_no_content", check_events_are_recorded_and_hold_no_content),
 	("nobody_judges_their_own_work", check_nobody_judges_their_own_work),
 	("unenrolled_user_is_shut_out", check_unenrolled_user_is_shut_out),
 	("mastery_cannot_be_deleted", check_mastery_cannot_be_deleted),

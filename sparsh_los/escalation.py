@@ -32,6 +32,19 @@ DISPOSITIONS = (
 PROGRAMME_DISPOSITIONS = ("Source-of-truth update", "Curriculum change")
 
 
+def _emit_opened(question):
+	from sparsh_los import events
+
+	events.emit(
+		events.ESCALATION_OPENED,
+		learner=question.learner,
+		activity=question.activity,
+		detail=f"reason={question.escalation_reason}",
+		reference_doctype=question.doctype,
+		reference_name=question.name,
+	)
+
+
 def _context(activity, attempt):
 	"""A compact snapshot of what the learner was doing. No caregiver data."""
 	snapshot = {}
@@ -85,6 +98,7 @@ def raise_question(question_text, activity=None, attempt=None, reason="Unknown")
 	question.status = "Open"
 	question.context_snapshot = _context(activity, attempt)
 	question.insert(ignore_permissions=True)
+	_emit_opened(question)
 
 	return question.name
 
@@ -180,4 +194,5 @@ def raise_for_critical_error(attempt, activity, learner):
 	question.status = "Open"
 	question.context_snapshot = _context(activity, attempt)
 	question.insert(ignore_permissions=True)
+	_emit_opened(question)
 	return question.name

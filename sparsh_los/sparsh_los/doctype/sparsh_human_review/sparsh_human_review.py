@@ -31,6 +31,19 @@ class SparshHumanReview(Document):
 
 	def on_submit(self):
 		"""A submitted review may clear the safety error it examined."""
+		from sparsh_los import events
+
+		# Emitted for every submitted review, not only the clearing ones: the count
+		# that matters to the programme is how much review work was actually done.
+		events.emit(
+			events.HUMAN_REVIEW_COMPLETED,
+			learner=self.learner,
+			competency=self.competency,
+			detail=f"status={self.review_status} clears_critical={int(bool(self.clears_critical_error))}",
+			reference_doctype=self.doctype,
+			reference_name=self.name,
+		)
+
 		if not (self.clears_critical_error and self.evidence):
 			return
 
