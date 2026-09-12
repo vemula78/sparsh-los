@@ -506,6 +506,75 @@ def check_evidence_activity_must_match_competency():
 	frappe.db.commit()
 
 
+def check_runner_loop():
+	"""The runner grades, gives the minimum help, and writes evidence on a pass."""
+	from sparsh_los import runner
+
+	# Start from a known baseline: earlier checks leave this competency at Mastered,
+	# and a test that depends on the order of other tests proves nothing.
+	_delete_all("Sparsh Evidence", {"competency": COMPETENCY})
+	_delete_all("Sparsh Mastery State", {"competency": COMPETENCY})
+	frappe.db.commit()
+	_assert(_state() is None, "Baseline was not clear before the runner check")
+
+	activity = frappe.get_doc("Sparsh Activity", ACTIVITY_1)
+	activity.evaluation_mode = "Deterministic"
+	activity.expected_response = "level two"
+	activity.append("critical_errors", {"error_description": "stop the medicine", "severity": "Safety-critical"})
+	activity.save(ignore_permissions=True)
+	frappe.db.commit()
+
+	opened = runner.start(ACTIVITY_1)
+	_assert(opened["instruction"], "Runner returned no instruction")
+	_assert(opened["hint_level"] == 0, "A session did not open at hint level 0")
+
+	wrong = runner.submit(ACTIVITY_1, "level four")
+	_assert(wrong["outcome"] == "Fail", "A wrong answer was not marked Fail")
+	_assert(wrong["hint_level"] == 1, "The hint ladder did not advance")
+	_assert(wrong["hint"], "No hint was returned after a wrong answer")
+	_assert("evidence" not in wrong, "A failed attempt produced evidence")
+	_assert(_state() != "Demonstrated", "A failed attempt moved the mastery state")
+
+	# A pass after a hint is practice evidence, not demonstration. The distinction is
+	# the point of the hint ladder: help received is part of the record.
+	right = runner.submit(ACTIVITY_1, "  Level Two  ", hint_level=1, retry_index=1)
+	_assert(right["outcome"] == "Pass", "A correct answer was not marked Pass")
+	_assert(right.get("evidence"), "A pass produced no evidence")
+	_assert(
+		_state() == "Practising",
+		f"An assisted pass gave {_state()}, expected Practising",
+	)
+
+	assistance = frappe.db.get_value("Sparsh Evidence", right["evidence"], "assistance_level")
+	_assert(assistance == 1, f"Assistance level recorded as {assistance}, expected 1")
+
+	# An unaided pass is what moves the learner to Demonstrated.
+	independent = runner.submit(ACTIVITY_1, "level two")
+	_assert(independent["outcome"] == "Pass", "An unaided correct answer was not marked Pass")
+	_assert(
+		_state() == "Demonstrated",
+		f"An independent pass gave {_state()}, expected Demonstrated",
+	)
+	frappe.db.commit()
+
+
+def check_runner_flags_critical_response():
+	"""A response matching a declared critical error fails and blocks progression."""
+	from sparsh_los import runner
+
+	result = runner.submit(ACTIVITY_1, "I would tell them to stop the medicine")
+	_assert(result["critical_error"] == 1, "A critical response was not flagged")
+	_assert(result["outcome"] == "Fail", "A critical response was not failed")
+	_assert(result.get("evidence"), "A critical response recorded no evidence")
+
+	state = _state()
+	_assert(
+		state not in ("Demonstrated", "Mastered"),
+		f"A standing critical error left the state at {state}",
+	)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -535,6 +604,8 @@ CHECKS = (
 	("learner_cannot_escape_scope", check_learner_cannot_escape_scope),
 	("mastery_requires_distinct_activities", check_mastery_requires_distinct_activities),
 	("evidence_activity_must_match_competency", check_evidence_activity_must_match_competency),
+	("runner_loop", check_runner_loop),
+	("runner_flags_critical_response", check_runner_flags_critical_response),
 	("cleanup", check_cleanup),
 )
 

@@ -19,7 +19,9 @@
   "section_break_hints",
   "hint_ladder",
   "section_break_errors",
-  "critical_errors"
+  "critical_errors",
+  "evaluation_mode",
+  "expected_response"
  ],
  "fields": [
   {
@@ -111,11 +113,26 @@
    "fieldtype": "Table",
    "label": "Critical Errors",
    "options": "Sparsh Critical Error"
+  },
+  {
+   "fieldname": "evaluation_mode",
+   "fieldtype": "Select",
+   "label": "Evaluation Mode",
+   "options": "Deterministic\nHuman review",
+   "default": "Deterministic",
+   "reqd": 1
+  },
+  {
+   "fieldname": "expected_response",
+   "fieldtype": "Small Text",
+   "label": "Expected Response",
+   "description": "Accepted answers, one per line. Compared case-insensitively after trimming.",
+   "depends_on": "eval:doc.evaluation_mode=='Deterministic'"
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-12 21:23:21.047757",
+ "modified": "2026-09-12 21:46:01.829231",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Activity",

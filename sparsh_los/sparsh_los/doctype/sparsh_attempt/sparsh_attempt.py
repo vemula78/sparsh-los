@@ -29,6 +29,11 @@ class SparshAttempt(Document):
 		Without this a learner can post outcome=Pass, critical_error=0 for themselves
 		or file an attempt under another learner's name.
 		"""
+		if frappe.flags.in_sparsh_runner:
+			# The runner computes the verdict itself from stored content; the learner
+			# never supplies it. Limiting it here would stop the engine grading at all.
+			return
+
 		if not is_restricted():
 			return
 
