@@ -11,4 +11,28 @@ required_apps = ["frappe"]
 # Installation
 # ------------
 
+# Roles are created before DocType sync: the permission rows in the DocType JSON
+# link to them, and a missing Role fails the install.
+before_install = "sparsh_los.install.before_install"
 after_install = "sparsh_los.install.after_install"
+
+# Permissions
+# -----------
+# DocType permissions grant a role access to a kind of record; these narrow a
+# learner to their own rows.
+
+permission_query_conditions = {
+	"Sparsh Attempt": "sparsh_los.permissions.attempt_query",
+	"Sparsh Evidence": "sparsh_los.permissions.evidence_query",
+	"Sparsh Mastery State": "sparsh_los.permissions.mastery_state_query",
+	"Sparsh Certification Record": "sparsh_los.permissions.certification_record_query",
+	"Sparsh Escalation Question": "sparsh_los.permissions.escalation_question_query",
+}
+
+has_permission = {
+	"Sparsh Attempt": "sparsh_los.permissions.has_permission",
+	"Sparsh Evidence": "sparsh_los.permissions.has_permission",
+	"Sparsh Mastery State": "sparsh_los.permissions.has_permission",
+	"Sparsh Certification Record": "sparsh_los.permissions.has_permission",
+	"Sparsh Escalation Question": "sparsh_los.permissions.has_permission",
+}

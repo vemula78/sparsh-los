@@ -6,6 +6,11 @@ import frappe
 ROLES = ("Sparsh Learner", "Sparsh Reviewer")
 
 
+def before_install():
+	# DocType permission rows link to these roles, so they must exist before sync.
+	create_roles()
+
+
 def after_install():
 	create_roles()
 

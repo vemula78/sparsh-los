@@ -26,6 +26,8 @@ COMPETENCY_2 = PREFIX + "COMP2"
 ACTIVITY_1 = PREFIX + "ACT1"
 ACTIVITY_2 = PREFIX + "ACT2"
 RULE_ID = PREFIX + "RULE"
+TEST_LEARNER = "zzv-learner@example.invalid"
+OTHER_LEARNER = "zzv-other@example.invalid"
 
 PII_PATTERN = re.compile(r"patient|mrn|uhid|dob|aadhaar|phone|address", re.IGNORECASE)
 DOMAIN_STRING_PATTERN = re.compile(r"sparsh|sai", re.IGNORECASE)
@@ -85,6 +87,9 @@ def teardown():
 	_delete_all("Sparsh Competency", {"name": ("in", competencies)})
 	_delete_all("Sparsh Competency Domain", {"name": DOMAIN})
 	_delete_all("Sparsh Source of Truth Rule", {"rule_id": RULE_ID})
+	for user in (TEST_LEARNER, OTHER_LEARNER):
+		if frappe.db.exists("User", user):
+			frappe.delete_doc("User", user, force=True, ignore_permissions=True)
 	frappe.db.commit()
 
 
@@ -314,6 +319,84 @@ def check_no_domain_strings():
 	_assert(not offenders, f"domain strings present: {offenders}")
 
 
+def _make_learner(email):
+	user = frappe.new_doc("User")
+	user.email = email
+	user.first_name = "Verification"
+	user.enabled = 1
+	user.user_type = "System User"
+	user.append("roles", {"role": "Sparsh Learner"})
+	user.insert(ignore_permissions=True)
+	return user
+
+
+def check_permission_model():
+	"""Roles exist and hold the intended DocType permissions."""
+	from sparsh_los.install import ROLES
+
+	for role in ROLES:
+		_assert(frappe.db.exists("Role", role), f"Role {role} is missing")
+
+	def perms(doctype, role):
+		row = frappe.db.get_value(
+			"DocPerm",
+			{"parent": doctype, "role": role},
+			["`read`", "`write`", "`create`", "`submit`"],
+			as_dict=True,
+		)
+		return row
+
+	learner_evidence = perms("Sparsh Evidence", "Sparsh Learner")
+	_assert(learner_evidence and learner_evidence.read == 1, "Learner cannot read Evidence")
+	_assert(learner_evidence.create == 0, "Learner can create Evidence")
+	_assert(learner_evidence.submit == 0, "Learner can submit Evidence")
+
+	reviewer_evidence = perms("Sparsh Evidence", "Sparsh Reviewer")
+	_assert(reviewer_evidence and reviewer_evidence.submit == 1, "Reviewer cannot submit Evidence")
+
+	learner_attempt = perms("Sparsh Attempt", "Sparsh Learner")
+	_assert(learner_attempt and learner_attempt.create == 1, "Learner cannot create Attempts")
+
+	# Mastery is derived: no role may create or edit it, System Manager included.
+	for role in ("System Manager", "Sparsh Reviewer", "Sparsh Learner"):
+		row = perms("Sparsh Mastery State", role)
+		if row:
+			_assert(row.create == 0 and row.write == 0, f"{role} can write Mastery State")
+
+	_assert(
+		perms("Sparsh Human Review", "Sparsh Learner") is None,
+		"Learner holds permissions on Human Review",
+	)
+
+
+def check_learner_row_scope():
+	"""A learner sees only their own rows."""
+	from sparsh_los.permissions import attempt_query, has_permission
+
+	_make_learner(TEST_LEARNER)
+	_make_learner(OTHER_LEARNER)
+	frappe.db.commit()
+
+	condition = attempt_query(TEST_LEARNER)
+	_assert(TEST_LEARNER in (condition or ""), "Learner query condition does not scope by learner")
+	_assert(
+		attempt_query("Administrator") == "",
+		"Administrator was scoped like a learner",
+	)
+
+	attempt = _new_attempt(None, outcome="Pass")
+	attempt.reload()
+	_assert(
+		not has_permission(attempt, "read", TEST_LEARNER),
+		"A learner was granted access to another learner's attempt",
+	)
+	_assert(
+		has_permission(attempt, "read", "Administrator"),
+		"Administrator was denied access to an attempt",
+	)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -338,6 +421,8 @@ CHECKS = (
 	("evidence_cancel_recomputes", check_evidence_cancel_recomputes),
 	("no_pii_fields", check_no_pii_fields),
 	("no_domain_strings", check_no_domain_strings),
+	("permission_model", check_permission_model),
+	("learner_row_scope", check_learner_row_scope),
 	("cleanup", check_cleanup),
 )
 
