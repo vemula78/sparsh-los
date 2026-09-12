@@ -1977,6 +1977,50 @@ def check_refresher_reaches_the_learner():
 	frappe.db.commit()
 
 
+def check_certificate_shows_its_working():
+	"""A certificate can name the evidence behind it, not merely a verdict."""
+	from sparsh_los import certification
+
+	_reset_competency()
+	_new_evidence(ACTIVITY_1, "Pass")
+	_new_evidence(ACTIVITY_2, "Pass")
+
+	certificate = frappe.new_doc("Sparsh Certification Record")
+	certificate.learner = LEARNER
+	certificate.competency = COMPETENCY
+	certificate.certification_status = "Full"
+	certificate.insert(ignore_permissions=True)
+	certificate.submit()
+
+	detail = certification.certificate_detail(certificate.name)
+	_assert(detail["certified_by"], "The certificate does not name who signed it")
+	_assert(detail["certified_on"], "The certificate has no issue date")
+	_assert(detail["supporting_evidence"], "The certificate names no supporting evidence")
+	_assert(
+		len(detail["distinct_activities"]) >= 2,
+		f"The certificate lists {detail['distinct_activities']} activities",
+	)
+	_assert(
+		detail["state_now"] in ("Demonstrated", "Mastered"),
+		f"The certificate reports the current state as {detail['state_now']}",
+	)
+
+	# Another learner cannot read it.
+	_make_learner(TEST_LEARNER)
+	frappe.db.commit()
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+		try:
+			certification.certificate_detail(certificate.name)
+			raise AssertionError("A learner read somebody else's certificate")
+		except frappe.PermissionError:
+			pass
+	finally:
+		frappe.set_user(original_user)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -2044,6 +2088,7 @@ CHECKS = (
 	("mastery_cannot_be_deleted", check_mastery_cannot_be_deleted),
 	("certification_standing_is_not_editable", check_certification_standing_is_not_editable),
 	("refresher_reaches_the_learner", check_refresher_reaches_the_learner),
+	("certificate_shows_its_working", check_certificate_shows_its_working),
 	("cleanup", check_cleanup),
 )
 

@@ -112,3 +112,46 @@ def cohort_readiness(competency):
 		)
 
 	return {"competency": competency, "counts": {k: len(v) for k, v in buckets.items()}, "buckets": buckets}
+
+
+@frappe.whitelist()
+def certificate_detail(name):
+	"""Everything a certificate should be able to show, traced to its evidence.
+
+	Section 16 requires certification to be traceable to specific competency evidence
+	and human sign-off. A certificate that cannot show its working is a scorecard.
+	"""
+	doc = frappe.get_doc("Sparsh Certification Record", name)
+	if doc.learner != frappe.session.user and is_restricted():
+		frappe.throw(_("You can only view your own certificate"), frappe.PermissionError)
+
+	summary = _evidence_summary(doc.learner, doc.competency)
+
+	return {
+		"certificate": doc.name,
+		"learner": doc.learner,
+		"competency": doc.competency,
+		"competency_name": frappe.db.get_value(
+			"Sparsh Competency", doc.competency, "competency_name"
+		),
+		"status": doc.certification_status,
+		"state": doc.certification_state,
+		"certified_on": doc.certified_on,
+		"certified_by": doc.certified_by,
+		"derived_state_at_certification": doc.derived_state,
+		"state_now": derive_state(doc.learner, doc.competency),
+		"evidence_count": summary["evidence_count"],
+		"independent_passes": summary["independent_passes"],
+		"distinct_activities": summary["distinct_activities"],
+		"supporting_evidence": [
+			{
+				"evidence": r.name,
+				"activity": r.activity,
+				"outcome": r.outcome,
+				"assistance_level": r.assistance_level,
+				"recorded_at": r.recorded_at,
+			}
+			for r in summary["records"]
+			if r.outcome == "Pass" and not r.critical_error
+		],
+	}
