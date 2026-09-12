@@ -89,8 +89,13 @@ def has_permission(doc, ptype=None, user=None):
 # hospital's own MRN format and Aadhaar-length digit runs. A broad heuristic would
 # reject legitimate clinical prose and teach people to work around the check.
 IDENTIFIER_PATTERNS = (
-	re.compile(r"\b(?:WS|PN|PS)\s?\d{4,}\b", re.IGNORECASE),
-	re.compile(r"\b\d{12}\b"),
+	# The hospital's own MRN formats, with or without a separator.
+	re.compile(r"\b(?:WS|PN|PS)[\s\-/]?\d{4,}\b", re.IGNORECASE),
+	# Aadhaar-length digit runs, however they are grouped.
+	re.compile(r"\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b"),
+	# Indian mobile numbers, with or without the country code.
+	re.compile(r"(?:\+91[\s\-]?)?\b[6-9]\d{9}\b"),
+	re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"),
 )
 
 

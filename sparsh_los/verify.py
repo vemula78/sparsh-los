@@ -898,6 +898,23 @@ def check_identifiers_are_refused():
 
 	_raises(aadhaar_in_question, "A 12-digit identifier was accepted in an escalation")
 
+	# The grouped and separated forms people actually write.
+	for text, label in (
+		("Their number is WS-12345", "a hyphenated MRN"),
+		("Aadhaar 1234 5678 9012 was quoted", "a spaced Aadhaar number"),
+		("Contact them on 9876543210", "a mobile number"),
+		("They emailed caregiver@example.com", "an email address"),
+	):
+		def attempt_with(value=text):
+			doc = frappe.new_doc("Sparsh Attempt")
+			doc.learner = LEARNER
+			doc.activity = ACTIVITY_1
+			doc.hint_level_used = 0
+			doc.response = value
+			doc.insert(ignore_permissions=True)
+
+		_raises(attempt_with, f"{label} was accepted")
+
 	# Ordinary clinical prose must still be accepted.
 	attempt = frappe.new_doc("Sparsh Attempt")
 	attempt.learner = LEARNER
