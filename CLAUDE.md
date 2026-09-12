@@ -71,9 +71,11 @@ Seventeen modules over 15 top-level DocTypes and 7 child tables, all prefixed `S
 | `verify.py` | The acceptance harness |
 | `www/practice.py`, `www/queue.py` | Learner page and reviewer queue |
 
-Data flows one way: **Attempt → Evidence → Mastery State → Certification**, with one deliberate
-exception: an approved `Sparsh Human Review` writes `critical_error_cleared` back onto submitted
-Evidence. That edge is required by the safety-clearance rule and is the only backward write.
+Data flows one way: **Attempt → Evidence → Mastery State → Certification**, with two deliberate
+exceptions. An approved `Sparsh Human Review` writes `critical_error_cleared` back onto submitted
+Evidence, required by the safety-clearance rule. And `recompute_mastery` closes a satisfied
+`Sparsh Refresher Assignment` before it derives, because an open assignment is an input to the
+state and a learner who has answered it must not stay held by it.
 `Sparsh Evidence.on_submit` / `on_cancel` are the only triggers for `recompute_mastery`, which is
 also the only writer of Mastery State.
 

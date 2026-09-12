@@ -503,3 +503,50 @@ adjudicated — recorded here so they are not lost.
 | 3.11 | No `MIN_CHECKS` guard | **Rejected** — it exists in `scripts/install_verify.sh`, which was not in the bundle the audit received |
 
 `sparsh_los.verify.run` — **64 passed, 0 failed**. `MIN_CHECKS` 64.
+
+## Audit 11 — 13-Sep-2026 — against `dcd0a96`
+
+Non-independent (Claude, shares the build's lineage). Its most valuable findings were against
+code written *the same day*, including one the previous fix introduced.
+
+### Confirmed and fixed
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1.1 | The critical-marker branch ran **before** the new rule gate, so an activity governed by a Draft rule still auto-failed on safety — and critical Evidence cannot be cancelled, so the one judgement an unvalidated rule could still make was the irreversible one | **Fixed.** Rule gate now precedes everything. The response is still escalated to a person by `submit`; what it no longer does is impose a permanent block on an unvalidated rule's authority |
+| 1.2 | `_governing_rule` returns one rule — highest version among non-superseded — so a competency linked to a Validated v2 *and* a Draft v1 auto-scored | **Fixed.** New `_rule_is_validated` requires every non-superseded linked rule to be Validated |
+| 1.3 | `programme_readiness` used a different test from the runner in both directions: a mixed-status competency was reported fine while the runner silently routed it to human review, and `if rules` short-circuited so a no-rule activity was never named | **Fixed.** The report now asks the runner's own question, and reports no-rule activities separately |
+| 1.5, 3.3, 4.1 | Three comments asserting guarantees the code does not establish — the banned class, twice found before | **Fixed.** Each now states the limit instead of the reassurance |
+| 3.2 | `close_satisfied` ordered on `recorded_at`, which is writable — a regression of closed finding M2. Anyone who can create Evidence could close every open refresher by backdating one row | **Fixed** — orders on `creation`, as `mastery._sort_key` already does and says why |
+| 3.4 | A null `assigned_on` was skipped silently — the repo's own "Silent Drop" | **Fixed** — logged |
+| 3.7 | `CLAUDE.md`'s "only backward write" was invalidated by the same commit that wrote it: `recompute_mastery` now also writes Refresher Assignment | **Fixed** — two exceptions, both named |
+| 4.3 | `certificate_detail` listed rejected evidence as supporting a certificate, on the endpoint whose purpose is showing the working | **Fixed** |
+| §5 | The escalation-reason check passed `reason` defaulting to `"Unknown"`, a member of `REASONS`, so the fallback it was written to test never executed; the evaluator check had no positive control; "Fixture restored" restored a guess rather than the original; the duplicate-key probe still accepted any "duplicate" string; the resource check left a submitted certificate behind | **All fixed** |
+
+### 3.1 — reported as a blocker; fix applied, exploit not reproduced
+
+The reported sequence: `evaluate_time_based` reads the state while the assignment is open, the
+recompute closes it, and `assign` then fires on the stale reading, creating an assignment
+nothing can close. The reasoning is sound and the ordering was genuinely wrong, so the fix is
+in: the job now recomputes first and decides on `_refresh_overdue` alone, which is the correct
+trigger for a *time-based* refresher regardless.
+
+But the exploit could not be reproduced. `Sparsh Evidence.on_submit` always recomputes, so by
+the time the daily job runs there is no open assignment left to misread. Reverting the fix alone
+leaves the new check passing. Recorded as reasoning-led rather than evidence-led: the change is
+right on its merits, and the claim that it closed a live blocker is **not** established.
+
+`check_answered_refresher_is_not_reassigned` is kept because it does bite on something real —
+removing `close_satisfied` fails it — but it is not a regression test for 3.1.
+
+### Deferred
+
+2.1 (blank `learner` caught by `reqd` rather than by the function), 2.2 (dead `retry_index`
+recompute), 2.3 (writer-supplied `attempted_at`), 2.4 (reviewer collusion — the same trust
+already documented for refreshers, undocumented here), 3.5 (equal-timestamp boundary, now `>=`),
+3.6 (`db.set_value` writes no Version row), 4.2 (SQL vs Python NULL handling, unreachable while
+the field has a default), 6.1 (query counts). All real, none safety-bearing today.
+
+### Acceptance
+
+`sparsh_los.verify.run` — **65 passed, 0 failed**. `MIN_CHECKS` 65.

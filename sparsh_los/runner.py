@@ -142,6 +142,32 @@ NOT_SCORED_MODES = ("Reflection",)
 AWAITING_IMPLEMENTATION_MODES = ("Numeric validation", "Rubric", "AI-assisted")
 
 
+def _rule_is_validated(competency):
+	"""True when nothing unvalidated governs this competency.
+
+	Every non-superseded linked rule must be Validated, not merely the highest-versioned
+	one: checking only the governing rule meant a competency linked to a Validated v2
+	and a Draft v1 auto-scored, because the gate happened to look at v2.
+
+	A competency with no rule linked passes. The code cannot tell whether such a
+	competency is clinical -- it establishes only that no link row exists -- so this is
+	an accepted risk, not a safety property. `seed.programme_readiness` names these
+	activities so the gap is visible rather than silent.
+	"""
+	if not competency:
+		return True
+
+	links = frappe.get_all(
+		"Sparsh Competency Rule Link", filters={"parent": competency}, pluck="rule"
+	)
+	for rule in links:
+		status = frappe.db.get_value("Sparsh Source of Truth Rule", rule, "status")
+		if status not in ("Validated", "Superseded"):
+			return False
+
+	return True
+
+
 def evaluate(activity, response):
 	"""Return (outcome, critical_error). Deterministic; no model call.
 
@@ -151,26 +177,23 @@ def evaluate(activity, response):
 	string comparison, which would score a rubric activity as though it were a
 	multiple-choice question.
 	"""
-	# Critical markers are checked whatever the mode. An unsafe response is unsafe
-	# whether or not the engine can grade the rest of the answer.
+	# The rule gate comes first, ahead of anything the engine might conclude -- the
+	# safety branch included. Critical markers used to be checked before it, so an
+	# activity governed by a Draft rule still auto-failed on safety, and critical
+	# Evidence cannot be cancelled: the one judgement an unvalidated rule could still
+	# make was the irreversible one. `submit` still escalates such a response to a
+	# person; what it no longer does is impose a permanent block on the authority of a
+	# rule nobody has validated.
+	if not _rule_is_validated(activity.competency):
+		return "Not Evaluated", 0
+
+	# Under a validated rule a critical marker bites whatever the mode: an unsafe
+	# answer is unsafe whether or not the engine can grade the rest of it.
 	if _is_critical(activity, response):
 		return "Fail", 1
 
 	mode = activity.evaluation_mode or "Human review"
 	if mode not in AUTO_SCORED_MODES:
-		return "Not Evaluated", 0
-
-	# The rule behind the activity must be validated before the engine scores against
-	# it. This was a convention written in the docs and enforced nowhere: an activity
-	# set Deterministic against a Draft safety-critical rule auto-scored, wrote
-	# Evidence and moved Mastery -- which is exactly "an unvalidated rule as production
-	# logic", the one thing the programme owner ruled out.
-	#
-	# An activity with no rule linked is not scoring against a clinical rule at all
-	# (the non-clinical cross-domain competency is the case that matters), so it is
-	# left alone. A rule that exists but is not Validated stops the scoring.
-	rule = _governing_rule(activity.competency)
-	if rule and frappe.db.get_value("Sparsh Source of Truth Rule", rule, "status") != "Validated":
 		return "Not Evaluated", 0
 
 	accepted = _accepted_responses(activity)
@@ -322,6 +345,19 @@ def submit(activity, response):
 		return result
 
 	if outcome == "Not Evaluated":
+		# A response matching a critical marker still reaches a person, even when the
+		# engine may not score it. What it does not do is write critical Evidence,
+		# which cannot be cancelled and would be a permanent block imposed on the
+		# authority of a rule nobody has validated.
+		if _is_critical(doc, response):
+			from sparsh_los.escalation import raise_for_critical_error
+
+			result["escalation"] = raise_for_critical_error(attempt.name, doc.name, learner)
+			result["message"] = _(
+				"Recorded and sent to a reviewer: this response needs a person to look at it."
+			)
+			return result
+
 		result["message"] = _("Recorded. This activity is reviewed by a person.")
 		return result
 

@@ -241,21 +241,26 @@ def programme_readiness():
 	# runner now refuses these at evaluation time; naming them here is how the
 	# programme owner sees the gap rather than discovering it as silent human review.
 	auto_scoring_unvalidated = []
+	no_rule_but_scoring = []
 	for row in frappe.get_all(
 		"Sparsh Activity",
 		filters={"evaluation_mode": "Deterministic"},
 		fields=["name", "competency"],
 	):
-		rules = frappe.get_all(
-			"Sparsh Competency Rule Link", filters={"parent": row.competency}, pluck="rule"
-		)
-		unvalidated = [
-			r
-			for r in rules
-			if frappe.db.get_value("Sparsh Source of Truth Rule", r, "status") != "Validated"
-		]
-		if rules and len(unvalidated) == len(rules):
+		# Ask the runner's own question rather than a similar one. This used to require
+		# that *every* linked rule be unvalidated, so a competency with one Validated
+		# and one Draft rule was reported as fine while the runner silently routed it
+		# all to human review -- the exact "discovered as silent human review" this is
+		# meant to prevent. And `if rules` short-circuited, so an activity with no rule
+		# linked, the one configuration that bypasses the gate, was never named.
+		from sparsh_los.runner import _rule_is_validated
+
+		if not _rule_is_validated(row.competency):
 			auto_scoring_unvalidated.append(row.name)
+		elif not frappe.get_all(
+			"Sparsh Competency Rule Link", filters={"parent": row.competency}, limit=1
+		):
+			no_rule_but_scoring.append(row.name)
 
 	competencies = frappe.get_all(
 		"Sparsh Competency", fields=["name", "competency_name"], order_by="name asc"
@@ -301,4 +306,7 @@ def programme_readiness():
 		# now" -- a stronger claim than the data supported.
 		"can_pilot_with_human_review": (not without_activities) and not auto_scoring_unvalidated,
 		"auto_scoring_against_unvalidated_rules": auto_scoring_unvalidated,
+		# Reported, not blocking: an activity with no rule linked is the deliberate
+		# hole in the gate. The programme owner should see which activities sit in it.
+		"auto_scoring_with_no_rule_linked": no_rule_but_scoring,
 	}

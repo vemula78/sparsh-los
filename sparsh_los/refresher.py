@@ -14,7 +14,14 @@ which is what makes it testable.
 
 import frappe
 
-from sparsh_los.mastery import DEMONSTRATED, MASTERED, REFRESH_DUE, derive_state, recompute_mastery
+from sparsh_los.mastery import (
+	DEMONSTRATED,
+	MASTERED,
+	REFRESH_DUE,
+	_refresh_overdue,
+	derive_state,
+	recompute_mastery,
+)
 
 TIME_ELAPSED = "Time elapsed"
 RULE_CHANGED = "Rule changed"
@@ -55,12 +62,18 @@ def evaluate_time_based():
 		filters={"state": ("in", (DEMONSTRATED, MASTERED, REFRESH_DUE))},
 		fields=["learner", "competency"],
 	):
-		if derive_state(row.learner, row.competency) != REFRESH_DUE:
-			continue
-
-		# Persist the regression: without this the stored state and any standing
-		# certification stayed as they were, so a certificate outlived its currency.
+		# Recompute first. It persists the regression -- without it the stored state and
+		# any standing certification stayed as they were, so a certificate outlived its
+		# currency -- and it also closes refreshers the learner has already answered.
 		recompute_mastery(row.learner, row.competency)
+
+		# Then decide, on the time condition alone. Deciding on derive_state meant the
+		# job read REFRESH_DUE from the still-open assignment, closed it in the
+		# recompute, and assigned a *new* one on the stale reading. Nothing could then
+		# close that one -- the learner's pass no longer post-dated it -- so a learner
+		# who answered a refresher was suspended permanently by the daily job.
+		if not _refresh_overdue(row.learner, row.competency):
+			continue
 
 		name = assign(
 			row.learner,
@@ -131,7 +144,14 @@ def close_satisfied(learner, competency):
 	certificate that comes with it -- lasted until a human edited the row by hand. A
 	refresher is short work; an indefinite suspension is not what it is for.
 
-	Satisfied means an independent pass recorded *after* the assignment was made.
+	Satisfied means an independent pass created after the assignment was made, anywhere
+	in the competency. It is deliberately *not* tied to the rule or resource that
+	triggered the refresher: nothing records which activity covers which rule, so the
+	engine cannot tell. A learner holding a "Resource changed" refresher can therefore
+	close it by passing an unrelated activity in the same competency. That is a real
+	gap, not a guarantee -- narrowing it needs activity-to-rule provenance, which is a
+	schema decision rather than a patch.
+
 	Evidence the learner already had cannot answer a refresher, or superseded content
 	would close its own refresher the moment it was assigned.
 
@@ -154,12 +174,22 @@ def close_satisfied(learner, competency):
 	closed = []
 	for row in rows:
 		if not row.assigned_on:
+			# Written around the controller: before_insert always sets this. Skipping
+			# silently would strand exactly the row that can never close on its own.
+			frappe.log_error(
+				title="sparsh_los refresher assignment has no assigned_on",
+				message=f"Assignment {row.name} cannot be evaluated for closure.",
+			)
 			continue
 		fresh = [
 			p
 			for p in passes
-			if frappe.utils.get_datetime(p.recorded_at or p.creation)
-			> frappe.utils.get_datetime(row.assigned_on)
+			# `creation`, not `recorded_at`. mastery._sort_key already orders on creation
+			# because recorded_at is writable and a caller can backdate it; using it
+			# here would let anyone who can create Evidence close every open refresher
+			# for that learner by post-dating one row.
+			if frappe.utils.get_datetime(p.creation)
+			>= frappe.utils.get_datetime(row.assigned_on)
 		]
 		if not fresh:
 			continue

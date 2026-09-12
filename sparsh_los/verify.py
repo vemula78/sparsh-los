@@ -1688,7 +1688,6 @@ def check_constraints_are_in_the_database():
 	_assert(raised is not None, "The database accepted two evidence rows for one attempt")
 	_assert(
 		isinstance(raised, frappe.exceptions.UniqueValidationError)
-		or "duplicate" in str(raised).lower()
 		or "1062" in str(raised),
 		f"The insert failed, but not on the unique constraint: {type(raised).__name__}: {raised}",
 	)
@@ -1903,6 +1902,7 @@ def check_events_are_recorded_and_hold_no_content():
 	frappe.db.commit()
 
 	activity = frappe.get_doc("Sparsh Activity", ACTIVITY_1)
+	original_mode, original_expected = activity.evaluation_mode, activity.expected_response
 	activity.evaluation_mode = "Deterministic"
 	activity.expected_response = "level two"
 	activity.save(ignore_permissions=True)
@@ -1958,6 +1958,32 @@ def check_events_are_recorded_and_hold_no_content():
 		"Raising a question recorded no escalation event",
 	)
 
+	# `escalation_reason` is the one detail string that starts as a whitelisted
+	# argument. The Select refuses an unexpected value at insert, so the insert path
+	# cannot reach the fallback -- which is precisely what the fallback is for: it is
+	# what holds if that field is ever widened to Data. Tested where it lives, because
+	# testing it through the insert would only re-prove the Select.
+	raised_q = frappe.get_all(
+		"Sparsh Escalation Question",
+		filters={"learner": LEARNER},
+		fields=["name"],
+		order_by="creation desc",
+		limit=1,
+	)
+	_assert(raised_q, "No escalation question to test the reason fallback against")
+	widened = frappe.get_doc("Sparsh Escalation Question", raised_q[0].name)
+	widened.escalation_reason = f"<widened> {wrong_answer}"
+	escalation._emit_opened(widened)
+	leaked = frappe.get_all(
+		"Sparsh Event",
+		filters={"event_type": events.ESCALATION_OPENED, "creation": (">", started_at)},
+		pluck="detail",
+	)
+	_assert(
+		all(wrong_answer not in (d or "").lower() for d in leaked),
+		f"A widened escalation reason carried learner text into the log: {leaked}",
+	)
+
 	# Neither the learner's own words nor the answer key reach the log, in any field.
 	for row in rows:
 		blob = " ".join(str(v or "") for v in row.values()).lower()
@@ -1987,11 +2013,12 @@ def check_events_are_recorded_and_hold_no_content():
 		expect="log",
 	)
 
-	# Fixture restored: this check leaves ACTIVITY_1 scored, which arms every check
-	# that follows it.
+	# Fixture restored to what it was, not to a guess. Hardcoding "Human review" here
+	# left every later check on a different baseline than every earlier one, under a
+	# comment claiming a restoration it did not perform.
 	activity.reload()
-	activity.evaluation_mode = "Human review"
-	activity.expected_response = None
+	activity.evaluation_mode = original_mode
+	activity.expected_response = original_expected
 	activity.save(ignore_permissions=True)
 	frappe.db.commit()
 
@@ -2114,6 +2141,7 @@ def check_superseded_resource_does_not_rewrite_history():
 		competency.set("learning_resources", [])
 		competency.save(ignore_permissions=True)
 		_delete_all("Sparsh Refresher Assignment", {"competency": COMPETENCY})
+		_delete_all("Sparsh Certification Record", {"competency": COMPETENCY})
 		for name in frappe.get_all(
 			"Sparsh Learning Resource", filters={"resource_id": PREFIX + "RES"}, pluck="name"
 		):
@@ -2182,6 +2210,71 @@ def check_dual_role_cannot_forge_their_own_attempt():
 		activity.expected_response = original_expected
 		activity.save(ignore_permissions=True)
 		_delete_all("Sparsh Attempt", {"learner": dual})
+		frappe.db.commit()
+
+
+def check_answered_refresher_is_not_reassigned():
+	"""The daily job must not re-suspend a learner who has answered their refresher.
+
+	The regression this exists for was introduced by the fix that lets a refresher
+	close at all: `evaluate_time_based` read the state while the assignment was still
+	open, closed it in the recompute, then assigned a *new* one on that stale reading.
+	Nothing could close the new one -- the learner's pass no longer post-dated it --
+	so answering a refresher suspended the certificate permanently.
+	"""
+	from sparsh_los import refresher
+
+	_reset_competency()
+	competency = frappe.get_doc("Sparsh Competency", COMPETENCY)
+	original_interval = competency.refresh_interval_days
+	competency.refresh_interval_days = 1
+	competency.save(ignore_permissions=True)
+	frappe.db.commit()
+
+	try:
+		_new_evidence(ACTIVITY_1, "Pass")
+		# Age the demonstration past the interval so the time trigger fires.
+		for name in frappe.get_all(
+			"Sparsh Evidence", filters={"learner": LEARNER, "competency": COMPETENCY}, pluck="name"
+		):
+			frappe.db.set_value(
+				"Sparsh Evidence", name, "recorded_at", frappe.utils.add_days(frappe.utils.now_datetime(), -30)
+			)
+		frappe.db.commit()
+		recompute = frappe.get_attr("sparsh_los.mastery.recompute_mastery")
+		recompute(LEARNER, COMPETENCY)
+
+		refresher.evaluate_time_based()
+		_assert(
+			_state() == "Refresh Due",
+			f"An aged demonstration did not become Refresh Due: {_state()}",
+		)
+
+		# The learner answers it.
+		_new_evidence(ACTIVITY_2, "Pass")
+		_assert(
+			_state() in ("Demonstrated", "Mastered"),
+			f"Answering the refresher left the learner at {_state()}",
+		)
+
+		# And the next daily run must leave them alone.
+		refresher.evaluate_time_based()
+		_assert(
+			_state() in ("Demonstrated", "Mastered"),
+			f"The daily job re-suspended a learner who had answered: {_state()}",
+		)
+		_assert(
+			not frappe.db.exists(
+				"Sparsh Refresher Assignment",
+				{"learner": LEARNER, "competency": COMPETENCY, "status": "Assigned"},
+			),
+			"The daily job reopened a refresher the learner had already answered",
+		)
+	finally:
+		competency.reload()
+		competency.refresh_interval_days = original_interval
+		competency.save(ignore_permissions=True)
+		_delete_all("Sparsh Refresher Assignment", {"competency": COMPETENCY})
 		frappe.db.commit()
 
 
@@ -2302,6 +2395,20 @@ def check_unbuilt_evaluator_modes_fall_to_a_person():
 				f"Mode {mode} scored the response itself: {outcome}",
 			)
 			_assert(not critical, f"Mode {mode} invented a critical error")
+
+		# Positive control. Without one, a regression that stopped the runner scoring
+		# anything at all -- a Draft rule leaking in from the check that runs before
+		# this one, say -- would satisfy every assertion in the loop above.
+		activity.evaluation_mode = "Deterministic"
+		activity.save(ignore_permissions=True)
+		frappe.db.commit()
+		outcome, _critical = runner.evaluate(
+			frappe.get_doc("Sparsh Activity", ACTIVITY_1), "level two"
+		)
+		_assert(
+			outcome == "Pass",
+			f"The positive control did not score: {outcome}. The loop above proves nothing.",
+		)
 
 		# A critical marker still bites whatever the mode: an unsafe answer is unsafe
 		# whether or not the engine can grade the rest of it.
@@ -2926,6 +3033,7 @@ CHECKS = (
 	("pathway_walks_in_order", check_pathway_walks_in_order),
 	("pathway_does_not_hand_over_a_gated_activity", check_pathway_does_not_hand_over_a_gated_activity),
 	("dual_role_cannot_forge_their_own_attempt", check_dual_role_cannot_forge_their_own_attempt),
+	("answered_refresher_is_not_reassigned", check_answered_refresher_is_not_reassigned),
 	("draft_rule_cannot_auto_score", check_draft_rule_cannot_auto_score),
 	("unbuilt_evaluator_modes_fall_to_a_person", check_unbuilt_evaluator_modes_fall_to_a_person),
 	("superseded_resource_does_not_rewrite_history", check_superseded_resource_does_not_rewrite_history),

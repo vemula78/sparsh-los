@@ -41,9 +41,10 @@ def _evidence_summary(learner, competency):
 		order_by="creation asc",
 	)
 
-	# Same filter as mastery._independent_passes, including the rejected-review
-	# exclusion. Without it readiness and the certificate answered a question about the
-	# same learner differently from the state machine that gates them.
+	# The same filter as mastery._independent_passes except for its `and r.activity`
+	# term, which is enforced upstream: Sparsh Evidence refuses to store an unaided
+	# pass with no activity. The counts therefore agree, but the guarantee lives in the
+	# Evidence controller, not here.
 	independent = [
 		r
 		for r in rows
@@ -165,6 +166,10 @@ def certificate_detail(name):
 				"recorded_at": r.recorded_at,
 			}
 			for r in summary["records"]
-			if r.outcome == "Pass" and not r.critical_error
+			# A row a reviewer explicitly rejected is not part of a certificate's
+			# working, on the endpoint whose whole purpose is showing that working.
+			if r.outcome == "Pass"
+			and not r.critical_error
+			and r.human_review_status != "Rejected"
 		],
 	}
