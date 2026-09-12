@@ -10,7 +10,7 @@ SSH_KEY="${SSH_KEY:-~/Downloads/sssihms-web-vm2023_key.pem}"
 SSH_HOST="${SSH_HOST:-azureuser@20.219.253.136}"
 SSH_PORT="${SSH_PORT:-2222}"
 SKIP_VERIFY="${SKIP_VERIFY:-0}"
-MIN_CHECKS="${MIN_CHECKS:-46}"
+MIN_CHECKS="${MIN_CHECKS:-47}"
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH_DIR="/home/frappe/frappe-bench"

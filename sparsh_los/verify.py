@@ -20,6 +20,7 @@ import frappe
 from sparsh_los.mastery import STATE_ORDER, derive_state
 
 PREFIX = "ZZV-"
+PATHWAY = PREFIX + "PATH"
 OTHER_DOMAIN = PREFIX + "DOM2"
 OTHER_COMPETENCY = PREFIX + "COMP3"
 OTHER_ACTIVITY = PREFIX + "ACT3"
@@ -119,9 +120,10 @@ def teardown():
 	_delete_all("Sparsh Evidence", {"competency": ("in", competencies)})
 	_delete_all("Sparsh Mastery State", {"competency": ("in", competencies)})
 	_delete_all("Sparsh Escalation Question", {"learner": ("in", [LEARNER, TEST_LEARNER, OTHER_LEARNER])})
-	_delete_all("Sparsh Attempt", {"activity": ("in", [ACTIVITY_1, ACTIVITY_2, OTHER_ACTIVITY])})
-	_delete_all("Sparsh Activity", {"name": ("in", [ACTIVITY_1, ACTIVITY_2, OTHER_ACTIVITY])})
+	_delete_all("Sparsh Attempt", {"activity": ("like", PREFIX + "%")})
+	_delete_all("Sparsh Activity", {"name": ("like", PREFIX + "%")})
 	_delete_all("Sparsh Competency", {"name": ("in", competencies)})
+	_delete_all("Sparsh Pathway", {"name": PATHWAY})
 	_delete_all("Sparsh Competency Domain", {"name": ("in", [DOMAIN, OTHER_DOMAIN])})
 	_delete_all("Sparsh Source of Truth Rule", {"rule_id": RULE_ID})
 	for user in (TEST_LEARNER, OTHER_LEARNER):
@@ -1680,6 +1682,65 @@ def check_rejected_evidence_does_not_count():
 	frappe.db.commit()
 
 
+def check_pathway_walks_in_order():
+	"""A pathway is walked in order, and safety still outranks the sequence."""
+	from sparsh_los import orchestrator
+
+	_reset_competency()
+	_delete_all("Sparsh Pathway", {"name": PATHWAY})
+
+	# COMPETENCY_2 needs an activity of its own, or step two has nothing to offer and
+	# the pathway correctly reports itself complete.
+	step_two_activity = PREFIX + "ACT-P2"
+	if not frappe.db.exists("Sparsh Activity", step_two_activity):
+		doc = frappe.new_doc("Sparsh Activity")
+		doc.activity_id = step_two_activity
+		doc.title = "Pathway step two"
+		doc.competency = COMPETENCY_2
+		doc.activity_type = "Knowledge check"
+		doc.instruction = "Verification instruction."
+		doc.version = 1
+		doc.evaluation_mode = "Human review"
+		doc.insert(ignore_permissions=True)
+	frappe.db.commit()
+
+	pathway = frappe.new_doc("Sparsh Pathway")
+	pathway.pathway_id = PATHWAY
+	pathway.title = "Verification pathway"
+	pathway.status = "Active"
+	pathway.append(
+		"steps",
+		{"step_order": 1, "activity": ACTIVITY_1, "competency": COMPETENCY, "is_mandatory": 1},
+	)
+	pathway.append(
+		"steps",
+		{"step_order": 2, "activity": step_two_activity, "competency": COMPETENCY_2, "is_mandatory": 1},
+	)
+	pathway.insert(ignore_permissions=True)
+	frappe.db.commit()
+
+	first = orchestrator.next_in_pathway(PATHWAY, LEARNER)
+	_assert(first["competency"] == COMPETENCY, f"The pathway started at {first.get('competency')}")
+	_assert(first.get("step") == 1, "The pathway did not report its step")
+
+	# Demonstrate step one; the pathway moves on.
+	_new_evidence(ACTIVITY_1, "Pass")
+	second = orchestrator.next_in_pathway(PATHWAY, LEARNER)
+	_assert(
+		second.get("competency") == COMPETENCY_2,
+		f"After demonstrating step one the pathway offered {second.get('competency')}",
+	)
+
+	# A critical error on step one pulls the learner back, mid-pathway.
+	_new_evidence(ACTIVITY_1, "Fail", critical_error=1)
+	back = orchestrator.next_in_pathway(PATHWAY, LEARNER)
+	_assert(
+		back["reason"] == orchestrator.REMEDIATION and back["competency"] == COMPETENCY,
+		f"A critical error did not pull the learner back: {back.get('reason')}",
+	)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -1741,6 +1802,7 @@ CHECKS = (
 	("programme_readiness_is_honest", check_programme_readiness_is_honest),
 	("activity_cannot_change_competency", check_activity_cannot_change_competency),
 	("rejected_evidence_does_not_count", check_rejected_evidence_does_not_count),
+	("pathway_walks_in_order", check_pathway_walks_in_order),
 	("cleanup", check_cleanup),
 )
 

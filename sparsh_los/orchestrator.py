@@ -29,6 +29,7 @@ REMEDIATION = "remediation"
 PREREQUISITE = "prerequisite"
 PRACTICE = "practice"
 CONSOLIDATION = "consolidation"
+PATHWAY_COMPLETE = "pathway complete"
 
 
 def _prerequisites_unmet(learner, competency):
@@ -147,3 +148,65 @@ def _last_critical_activity(learner, competency):
 		limit=1,
 	)
 	return rows[0].activity if rows else None
+
+
+def _pathway_steps(pathway):
+	return frappe.get_all(
+		"Sparsh Pathway Step",
+		filters={"parent": pathway},
+		fields=["step_order", "activity", "competency", "is_mandatory"],
+		order_by="step_order asc, idx asc",
+	)
+
+
+@frappe.whitelist()
+def next_in_pathway(pathway, learner=None):
+	"""Walk an ordered pathway and return the first step the learner still owes.
+
+	A pathway is a sequence somebody designed; within a step the ordinary rules still
+	apply, so a standing critical error sends the learner back even mid-pathway. A
+	mandatory step is not passed over, an optional one is.
+	"""
+	learner = learner or frappe.session.user
+	if learner != frappe.session.user and is_restricted():
+		frappe.throw(_("You can only request your own pathway position"), frappe.PermissionError)
+
+	steps = _pathway_steps(pathway)
+	if not steps:
+		return {"reason": None, "activity": None, "message": "This pathway has no steps."}
+
+	for step in steps:
+		competency = step.competency or frappe.db.get_value(
+			"Sparsh Activity", step.activity, "competency"
+		)
+		if not competency:
+			continue
+
+		# Safety outranks sequence, here as everywhere.
+		if has_blocking_critical_error(learner, competency):
+			return {
+				"reason": REMEDIATION,
+				"activity": _last_critical_activity(learner, competency) or step.activity,
+				"competency": competency,
+				"step": step.step_order,
+				"message": "An unresolved critical error must be worked through before progressing.",
+			}
+
+		state = derive_state(learner, competency)
+		if state in (DEMONSTRATED, MASTERED):
+			continue
+
+		if not step.is_mandatory and state != NOT_STARTED:
+			# An optional step already attempted does not hold the learner up.
+			continue
+
+		suggestion = next_experience(competency, learner)
+		if suggestion.get("activity"):
+			return dict(suggestion, competency=competency, step=step.step_order, pathway=pathway)
+
+	return {
+		"reason": PATHWAY_COMPLETE,
+		"activity": None,
+		"pathway": pathway,
+		"message": "Every step in this pathway has been demonstrated.",
+	}
