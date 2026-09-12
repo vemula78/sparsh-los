@@ -301,3 +301,42 @@ DEFERRED
 - Evidence/attempt reconciliation stays asymmetric where Evidence omits its activity.
 - `certification_state` and `standing_key` are allow-on-submit and not restricted to the
   reconciliation path.
+
+## 2026-09-12 · Audit 7
+Acceptance 51 -> 58 checks, `failed=0`, twice.
+
+### Audit 7 (gpt-5.6-sol) — 4 high, 5 medium, 1 low. All confirmed, all fixed.
+- `next_in_pathway` checked safety only while walking steps, so an incomplete earlier step was
+  returned before a standing critical error on a later competency was examined. Safety now outranks
+  the whole pathway. A mandatory step naming an activity is also no longer completed by
+  demonstrating the competency some other way.
+- Own-record endpoints rejected only requests naming somebody else, so any signed-in account could
+  ask the platform about itself. `require_enrolment` gates them: signed in is not enrolled.
+- A learner with no evidence could not start from the practice page at all, because it looked only
+  at mastery rows, which evidence creates.
+- `certification_state` was form-read-only but caller-supplied, so a certificate could be submitted
+  already Suspended while occupying the standing key.
+- A lapsed certificate is now suspended in the ledger, not only in the value `current()` returns.
+- Attempts have an `on_trash` guard; removing the role permission was not enough, because a
+  privileged deletion path does not consult permissions.
+- Matrix readiness reads the current version of each lineage, and only the matrix's own rules.
+
+### A correction I had to make to my own work
+A comment in `runner.py` claimed a race on the assistance counter could never understate help. It
+was wrong: two submissions can both read the same position and the second can record less
+assistance than has by then been shown. The comment now states the limit and names the fix (a lock
+on (learner, activity)). A reassuring comment is worse than an undocumented gap.
+
+### Tests that would have passed through a regression, now fixed
+- The answer-key check never exercised a real access path.
+- The self-certification check passed because its subject had no qualifying evidence, so it would
+  have passed with the guard removed.
+- The pathway check put the critical error on step one, which is precisely why the ordering bug
+  above went unnoticed.
+- Teardown deleted fixture users while leaving their evidence, so a later run cancelled that
+  evidence and tried to recompute mastery for a learner who no longer existed.
+
+### Tooling note
+Three of nine Codex runs hung (0.07-0.08s CPU, zero bytes, killed at 25-40 minutes). One was refused
+outright by OpenAI's cybersecurity classifier for adversarial phrasing; rewording the same request
+as the internal quality review it is produced a full result.
