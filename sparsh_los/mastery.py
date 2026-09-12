@@ -132,8 +132,14 @@ def _has_open_refresher(learner, competency):
 	programme had already replaced. The time-based path persisted that regression from
 	the start; this is the same rule applied to the other two triggers.
 
-	Refresher Assignment is itself derived — the engine writes it, no role creates one
-	— so reading it here does not make mastery user-writable.
+	This is a real widening of "mastery is derived from Evidence": `Sparsh Reviewer`
+	holds create and write on Refresher Assignment, so a reviewer can assign one over
+	the API and thereby move another learner to Refresh Due and suspend their
+	certificate. That is a deliberate human input to a derived state, not an
+	accident, and it is the same trust a reviewer already has when they reject
+	evidence. It is written down because an earlier version of this comment claimed
+	no role could create an assignment, which was false — and a reassuring comment
+	is worse than a documented gap, because it stops the next person looking.
 	"""
 	return bool(
 		frappe.db.exists(
@@ -173,6 +179,13 @@ def recompute_mastery(learner, competency):
 	"""Create or rewrite the Mastery State document for one pair. Idempotent."""
 	if not (learner and competency):
 		return
+
+	# Before deriving anything: a refresher the learner has already answered stops
+	# holding them at Refresh Due. This runs first so the state computed below sees
+	# the closure rather than the stale assignment.
+	from sparsh_los.refresher import close_satisfied
+
+	close_satisfied(learner, competency)
 
 	rows = _submitted_evidence(learner, competency)
 	name = frappe.db.get_value(

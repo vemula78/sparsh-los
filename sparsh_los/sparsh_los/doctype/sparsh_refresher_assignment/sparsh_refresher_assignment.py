@@ -38,8 +38,13 @@ class SparshRefresherAssignment(Document):
 		recompute_mastery(self.learner, self.competency)
 
 	def after_insert(self):
+		"""Only the event here. `on_update` runs on insert too and owns the recompute.
+
+		Recomputing in both re-read every piece of evidence and rewrote the child table
+		twice for one assignment, which on a cohort-wide supersession is the difference
+		between one pass and three per learner.
+		"""
 		from sparsh_los import events
-		from sparsh_los.mastery import recompute_mastery
 
 		events.emit(
 			events.REFRESHER_ASSIGNED,
@@ -49,4 +54,24 @@ class SparshRefresherAssignment(Document):
 			reference_doctype=self.doctype,
 			reference_name=self.name,
 		)
-		recompute_mastery(self.learner, self.competency)
+
+	def on_trash(self):
+		"""Deleting an open assignment removes the reason for Refresh Due.
+
+		Without this the stored state kept the learner at Refresh Due, and their
+		certificate Suspended, until some unrelated evidence event happened to
+		recompute. Every other input to a derived state here has a symmetric guard.
+		"""
+		if self.status != "Assigned":
+			return
+
+		self.flags.recompute_after_delete = (self.learner, self.competency)
+
+	def after_delete(self):
+		pair = self.flags.get("recompute_after_delete")
+		if not pair:
+			return
+
+		from sparsh_los.mastery import recompute_mastery
+
+		recompute_mastery(*pair)

@@ -134,8 +134,8 @@ def _is_critical(activity, response):
 
 # The evaluator types the programme owner asked to be explicit from the start, so a new
 # activity type does not need a new screen or a change to the learner data model.
-# Only the two the engine can actually perform are dispatched; the rest are declared and
-# routed to a person. Declaring a mode the engine cannot perform and silently scoring it
+# `AUTO_SCORED_MODES` is an allow-list, not a denylist: anything outside it -- an unbuilt
+# mode, an empty field, a value written straight to the column -- goes to a person. Declaring a mode the engine cannot perform and silently scoring it
 # with the deterministic comparison would be the worst of both.
 AUTO_SCORED_MODES = ("Deterministic",)
 NOT_SCORED_MODES = ("Reflection",)
@@ -158,6 +158,19 @@ def evaluate(activity, response):
 
 	mode = activity.evaluation_mode or "Human review"
 	if mode not in AUTO_SCORED_MODES:
+		return "Not Evaluated", 0
+
+	# The rule behind the activity must be validated before the engine scores against
+	# it. This was a convention written in the docs and enforced nowhere: an activity
+	# set Deterministic against a Draft safety-critical rule auto-scored, wrote
+	# Evidence and moved Mastery -- which is exactly "an unvalidated rule as production
+	# logic", the one thing the programme owner ruled out.
+	#
+	# An activity with no rule linked is not scoring against a clinical rule at all
+	# (the non-clinical cross-domain competency is the case that matters), so it is
+	# left alone. A rule that exists but is not Validated stops the scoring.
+	rule = _governing_rule(activity.competency)
+	if rule and frappe.db.get_value("Sparsh Source of Truth Rule", rule, "status") != "Validated":
 		return "Not Evaluated", 0
 
 	accepted = _accepted_responses(activity)

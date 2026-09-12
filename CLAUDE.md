@@ -71,7 +71,9 @@ Seventeen modules over 15 top-level DocTypes and 7 child tables, all prefixed `S
 | `verify.py` | The acceptance harness |
 | `www/practice.py`, `www/queue.py` | Learner page and reviewer queue |
 
-Data flows one way: **Attempt → Evidence → Mastery State → Certification**. Nothing writes backwards.
+Data flows one way: **Attempt → Evidence → Mastery State → Certification**, with one deliberate
+exception: an approved `Sparsh Human Review` writes `critical_error_cleared` back onto submitted
+Evidence. That edge is required by the safety-clearance rule and is the only backward write.
 `Sparsh Evidence.on_submit` / `on_cancel` are the only triggers for `recompute_mastery`, which is
 also the only writer of Mastery State.
 
@@ -91,7 +93,13 @@ proven otherwise.
   record. Demonstrating unaided competence requires a *different* activity.
 - **Nobody judges their own work**, whatever roles they hold — no self-evidence, self-certification,
   self-review or self-answered escalation.
-- **Learners cannot read `Sparsh Activity` or `Sparsh Scenario` at all.** Content reaches them only
+- **No unvalidated rule becomes production logic.** If an activity's competency links a rule
+  that is not `Validated`, the runner refuses to auto-score it and routes to a reviewer. This
+  was documentation-only until an audit showed a Deterministic activity against a Draft
+  safety-critical rule scoring itself and moving Mastery.
+- **Learner-only accounts cannot read `Sparsh Activity` or `Sparsh Scenario` at all.** Reviewers
+  can, and Frappe unions permissions across roles, so a learner who is *also* a reviewer reads
+  them by virtue of the reviewer role — the guarantee is about the learner role, not the person. Content reaches them only
   through `runner.start` / `runner.submit`. A permission level is not enough: a filter on a
   permlevel-1 field works as a prefix oracle, and a child table is its own queryable DocType — which
   is why the hint ladder and critical markers are text fields on Activity, not child tables.

@@ -123,6 +123,65 @@ def on_rule_superseded(rule):
 	return assigned
 
 
+def close_satisfied(learner, competency):
+	"""Close refreshers the learner has already answered with fresh evidence.
+
+	Without this the engine could assign a refresher but never finish one: nothing
+	outside the desk ever set a row to Completed, so Refresh Due -- and the suspended
+	certificate that comes with it -- lasted until a human edited the row by hand. A
+	refresher is short work; an indefinite suspension is not what it is for.
+
+	Satisfied means an independent pass recorded *after* the assignment was made.
+	Evidence the learner already had cannot answer a refresher, or superseded content
+	would close its own refresher the moment it was assigned.
+
+	Written with db.set_value rather than a save on purpose: the controller's on_update
+	recomputes mastery, and this runs from inside recompute_mastery. The event is
+	emitted here instead, so closing this way still shows up in the log.
+	"""
+	from sparsh_los import events
+	from sparsh_los.mastery import _independent_passes, _submitted_evidence
+
+	rows = frappe.get_all(
+		"Sparsh Refresher Assignment",
+		filters={"learner": learner, "competency": competency, "status": "Assigned"},
+		fields=["name", "assigned_on"],
+	)
+	if not rows:
+		return []
+
+	passes = _independent_passes(_submitted_evidence(learner, competency))
+	closed = []
+	for row in rows:
+		if not row.assigned_on:
+			continue
+		fresh = [
+			p
+			for p in passes
+			if frappe.utils.get_datetime(p.recorded_at or p.creation)
+			> frappe.utils.get_datetime(row.assigned_on)
+		]
+		if not fresh:
+			continue
+
+		frappe.db.set_value(
+			"Sparsh Refresher Assignment",
+			row.name,
+			{"status": "Completed", "completed_on": frappe.utils.now_datetime()},
+		)
+		events.emit(
+			events.REFRESHER_COMPLETED,
+			learner=learner,
+			competency=competency,
+			detail="closed by fresh evidence",
+			reference_doctype="Sparsh Refresher Assignment",
+			reference_name=row.name,
+		)
+		closed.append(row.name)
+
+	return closed
+
+
 def on_resource_superseded(resource):
 	"""A learning resource was replaced, so everyone who relied on it should see the new one.
 

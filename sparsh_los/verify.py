@@ -131,6 +131,15 @@ def _reset_competency(competency=None):
 	# An open refresher now holds the competency at Refresh Due, so a stale one left by
 	# an earlier check reads as a regression in the check that follows it.
 	_delete_all("Sparsh Refresher Assignment", {"competency": competency})
+	# Rules too. A Draft rule left linked by an earlier check now correctly stops the
+	# runner auto-scoring, which would read as a regression in the next check rather
+	# than as the leftover fixture it is.
+	if frappe.db.exists("Sparsh Competency", competency):
+		doc = frappe.get_doc("Sparsh Competency", competency)
+		if doc.get("linked_rules"):
+			doc.set("linked_rules", [])
+			doc.save(ignore_permissions=True)
+	_delete_all("Sparsh Source of Truth Rule", {"rule_id": PREFIX + "RULE"})
 	frappe.db.commit()
 
 
@@ -157,6 +166,12 @@ def teardown():
 	_delete_all("Sparsh Activity", {"name": ("like", PREFIX + "%")})
 	_delete_all("Sparsh Competency", {"name": ("in", competencies)})
 	_delete_all("Sparsh Pathway", {"name": PATHWAY})
+	_delete_all("Sparsh Learning Resource", {"resource_id": ("like", PREFIX + "%")})
+	# Events are undeletable outside maintenance by design, which is exactly why the
+	# teardown has to clear them: otherwise every run leaves rows pointing at deleted
+	# fixtures, and the module's claim to delete everything it created stops being true.
+	_delete_all("Sparsh Event", {"learner": ("like", PREFIX.lower() + "%")})
+	_delete_all("Sparsh Event", {"competency": ("in", competencies)})
 	_delete_all("Sparsh Competency Domain", {"name": ("in", [DOMAIN, OTHER_DOMAIN])})
 	_delete_all("Sparsh Source of Truth Rule", {"rule_id": RULE_ID})
 	# Everything belonging to the fixture learners, whatever competency it names.
@@ -169,6 +184,7 @@ def teardown():
 		DUAL_LEARNER,
 		"zzv-fresh@example.invalid",
 		"zzv-stranger@example.invalid",
+		PREFIX + "pathway@example.invalid",
 	)
 	for name in frappe.get_all(
 		"Sparsh Evidence", filters={"learner": ("in", fixture_users)}, pluck="name"
@@ -223,12 +239,12 @@ def setup():
 	frappe.db.commit()
 
 
-def _new_rule(version, supersedes=None):
+def _new_rule(version, supersedes=None, status="Validated"):
 	rule = frappe.new_doc("Sparsh Source of Truth Rule")
 	rule.rule_id = RULE_ID
 	rule.version = version
 	rule.rule_statement = "Verification rule statement."
-	rule.status = "Validated"
+	rule.status = status
 	rule.supersedes = supersedes
 	rule.insert(ignore_permissions=True)
 	return rule
@@ -1160,24 +1176,38 @@ def check_refresher_on_rule_change():
 		f"After the rule changed underneath them the learner is {_state()}",
 	)
 
-	# And completing the refresher gives the competency back, or the state the
-	# assignment caused would never be released.
-	assignment = frappe.get_all(
-		"Sparsh Refresher Assignment",
-		filters={
-			"competency": COMPETENCY,
-			"learner": LEARNER,
-			"trigger_reason": refresher.RULE_CHANGED,
-			"status": "Assigned",
-		},
-		pluck="name",
+	# The engine must be able to close it. Fresh evidence recorded after the assignment
+	# is what answers a refresher; before this held, nothing outside the desk ever set
+	# a row to Completed, so Refresh Due -- and the suspended certificate with it --
+	# lasted until a human edited the row by hand.
+	_new_evidence(ACTIVITY_2, "Pass")
+	_assert(
+		_state() in ("Demonstrated", "Mastered"),
+		f"Fresh evidence did not close the refresher; learner is {_state()}",
 	)
-	_assert(assignment, "No open refresher to complete")
-	done = frappe.get_doc("Sparsh Refresher Assignment", assignment[0])
+	_assert(
+		not frappe.db.exists(
+			"Sparsh Refresher Assignment",
+			{"learner": LEARNER, "competency": COMPETENCY, "status": "Assigned"},
+		),
+		"The refresher stayed open after the learner answered it",
+	)
+
+	# And an explicit completion by a reviewer gives the competency back too, which is
+	# the controller's on_update edge rather than the evidence-driven one above.
+	reopened = refresher.assign(
+		LEARNER, COMPETENCY, refresher.RULE_CHANGED, "Verification: reopened by hand."
+	)
+	_assert(reopened, "Could not reopen a refresher to test explicit completion")
+	_assert(
+		_state() == "Refresh Due",
+		f"A newly assigned refresher did not hold the learner: {_state()}",
+	)
+	done = frappe.get_doc("Sparsh Refresher Assignment", reopened)
 	done.status = "Completed"
 	done.save(ignore_permissions=True)
 	_assert(
-		_state() == "Demonstrated",
+		_state() in ("Demonstrated", "Mastered"),
 		f"Completing the refresher left the learner at {_state()}",
 	)
 	frappe.db.commit()
@@ -1863,6 +1893,7 @@ def check_events_are_recorded_and_hold_no_content():
 
 	secret = "level two"
 	wrong_answer = "zzv unmistakable wrong answer"
+	started_at = frappe.utils.now_datetime()
 	original_user = frappe.session.user
 	try:
 		frappe.set_user(LEARNER)
@@ -1873,10 +1904,28 @@ def check_events_are_recorded_and_hold_no_content():
 	_submit(ACTIVITY_1, secret)
 	frappe.db.commit()
 
+	# The escalation path is the one emit whose detail begins as a whitelisted
+	# argument, so it is the only real risk surface -- and it was not exercised.
+	from sparsh_los import escalation
+
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(LEARNER)
+		escalation.raise_question(
+			f"A question mentioning {secret} and {wrong_answer}", activity=ACTIVITY_1
+		)
+	finally:
+		frappe.set_user(original_user)
+	frappe.db.commit()
+
+	# Every event written during this check, not only the ones that named a learner:
+	# every emit parameter is optional, so a leak that omitted `learner` would have
+	# been invisible to a filtered scan. Every field, not only `detail`, for the
+	# same reason.
 	rows = frappe.get_all(
 		"Sparsh Event",
-		filters={"learner": LEARNER},
-		fields=["event_type", "detail"],
+		filters={"creation": (">", started_at)},
+		fields=["event_type", "detail", "learner", "competency", "activity", "reference_name"],
 	)
 	seen = {r.event_type for r in rows}
 	for required in (
@@ -1887,11 +1936,16 @@ def check_events_are_recorded_and_hold_no_content():
 	):
 		_assert(required in seen, f"No {required} event was recorded; saw {sorted(seen)}")
 
-	# Neither the learner's own words nor the answer key reach the log.
+	_assert(
+		events.ESCALATION_OPENED in {r.event_type for r in rows},
+		"Raising a question recorded no escalation event",
+	)
+
+	# Neither the learner's own words nor the answer key reach the log, in any field.
 	for row in rows:
-		blob = (row.detail or "").lower()
-		_assert(wrong_answer not in blob, f"An event carried the learner's response: {row.detail}")
-		_assert(secret not in blob, f"An event carried the answer key: {row.detail}")
+		blob = " ".join(str(v or "") for v in row.values()).lower()
+		_assert(wrong_answer not in blob, f"An event carried the learner's response: {row}")
+		_assert(secret not in blob, f"An event carried the answer key: {row}")
 
 	# And the log is a log: not writable by hand, even by a System Manager.
 	def hand_written():
@@ -1902,6 +1956,26 @@ def check_events_are_recorded_and_hold_no_content():
 		doc.insert(ignore_permissions=True)
 
 	_raises(hand_written, "An event could be written by hand", expect="engine")
+
+	# And deleting one outside maintenance. _delete_all sets the maintenance flag, so
+	# the on_trash guard was only ever exercised in the mode that permits it --
+	# removing the guard entirely would have failed nothing.
+	existing = frappe.get_all("Sparsh Event", limit=1, pluck="name")
+	_assert(existing, "No event to test deletion against")
+	_raises(
+		lambda: frappe.delete_doc(
+			"Sparsh Event", existing[0], force=True, ignore_permissions=True
+		),
+		"An event could be deleted outside maintenance",
+		expect="log",
+	)
+
+	# Fixture restored: this check leaves ACTIVITY_1 scored, which arms every check
+	# that follows it.
+	activity.reload()
+	activity.evaluation_mode = "Human review"
+	activity.expected_response = None
+	activity.save(ignore_permissions=True)
 	frappe.db.commit()
 
 
@@ -1944,9 +2018,28 @@ def check_superseded_resource_does_not_rewrite_history():
 
 	_new_evidence(ACTIVITY_1, "Pass")
 	_assert(_state() == "Demonstrated", f"Expected Demonstrated, got {_state()}")
-	evidence_before = frappe.get_all(
-		"Sparsh Evidence", filters={"learner": LEARNER, "competency": COMPETENCY}, pluck="name"
+	# Content, not just names. Comparing name lists alone would pass after a regression
+	# that cancelled every row, flipped its outcome, or marked it Rejected -- which is
+	# precisely what "rewriting history" means.
+	evidence_fields = ["name", "outcome", "docstatus", "assistance_level", "human_review_status"]
+	evidence_before = sorted(
+		frappe.get_all(
+			"Sparsh Evidence",
+			filters={"learner": LEARNER, "competency": COMPETENCY},
+			fields=evidence_fields,
+		),
+		key=lambda r: r["name"],
 	)
+
+	# And the certification half of the requirement, which had no fixture at all: the
+	# certificate must be suspended, not deleted or rewritten.
+	certificate = frappe.new_doc("Sparsh Certification Record")
+	certificate.learner = LEARNER
+	certificate.competency = COMPETENCY
+	certificate.certification_status = "Full"
+	certificate.insert(ignore_permissions=True)
+	certificate.submit()
+	frappe.db.commit()
 
 	try:
 		second = _resource(2, supersedes=first.name)
@@ -1966,6 +2059,7 @@ def check_superseded_resource_does_not_rewrite_history():
 				"competency": COMPETENCY,
 				"learner": LEARNER,
 				"trigger_reason": refresher.RESOURCE_CHANGED,
+				"status": "Assigned",
 			},
 			pluck="name",
 		)
@@ -1976,18 +2070,115 @@ def check_superseded_resource_does_not_rewrite_history():
 		)
 
 		# The half that matters most: nothing about the learner's past was rewritten.
-		evidence_after = frappe.get_all(
-			"Sparsh Evidence", filters={"learner": LEARNER, "competency": COMPETENCY}, pluck="name"
+		evidence_after = sorted(
+			frappe.get_all(
+				"Sparsh Evidence",
+				filters={"learner": LEARNER, "competency": COMPETENCY},
+				fields=evidence_fields,
+			),
+			key=lambda r: r["name"],
 		)
 		_assert(
-			sorted(evidence_after) == sorted(evidence_before),
-			"Superseding a resource changed the learner's evidence history",
+			evidence_after == evidence_before,
+			f"Superseding a resource changed the evidence history:\n{evidence_before}\n{evidence_after}",
+		)
+
+		certificate.reload()
+		_assert(
+			certificate.docstatus == 1,
+			"Superseding a resource cancelled the learner's certificate instead of suspending it",
+		)
+		_assert(
+			certificate.certification_state == "Suspended",
+			f"The certificate stood at {certificate.certification_state} after its content was withdrawn",
 		)
 	finally:
 		competency.reload()
 		competency.set("learning_resources", [])
 		competency.save(ignore_permissions=True)
 		_delete_all("Sparsh Refresher Assignment", {"competency": COMPETENCY})
+		for name in frappe.get_all(
+			"Sparsh Learning Resource", filters={"resource_id": PREFIX + "RES"}, pluck="name"
+		):
+			frappe.delete_doc(
+				"Sparsh Learning Resource", name, force=True, ignore_permissions=True
+			)
+		frappe.db.commit()
+
+
+def check_draft_rule_cannot_auto_score():
+	"""An activity whose rule is not Validated goes to a person, whatever its mode.
+
+	"No unvalidated rule becomes production logic" was a convention in the docs and
+	enforced nowhere. An activity set Deterministic against a Draft safety-critical
+	rule auto-scored, wrote Evidence and moved Mastery -- the programme owner's single
+	hardest constraint, defeated by a field nobody had to change.
+	"""
+	from sparsh_los import runner
+
+	_reset_competency()
+	_delete_all("Sparsh Source of Truth Rule", {"rule_id": PREFIX + "RULE"})
+	frappe.db.commit()
+	rule = _new_rule(1, status="Draft")
+	competency = frappe.get_doc("Sparsh Competency", COMPETENCY)
+	competency.set("linked_rules", [])
+	competency.append("linked_rules", {"rule": rule.name})
+	competency.save(ignore_permissions=True)
+
+	activity = frappe.get_doc("Sparsh Activity", ACTIVITY_1)
+	original_mode, original_expected = activity.evaluation_mode, activity.expected_response
+	activity.evaluation_mode = "Deterministic"
+	activity.expected_response = "level two"
+	activity.save(ignore_permissions=True)
+	frappe.db.commit()
+
+	try:
+		_assert(
+			frappe.db.get_value("Sparsh Source of Truth Rule", rule.name, "status") == "Draft",
+			"The fixture rule is not Draft; this check proves nothing",
+		)
+		result = _submit(ACTIVITY_1, "level two")
+		_assert(
+			result["outcome"] == "Not Evaluated",
+			f"A Draft rule auto-scored the learner: {result['outcome']}",
+		)
+		_assert(
+			_state() not in ("Demonstrated", "Mastered"),
+			f"A Draft rule moved the learner to {_state()}",
+		)
+
+		# Validate the rule and the same submission scores. Without this the check
+		# would also pass if the runner had simply stopped scoring anything.
+		frappe.db.set_value("Sparsh Source of Truth Rule", rule.name, "status", "Validated")
+		frappe.db.commit()
+		scored = _submit(ACTIVITY_1, "level two")
+		_assert(
+			scored["outcome"] == "Pass",
+			f"A Validated rule did not score: {scored['outcome']}",
+		)
+
+		# And the programme report must say so rather than reporting a pilot is safe.
+		frappe.db.set_value("Sparsh Source of Truth Rule", rule.name, "status", "Draft")
+		frappe.db.commit()
+		from sparsh_los.seed import programme_readiness
+
+		report = programme_readiness()
+		_assert(
+			ACTIVITY_1 in report["auto_scoring_against_unvalidated_rules"],
+			"The readiness report did not name the activity scoring against a Draft rule",
+		)
+		_assert(
+			not report["can_pilot_with_human_review"],
+			"The report called a pilot safe while an activity scored against a Draft rule",
+		)
+	finally:
+		activity.reload()
+		activity.evaluation_mode = original_mode
+		activity.expected_response = original_expected
+		activity.save(ignore_permissions=True)
+		competency.reload()
+		competency.set("linked_rules", [])
+		competency.save(ignore_permissions=True)
 		frappe.db.commit()
 
 
@@ -2005,11 +2196,22 @@ def check_unbuilt_evaluator_modes_fall_to_a_person():
 	activity = frappe.get_doc("Sparsh Activity", ACTIVITY_1)
 	original_mode = activity.evaluation_mode
 	original_expected = activity.expected_response
+	original_markers = activity.critical_markers
+
+	# Every mode the Select offers except the auto-scored ones, read from the DocType
+	# rather than from the constants under test. Iterating the module's own
+	# AWAITING_IMPLEMENTATION_MODES meant that moving a mode into AUTO_SCORED_MODES
+	# silently removed it from the check -- the check would stop testing exactly the
+	# change that most needs testing.
+	declared = frappe.get_meta("Sparsh Activity").get_field("evaluation_mode").options.split("\n")
+	must_not_score = [m.strip() for m in declared if m.strip() and m.strip() not in runner.AUTO_SCORED_MODES]
+	_assert(len(must_not_score) >= 4, f"Only {must_not_score} modes to check; the Select looks wrong")
+
 	try:
 		# An exact match against the answer key, so anything that scored at all
 		# would score this a Pass.
 		activity.expected_response = "level two"
-		for mode in runner.AWAITING_IMPLEMENTATION_MODES + runner.NOT_SCORED_MODES:
+		for mode in must_not_score:
 			activity.evaluation_mode = mode
 			activity.save(ignore_permissions=True)
 			frappe.db.commit()
@@ -2039,6 +2241,9 @@ def check_unbuilt_evaluator_modes_fall_to_a_person():
 		activity.reload()
 		activity.evaluation_mode = original_mode
 		activity.expected_response = original_expected
+		# Restored too: leaving a live critical marker on ACTIVITY_1 armed every check
+		# that ran after this one.
+		activity.critical_markers = original_markers
 		activity.save(ignore_permissions=True)
 		frappe.db.commit()
 
@@ -2641,6 +2846,7 @@ CHECKS = (
 	("rejected_evidence_does_not_count", check_rejected_evidence_does_not_count),
 	("pathway_walks_in_order", check_pathway_walks_in_order),
 	("pathway_does_not_hand_over_a_gated_activity", check_pathway_does_not_hand_over_a_gated_activity),
+	("draft_rule_cannot_auto_score", check_draft_rule_cannot_auto_score),
 	("unbuilt_evaluator_modes_fall_to_a_person", check_unbuilt_evaluator_modes_fall_to_a_person),
 	("superseded_resource_does_not_rewrite_history", check_superseded_resource_does_not_rewrite_history),
 	("events_are_recorded_and_hold_no_content", check_events_are_recorded_and_hold_no_content),

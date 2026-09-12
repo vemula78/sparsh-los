@@ -28,6 +28,16 @@ DISPOSITIONS = (
 	"Curriculum change",
 )
 
+# The escalation reasons the Select offers. Mirrored here because the event log must
+# never carry a value this module has not seen before.
+REASONS = (
+	"Outside rule scope",
+	"Conflicting rules",
+	"Safety critical",
+	"Learner disagreement",
+	"Unknown",
+)
+
 # Dispositions that say the programme, not the learner, needs to change.
 PROGRAMME_DISPOSITIONS = ("Source-of-truth update", "Curriculum change")
 
@@ -35,11 +45,17 @@ PROGRAMME_DISPOSITIONS = ("Source-of-truth update", "Curriculum change")
 def _emit_opened(question):
 	from sparsh_los import events
 
+	# `escalation_reason` reaches this from the whitelisted `raise_question`, so it is
+	# the one detail string on any emit path that starts as caller text. Today a Select
+	# field rejects anything unexpected, but the log's guarantee must not rest on a
+	# field type somebody may widen later: an unrecognised reason is recorded as
+	# "other" rather than passed through.
+	reason = question.escalation_reason if question.escalation_reason in REASONS else "other"
 	events.emit(
 		events.ESCALATION_OPENED,
 		learner=question.learner,
 		activity=question.activity,
-		detail=f"reason={question.escalation_reason}",
+		detail=f"reason={reason}",
 		reference_doctype=question.doctype,
 		reference_name=question.name,
 	)

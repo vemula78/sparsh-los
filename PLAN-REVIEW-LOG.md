@@ -396,3 +396,93 @@ learner anyway: ZZV-ACT-GATED`, 58/1. The fix was restored and 59/59 re-confirme
 
 Code changed after this audit, so audit 8 does not cover the fixed version. Audit 9 (external,
 outside this reasoning lineage) is the re-audit.
+
+## Audits 9 and 10 — 13-Sep-2026
+
+Two reviews of the same day's work, from different vantage points.
+
+**Audit 9** — a Claude agent against `HEAD` (`345a80c`), non-independent: it shares the build's
+reasoning lineage. Codex failed a fifth time in eleven runs (ran, searched the tree, exited
+without writing a report).
+
+**Audit 10** — run by the programme owner outside this session against the `51fa385` bundle, so
+it predates the day's four commits. Genuinely independent. Several of its findings were already
+closed by audit 8; those are marked as such below rather than double-counted.
+
+### The blocker — audit 10, and nothing before it saw this
+
+**Draft rules did not prevent automatic scoring.** `CLAUDE.md` said a rule must be Validated
+before the engine scores against it, and the programme owner's reply is explicit that no
+unvalidated rule becomes production logic. Neither was enforced anywhere. `_governing_rule`
+excluded only `Superseded`; `evaluate` never consulted rule status. An activity set
+Deterministic against a Draft **safety-critical** rule auto-scored, wrote Evidence and moved
+Mastery. Seven prior audits and the whole harness missed it, because every fixture used a
+Validated rule.
+
+Fixed: the runner refuses to auto-score when the competency's governing rule is not Validated,
+and routes to a reviewer. An activity with no rule linked is untouched — that is the
+non-clinical cross-domain case, and blocking it would break domain-agnosticism.
+
+`programme_readiness` was wrong in the same direction. `can_pilot_with_human_review` was
+`not without_activities` — it answered "does every competency have something to do?" and was
+then quoted, by me, to the user as "a pilot can run now". It now also requires that nothing can
+auto-score against an unvalidated rule, and names the activities that would.
+
+Proved by reverting: removing the gate alone gives
+`FAIL draft_rule_cannot_auto_score: A Draft rule auto-scored the learner: Pass`.
+
+### Audit 9 — confirmed and fixed
+
+| # | Finding | Disposition |
+|---|---|---|
+| 3a | Refresh Due was a trap: nothing in the engine ever set an assignment to Completed, so a suspended certificate lasted until a human edited the row | Fixed — `refresher.close_satisfied` closes on an independent pass recorded after the assignment |
+| 3c | A comment claimed "no role creates an assignment" while `Sparsh Reviewer` holds create and write — the forbidden class of comment, defending a genuinely weakened invariant | Fixed — comment now states the widening plainly |
+| 3d | No `on_trash`: deleting an open assignment stranded the state at Refresh Due | Fixed |
+| 3e | `after_insert` and `on_update` both recomputed on insert; three full recomputes per assignment | Fixed — `on_update` owns it |
+| 4 | `escalation_reason` is the one `detail` string that begins as a whitelisted argument; the guarantee rested on the field being a Select | Fixed — unrecognised reasons record as "other" |
+| 4a | Events and learning resources were never torn down | Fixed |
+| 3g, 6a–6e | Trigger-reason breadth, inline cohort-wide suspension, re-supersession, two Current versions | Deferred — real, none safety-bearing; 6a matters at cohort scale and is noted for the pilot |
+
+### Audit 9 — harness
+
+All three checks added earlier that day were weaker than their docstrings claimed.
+
+- The evaluator check iterated *the constants it was testing*, so promoting a mode into
+  `AUTO_SCORED_MODES` would have silently removed it from the check. Now reads the Select from
+  the DocType meta and subtracts the auto-scored set.
+- It also left a live critical marker on `ACTIVITY_1` for every later check.
+- The resource check compared evidence *names*, so a regression that cancelled every row or
+  marked it Rejected would have passed the assertion its own docstring called "the half that
+  matters most". Now compares content. The certification half had no fixture at all; now it does.
+- The event check read one field, filtered to one learner, and never exercised the single emit
+  whose `detail` starts as caller text. All three closed.
+
+### Audit 10 — already closed by audit 8
+
+Ungated `raise_question`, `matrix_status`, `case_pack_status`, `certificate_detail`, `current`;
+the `critical_errors`/`critical_markers` dead assertion; `_raises` accepting any
+`ValidationError`; the unenrolled-user check omitting the ungated surface; `next_in_pathway`
+overwriting a prerequisite block; certification counting rejected evidence; the refresher
+completion path. Audit 10 reviewed the morning's bundle and could not have seen those fixes.
+
+### Audit 10 — accepted corrections to the documentation
+
+- "Learners cannot read Activity at all" was imprecise: Frappe unions permissions across roles,
+  so a learner who is also a reviewer reads it via the reviewer role. `CLAUDE.md` now says
+  learner-*only* accounts.
+- The one-way flow claim was incomplete: an approved Human Review writes
+  `critical_error_cleared` back onto submitted Evidence. Now stated as the single deliberate
+  backward edge.
+- `MIN_CHECKS` is real but lives in `scripts/install_verify.sh`, which was not in the bundle.
+
+### Audit 10 — still open
+
+Dual-role Attempt forgery (§2.3), orchestrator counting assisted/rejected passes as completed
+activities outside the pathway path (§4.3), escalation activity/attempt not reconciled (§4.7),
+`supersedes` dereference (§4.9), unbounded `days` (§4.10), and the remaining harness items
+(§3.8 constraint probe accepting any exception, §3.13 global `>= 1` assertions). Not yet
+adjudicated — recorded here so they are not lost.
+
+### Acceptance
+
+`sparsh_los.verify.run` — **63 passed, 0 failed**. `MIN_CHECKS` 63.

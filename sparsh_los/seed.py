@@ -237,6 +237,26 @@ def programme_readiness():
 	matrix = _matrix_status()
 	cases = _case_pack_status()
 
+	# Activities that would score themselves against a rule nobody has validated. The
+	# runner now refuses these at evaluation time; naming them here is how the
+	# programme owner sees the gap rather than discovering it as silent human review.
+	auto_scoring_unvalidated = []
+	for row in frappe.get_all(
+		"Sparsh Activity",
+		filters={"evaluation_mode": "Deterministic"},
+		fields=["name", "competency"],
+	):
+		rules = frappe.get_all(
+			"Sparsh Competency Rule Link", filters={"parent": row.competency}, pluck="rule"
+		)
+		unvalidated = [
+			r
+			for r in rules
+			if frappe.db.get_value("Sparsh Source of Truth Rule", r, "status") != "Validated"
+		]
+		if rules and len(unvalidated) == len(rules):
+			auto_scoring_unvalidated.append(row.name)
+
 	competencies = frappe.get_all(
 		"Sparsh Competency", fields=["name", "competency_name"], order_by="name asc"
 	)
@@ -275,5 +295,10 @@ def programme_readiness():
 		"competencies_without_activities": without_activities,
 		"competencies_without_rules": without_rules,
 		"blocking": blocking,
-		"can_pilot_with_human_review": not without_activities,
+		# A pilot is only safe if nothing can auto-score against an unvalidated rule.
+		# This used to report `not without_activities` alone, which answered "does every
+		# competency have something to do?" and was then quoted as "a pilot can run
+		# now" -- a stronger claim than the data supported.
+		"can_pilot_with_human_review": (not without_activities) and not auto_scoring_unvalidated,
+		"auto_scoring_against_unvalidated_rules": auto_scoring_unvalidated,
 	}
