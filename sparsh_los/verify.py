@@ -2021,6 +2021,29 @@ def check_certificate_shows_its_working():
 	frappe.db.commit()
 
 
+def check_supervisor_sees_why_someone_is_stuck():
+	"""'Who is stuck' is only useful with 'and why'."""
+	from sparsh_los import dashboard
+
+	_reset_competency()
+	# Three assisted passes: competent with help, not yet unaided.
+	for _ in range(3):
+		_new_evidence(ACTIVITY_1, "Pass", assistance_level=2)
+
+	_assert(_state() == "Practising", f"Expected Practising, got {_state()}")
+
+	view = dashboard.supervisor_view(competency=COMPETENCY)
+	row = next((r for r in view["stuck"] if r["learner"] == LEARNER), None)
+	_assert(row, "A learner with three assisted passes is not shown as stuck")
+	_assert(row.get("reason"), "The stuck row gives no reason")
+	_assert(
+		row["reason"] == "Passing only with help",
+		f"The reason was {row['reason']}, expected 'Passing only with help'",
+	)
+	_assert(row["assisted_passes"] >= 3, "The assisted passes were not counted")
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -2089,6 +2112,7 @@ CHECKS = (
 	("certification_standing_is_not_editable", check_certification_standing_is_not_editable),
 	("refresher_reaches_the_learner", check_refresher_reaches_the_learner),
 	("certificate_shows_its_working", check_certificate_shows_its_working),
+	("supervisor_sees_why_someone_is_stuck", check_supervisor_sees_why_someone_is_stuck),
 	("cleanup", check_cleanup),
 )
 

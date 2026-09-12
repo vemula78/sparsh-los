@@ -89,9 +89,42 @@ def supervisor_view(competency=None):
 	# Who is ready to progress.
 	ready = [s for s in states if s.state in CERTIFIABLE]
 
-	# Who is stuck: practising with repeated evidence and nothing demonstrated. The
-	# threshold is deliberately low and deliberately visible, not hidden in a score.
-	stuck = [s for s in states if s.state == PRACTISING and (s.evidence_count or 0) >= 3]
+	# Who is stuck, and why. A supervisor asked "who is stuck" needs to know what to
+	# do about it, so each row carries the reason rather than a threshold nobody can
+	# see. Three attempts at Practising is deliberately low: catching someone early is
+	# the point.
+	stuck = []
+	for row in states:
+		if row.state != PRACTISING or (row.evidence_count or 0) < 3:
+			continue
+
+		assisted = frappe.db.count(
+			"Sparsh Evidence",
+			{
+				"learner": row.learner,
+				"competency": row.competency,
+				"docstatus": 1,
+				"outcome": "Pass",
+				"assistance_level": (">", 0),
+			},
+		)
+		failures = frappe.db.count(
+			"Sparsh Evidence",
+			{
+				"learner": row.learner,
+				"competency": row.competency,
+				"docstatus": 1,
+				"outcome": "Fail",
+			},
+		)
+		reason = (
+			"Passing only with help"
+			if assisted and not failures
+			else "Repeated failures"
+			if failures and not assisted
+			else "Mixed results without an unaided pass"
+		)
+		stuck.append(dict(row, reason=reason, assisted_passes=assisted, failures=failures))
 
 	# Where critical safety errors are occurring.
 	critical = frappe.get_all(
