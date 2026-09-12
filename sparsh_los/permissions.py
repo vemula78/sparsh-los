@@ -25,6 +25,11 @@ LEARNER_SCOPED = {
 UNRESTRICTED_ROLES = {"System Manager", "Sparsh Reviewer", "Administrator"}
 
 
+def is_restricted(user=None):
+	"""Public wrapper: True when the session belongs to a learner and nothing more."""
+	return _is_restricted(user or frappe.session.user)
+
+
 def _is_restricted(user):
 	"""True when the user is a learner and nothing more."""
 	if not user or user == "Administrator":

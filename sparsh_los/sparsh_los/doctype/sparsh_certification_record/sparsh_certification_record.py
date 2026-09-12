@@ -12,6 +12,18 @@ CERTIFIABLE_STATES = ("Demonstrated", "Mastered")
 
 class SparshCertificationRecord(Document):
 	def validate(self):
+		# Attribution is a fact about who certified, not a field the caller may choose.
+		self.certified_by = frappe.session.user
+		if not self.certified_on:
+			self.certified_on = frappe.utils.now_datetime()
+
+		if self.certification_status == "Revoked":
+			# Revocation must stay available precisely when competence has regressed.
+			# Requiring Demonstrated to revoke would lock the record open after a
+			# critical error, which is the opposite of what the gate is for.
+			self.derived_state = derive_state(self.learner, self.competency)
+			return
+
 		if has_blocking_critical_error(self.learner, self.competency):
 			frappe.throw(
 				_("An unresolved critical error blocks certification for this competency"),

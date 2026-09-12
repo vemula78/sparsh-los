@@ -13,6 +13,7 @@ No patient data, no real learner data, no network access.
 
 import re
 import sys
+import traceback
 
 import frappe
 
@@ -42,8 +43,12 @@ def _check(name, fn):
 		print(f"PASS {name}")
 	except Exception as exc:  # noqa: BLE001 - the harness reports, it does not handle
 		frappe.db.rollback()
-		results.append((name, False, str(exc)))
-		print(f"FAIL {name}: {exc}")
+		# Some frappe exceptions stringify to nothing, which makes a failure unreadable.
+		detail = str(exc).strip() or type(exc).__name__
+		results.append((name, False, detail))
+		print(f"FAIL {name}: {detail}")
+		print(traceback.format_exc().strip().splitlines()[-4:][0])
+		print(traceback.format_exc().strip().splitlines()[-2])
 
 
 def _assert(condition, message):
@@ -320,6 +325,9 @@ def check_no_domain_strings():
 
 
 def _make_learner(email):
+	if frappe.db.exists("User", email):
+		return frappe.get_doc("User", email)
+
 	user = frappe.new_doc("User")
 	user.email = email
 	user.first_name = "Verification"
@@ -397,6 +405,107 @@ def check_learner_row_scope():
 	frappe.db.commit()
 
 
+def check_learner_cannot_escape_scope():
+	"""Authenticate as a learner and try the real access paths."""
+	_make_learner(TEST_LEARNER)
+	_make_learner(OTHER_LEARNER)
+	frappe.db.commit()
+
+	# An attempt owned by somebody else.
+	foreign = _new_attempt(None, outcome="Pass")
+	frappe.db.commit()
+
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+
+		visible = frappe.get_list(
+			"Sparsh Attempt", filters={"name": foreign.name}, ignore_permissions=False
+		)
+		_assert(not visible, "get_list exposed another learner's attempt")
+
+		from frappe.client import get_value as client_get_value
+
+		try:
+			leaked = client_get_value("Sparsh Attempt", "outcome", {"name": foreign.name})
+		except frappe.PermissionError:
+			leaked = None
+		_assert(not leaked, "frappe.client.get_value exposed another learner's attempt")
+
+		# Filing under another learner's name is refused outright: the has_permission
+		# veto runs before before_insert, so it never reaches the field correction.
+		def file_for_another():
+			doc = frappe.new_doc("Sparsh Attempt")
+			doc.learner = OTHER_LEARNER
+			doc.activity = ACTIVITY_1
+			doc.hint_level_used = 0
+			doc.insert()
+
+		try:
+			file_for_another()
+			raise AssertionError("A learner filed an attempt for another learner")
+		except frappe.PermissionError:
+			pass
+
+		# Their own attempt is accepted, but they do not get to grade it.
+		own = frappe.new_doc("Sparsh Attempt")
+		own.learner = TEST_LEARNER
+		own.activity = ACTIVITY_1
+		own.hint_level_used = 0
+		own.outcome = "Pass"
+		own.critical_error = 1
+		own.insert()
+		_assert(own.outcome == "Not Evaluated", "A learner graded their own attempt")
+		_assert(not own.critical_error, "A learner set their own critical_error flag")
+
+		def make_evidence():
+			doc = frappe.new_doc("Sparsh Evidence")
+			doc.learner = TEST_LEARNER
+			doc.competency = COMPETENCY
+			doc.activity = ACTIVITY_1
+			doc.activity_version = 1
+			doc.outcome = "Pass"
+			doc.assistance_level = 0
+			doc.insert()
+
+		try:
+			make_evidence()
+			raise AssertionError("A learner created Evidence")
+		except frappe.PermissionError:
+			pass
+	finally:
+		frappe.set_user(original_user)
+
+	frappe.db.rollback()
+	frappe.db.commit()
+
+
+def check_mastery_requires_distinct_activities():
+	"""Two passes on one activity is not mastery; two on distinct activities is."""
+	_new_evidence(ACTIVITY_1, "Pass")
+	_assert(_state() == "Demonstrated", f"One pass gave {_state()}, expected Demonstrated")
+
+	_new_evidence(ACTIVITY_1, "Pass")
+	_assert(
+		_state() == "Demonstrated",
+		f"Two passes on the same activity gave {_state()}, expected Demonstrated",
+	)
+
+	_new_evidence(ACTIVITY_2, "Pass")
+	_assert(_state() == "Mastered", f"Two distinct activities gave {_state()}, expected Mastered")
+	frappe.db.commit()
+
+
+def check_evidence_activity_must_match_competency():
+	"""An activity cannot credit a competency it does not belong to."""
+
+	def cross_credit():
+		_new_evidence(ACTIVITY_1, "Pass", competency=COMPETENCY_2, submit=False)
+
+	_raises(cross_credit, "Evidence credited a competency the activity does not belong to")
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -423,6 +532,9 @@ CHECKS = (
 	("no_domain_strings", check_no_domain_strings),
 	("permission_model", check_permission_model),
 	("learner_row_scope", check_learner_row_scope),
+	("learner_cannot_escape_scope", check_learner_cannot_escape_scope),
+	("mastery_requires_distinct_activities", check_mastery_requires_distinct_activities),
+	("evidence_activity_must_match_competency", check_evidence_activity_must_match_competency),
 	("cleanup", check_cleanup),
 )
 

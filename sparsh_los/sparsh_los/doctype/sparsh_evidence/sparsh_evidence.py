@@ -17,9 +17,27 @@ class SparshEvidence(Document):
 			frappe.throw(_("Evidence carrying a critical error cannot record a passing outcome"))
 
 		self._reconcile_with_attempt()
+		self._validate_activity_competency()
 
 		if not self.recorded_at:
 			self.recorded_at = frappe.utils.now_datetime()
+
+	def _validate_activity_competency(self):
+		"""Credit only the competency the activity actually belongs to.
+
+		derive_state counts distinct activities, so without this two passes on
+		activities from unrelated competencies could establish mastery of a third.
+		"""
+		if not (self.activity and self.competency):
+			return
+
+		owner_competency = frappe.db.get_value("Sparsh Activity", self.activity, "competency")
+		if owner_competency and owner_competency != self.competency:
+			frappe.throw(
+				_("Activity {0} belongs to competency {1}, not {2}").format(
+					self.activity, owner_competency, self.competency
+				)
+			)
 
 	def _reconcile_with_attempt(self):
 		"""Evidence may not contradict the attempt it cites.

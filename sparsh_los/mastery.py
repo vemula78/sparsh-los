@@ -42,7 +42,9 @@ def _submitted_evidence(learner, competency):
 def _sort_key(row):
 	# Order by `creation` alone. It is assigned by the database and cannot be supplied
 	# by a caller, so ordering cannot be manipulated by backdating `recorded_at`.
-	return row.creation
+	# `name` breaks ties: identical microsecond timestamps are possible under
+	# concurrency, and a tie must not silently read as "the critical error was answered".
+	return (row.creation, row.name)
 
 
 def _independent_passes(rows):

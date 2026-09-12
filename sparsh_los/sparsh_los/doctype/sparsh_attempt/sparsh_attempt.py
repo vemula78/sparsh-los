@@ -5,9 +5,11 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 
+from sparsh_los.permissions import is_restricted
+
 
 class SparshAttempt(Document):
-	def before_insert(self):
+	def _snapshot_rule_version(self):
 		# Snapshot the rule version once, at creation. Never fetch_from: the historical
 		# version an attempt was judged against must not be rewritten later.
 		if self.rule:
@@ -16,6 +18,23 @@ class SparshAttempt(Document):
 			)
 		else:
 			self.rule_version = 0
+
+	def before_insert(self):
+		self._apply_learner_limits()
+		self._snapshot_rule_version()
+
+	def _apply_learner_limits(self):
+		"""A learner may record an attempt, not adjudicate it.
+
+		Without this a learner can post outcome=Pass, critical_error=0 for themselves
+		or file an attempt under another learner's name.
+		"""
+		if not is_restricted():
+			return
+
+		self.learner = frappe.session.user
+		self.outcome = "Not Evaluated"
+		self.critical_error = 0
 
 	def validate(self):
 		if self.hint_level_used is None or self.hint_level_used < 0 or self.hint_level_used > 4:
