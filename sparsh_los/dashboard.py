@@ -176,3 +176,75 @@ def competency_heatmap():
 		grid.setdefault(row.learner, {})[row.competency] = row.state
 
 	return {"competencies": competencies, "rows": grid}
+
+
+@frappe.whitelist()
+def programme_summary(days=30):
+	"""The paragraph a programme manager should be able to read at a glance.
+
+	Section 18 gives the shape: how many are enrolled, how many are active, how many
+	are ready, how many need remediation, how many await a person, and what the most
+	common gap is. Every figure is counted from evidence at read time, so the summary
+	cannot drift from what it claims to summarise.
+	"""
+	_require_supervisor()
+
+	days = int(days)
+	since = frappe.utils.add_days(frappe.utils.now_datetime(), -days)
+
+	learners = {
+		row.name
+		for row in frappe.get_all(
+			"Has Role", filters={"role": "Sparsh Learner", "parenttype": "User"}, fields=["parent as name"]
+		)
+	}
+
+	active = {
+		row.learner
+		for row in frappe.get_all(
+			"Sparsh Attempt", filters={"creation": (">", since)}, fields=["learner"]
+		)
+	}
+
+	states = _cohort_states()
+	ready, remediation = set(), set()
+	for row in states:
+		if row.state in CERTIFIABLE:
+			ready.add(row.learner)
+		elif row.state == PRACTISING:
+			remediation.add(row.learner)
+
+	awaiting_person = frappe.db.count("Sparsh Attempt", {"outcome": "Not Evaluated"})
+	open_questions = frappe.db.count(
+		"Sparsh Escalation Question", {"status": ("in", ("Open", "Routed to Human"))}
+	)
+
+	# The most common gap: the competency where the most learners are stuck short of
+	# demonstrating it. Named, because "most common gap" is what changes a curriculum.
+	gaps = {}
+	for row in states:
+		if row.state not in CERTIFIABLE:
+			gaps[row.competency] = gaps.get(row.competency, 0) + 1
+	most_common_gap = max(gaps.items(), key=lambda kv: kv[1])[0] if gaps else None
+
+	certified = {
+		row.learner
+		for row in frappe.get_all(
+			"Sparsh Certification Record",
+			filters={"docstatus": 1, "certification_state": "Active"},
+			fields=["learner"],
+		)
+	}
+
+	return {
+		"period_days": days,
+		"enrolled": len(learners),
+		"active_in_period": len(active & learners) if learners else len(active),
+		"certification_ready": len(ready),
+		"require_remediation": len(remediation),
+		"attempts_awaiting_a_person": awaiting_person,
+		"open_questions": open_questions,
+		"certified": len(certified),
+		"most_common_gap": most_common_gap,
+		"gaps": dict(sorted(gaps.items(), key=lambda kv: -kv[1])),
+	}

@@ -2044,6 +2044,45 @@ def check_supervisor_sees_why_someone_is_stuck():
 	frappe.db.commit()
 
 
+def check_programme_summary_counts_from_evidence():
+	"""The summary is counted at read time, so it cannot drift from the evidence."""
+	from sparsh_los import dashboard
+
+	_reset_competency()
+	_new_evidence(ACTIVITY_1, "Pass")
+	frappe.db.commit()
+
+	summary = dashboard.programme_summary()
+	_assert(summary["certification_ready"] >= 1, "A demonstrated learner is not counted as ready")
+	_assert("most_common_gap" in summary, "The summary names no most-common gap")
+	_assert(summary["period_days"] == 30, "The default period is not 30 days")
+
+	# A competency short of demonstration shows up as a gap.
+	# No activity: the provenance rule applies to unaided passes, not to a partial.
+	_new_evidence(None, "Partial", competency=COMPETENCY_2, assistance_level=1)
+	frappe.db.commit()
+	summary = dashboard.programme_summary()
+	_assert(
+		COMPETENCY_2 in summary["gaps"],
+		f"A competency short of demonstration is not a gap: {summary['gaps']}",
+	)
+
+	# It is a supervisor view.
+	_make_learner(TEST_LEARNER)
+	frappe.db.commit()
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+		try:
+			dashboard.programme_summary()
+			raise AssertionError("A learner read the programme summary")
+		except frappe.PermissionError:
+			pass
+	finally:
+		frappe.set_user(original_user)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -2113,6 +2152,7 @@ CHECKS = (
 	("refresher_reaches_the_learner", check_refresher_reaches_the_learner),
 	("certificate_shows_its_working", check_certificate_shows_its_working),
 	("supervisor_sees_why_someone_is_stuck", check_supervisor_sees_why_someone_is_stuck),
+	("programme_summary_counts_from_evidence", check_programme_summary_counts_from_evidence),
 	("cleanup", check_cleanup),
 )
 
