@@ -47,6 +47,12 @@ def learner_view(learner=None):
 			fields=["name", "question_text", "status", "raised_at"],
 			order_by="creation asc",
 		),
+		"refreshers": frappe.get_all(
+			"Sparsh Refresher Assignment",
+			filters={"learner": learner, "status": "Assigned"},
+			fields=["name", "competency", "trigger_reason", "detail", "assigned_on"],
+			order_by="creation asc",
+		),
 		"certifications": frappe.get_all(
 			"Sparsh Certification Record",
 			filters={"learner": learner, "docstatus": 1},

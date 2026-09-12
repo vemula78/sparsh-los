@@ -26,6 +26,7 @@ from sparsh_los.mastery import (
 
 # Why a learner is being given this next, in the order the reasons are checked.
 REMEDIATION = "remediation"
+REFRESHER = "refresher"
 PREREQUISITE = "prerequisite"
 PRACTICE = "practice"
 CONSOLIDATION = "consolidation"
@@ -113,6 +114,25 @@ def next_experience(competency, learner=None):
 			"activity": activity,
 			"state": state,
 			"message": "An unresolved critical error must be worked through before progressing.",
+		}
+
+	# An assigned refresher outranks "nothing outstanding": the whole point of a
+	# refresher is that a competence already demonstrated needs revisiting.
+	refresher = frappe.db.get_value(
+		"Sparsh Refresher Assignment",
+		{"learner": learner, "competency": competency, "status": "Assigned"},
+		["name", "trigger_reason", "detail"],
+		as_dict=True,
+	)
+	if refresher:
+		return {
+			"reason": REFRESHER,
+			"activity": activities[0]["name"],
+			"title": activities[0]["title"],
+			"state": state,
+			"refresher": refresher.name,
+			"trigger": refresher.trigger_reason,
+			"message": refresher.detail,
 		}
 
 	if state == MASTERED:

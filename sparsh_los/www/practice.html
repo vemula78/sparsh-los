@@ -29,6 +29,7 @@
 	<div class="sp-task">
 		<div class="sp-eyebrow">
 			{% if next_up.reason == "remediation" %}Working through an unsafe response
+			{% elif next_up.reason == "refresher" %}Keeping this current
 			{% elif next_up.reason == "consolidation" %}Consolidating
 			{% else %}Today's task{% endif %}
 		</div>
@@ -45,6 +46,22 @@
 	</div>
 	{% else %}
 	<p class="sp-empty">Nothing is waiting for you right now.</p>
+	{% endif %}
+
+	{% if view.refreshers %}
+	<h3>Keeping current</h3>
+	<table class="sp-states">
+		<thead><tr><th>Competency</th><th>Why</th><th>Assigned</th></tr></thead>
+		<tbody>
+		{% for row in view.refreshers %}
+			<tr>
+				<td>{{ row.competency }}</td>
+				<td>{{ row.trigger_reason }}</td>
+				<td>{{ frappe.utils.format_datetime(row.assigned_on, "dd-MMM-yyyy") if row.assigned_on else "—" }}</td>
+			</tr>
+		{% endfor %}
+		</tbody>
+	</table>
 	{% endif %}
 
 	<h3>What you have shown</h3>

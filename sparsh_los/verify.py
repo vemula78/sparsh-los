@@ -1938,6 +1938,45 @@ def check_certification_standing_is_not_editable():
 	frappe.db.commit()
 
 
+def check_refresher_reaches_the_learner():
+	"""An assigned refresher is offered, and shown on the learner's own page."""
+	from sparsh_los import dashboard, orchestrator, refresher
+	from sparsh_los.www import practice
+
+	_reset_competency()
+	_delete_all("Sparsh Refresher Assignment", {"competency": COMPETENCY})
+	_new_evidence(ACTIVITY_1, "Pass")
+	_new_evidence(ACTIVITY_2, "Pass")
+	_assert(_state() == "Mastered", f"Expected Mastered, got {_state()}")
+
+	# Mastered with nothing assigned: nothing outstanding.
+	quiet = orchestrator.next_experience(COMPETENCY, LEARNER)
+	_assert(not quiet.get("activity"), "A mastered competency offered work with no refresher due")
+
+	refresher.assign(LEARNER, COMPETENCY, refresher.RULE_CHANGED, "The rule changed.")
+	frappe.db.commit()
+
+	offered = orchestrator.next_experience(COMPETENCY, LEARNER)
+	_assert(
+		offered["reason"] == orchestrator.REFRESHER,
+		f"An assigned refresher was not offered: {offered.get('reason')}",
+	)
+	_assert(offered.get("activity"), "The refresher offered no activity")
+
+	view = dashboard.learner_view(LEARNER)
+	_assert(view["refreshers"], "The learner view does not show the assigned refresher")
+
+	context = frappe._dict()
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(LEARNER)
+		practice.get_context(context)
+	finally:
+		frappe.set_user(original_user)
+	_assert(context.view["refreshers"], "The practice page does not show the refresher")
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -2004,6 +2043,7 @@ CHECKS = (
 	("unenrolled_user_is_shut_out", check_unenrolled_user_is_shut_out),
 	("mastery_cannot_be_deleted", check_mastery_cannot_be_deleted),
 	("certification_standing_is_not_editable", check_certification_standing_is_not_editable),
+	("refresher_reaches_the_learner", check_refresher_reaches_the_learner),
 	("cleanup", check_cleanup),
 )
 
