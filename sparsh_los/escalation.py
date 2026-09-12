@@ -19,6 +19,8 @@ import json
 import frappe
 from frappe import _
 
+from sparsh_los.permissions import is_restricted
+
 DISPOSITIONS = (
 	"Private answer",
 	"Reusable FAQ",
@@ -59,6 +61,13 @@ def raise_question(question_text, activity=None, attempt=None, reason="Unknown")
 	"""A learner asks for expert guidance. Context is packaged here, not by the caller."""
 	if not (question_text or "").strip():
 		frappe.throw(_("A question cannot be empty"))
+
+	if attempt:
+		owner = frappe.db.get_value("Sparsh Attempt", attempt, "learner")
+		if owner and owner != frappe.session.user and is_restricted():
+			frappe.throw(
+				_("You can only raise a question about your own attempt"), frappe.PermissionError
+			)
 
 	question = frappe.new_doc("Sparsh Escalation Question")
 	question.learner = frappe.session.user
@@ -117,6 +126,9 @@ def answer(question, answer_text, disposition):
 @frappe.whitelist()
 def open_queue(reviewer=None):
 	"""The reviewer's queue: oldest first, because a waiting learner is blocked."""
+	if is_restricted():
+		frappe.throw(_("The escalation queue is a reviewer view"), frappe.PermissionError)
+
 	filters = {"status": ("in", ("Open", "Routed to Human"))}
 	if reviewer:
 		filters["routed_to"] = reviewer

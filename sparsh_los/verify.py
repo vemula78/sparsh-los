@@ -87,6 +87,9 @@ def _reset_competency(competency=None):
 	competency = competency or COMPETENCY
 	for name in frappe.get_all("Sparsh Evidence", filters={"competency": competency}, pluck="name"):
 		frappe.db.set_value("Sparsh Evidence", name, "cleared_by_review", None)
+		# Uncleared critical evidence refuses to cancel, which is correct in the app
+		# and inconvenient only here.
+		frappe.db.set_value("Sparsh Evidence", name, "critical_error", 0)
 	frappe.db.commit()
 
 	_delete_all("Sparsh Human Review", {"competency": competency})
@@ -105,6 +108,7 @@ def teardown():
 		"Sparsh Evidence", filters={"competency": ("in", competencies)}, pluck="name"
 	):
 		frappe.db.set_value("Sparsh Evidence", name, "cleared_by_review", None)
+		frappe.db.set_value("Sparsh Evidence", name, "critical_error", 0)
 	frappe.db.commit()
 	_delete_all("Sparsh Refresher Assignment", {"competency": ("in", competencies)})
 	_delete_all("Sparsh Human Review", {"competency": ("in", competencies)})
@@ -544,11 +548,16 @@ def check_runner_loop():
 	_reset_competency()
 	_assert(_state() is None, "Baseline was not clear before the runner check")
 
-	activity = frappe.get_doc("Sparsh Activity", ACTIVITY_1)
-	activity.evaluation_mode = "Deterministic"
-	activity.expected_response = "level two"
-	activity.append("critical_errors", {"error_description": "stop the medicine", "severity": "Safety-critical"})
-	activity.save(ignore_permissions=True)
+	for name in (ACTIVITY_1, ACTIVITY_2):
+		activity = frappe.get_doc("Sparsh Activity", name)
+		activity.evaluation_mode = "Deterministic"
+		activity.expected_response = "level two"
+		if not activity.critical_errors:
+			activity.append(
+				"critical_errors",
+				{"error_description": "stop the medicine", "severity": "Safety-critical"},
+			)
+		activity.save(ignore_permissions=True)
 	frappe.db.commit()
 
 	opened = runner.start(ACTIVITY_1)
@@ -564,7 +573,7 @@ def check_runner_loop():
 
 	# A pass after a hint is practice evidence, not demonstration. The distinction is
 	# the point of the hint ladder: help received is part of the record.
-	right = runner.submit(ACTIVITY_1, "  Level Two  ", hint_level=1, retry_index=1)
+	right = runner.submit(ACTIVITY_1, "  Level Two  ")
 	_assert(right["outcome"] == "Pass", "A correct answer was not marked Pass")
 	_assert(right.get("evidence"), "A pass produced no evidence")
 	_assert(
@@ -575,8 +584,9 @@ def check_runner_loop():
 	assistance = frappe.db.get_value("Sparsh Evidence", right["evidence"], "assistance_level")
 	_assert(assistance == 1, f"Assistance level recorded as {assistance}, expected 1")
 
-	# An unaided pass is what moves the learner to Demonstrated.
-	independent = runner.submit(ACTIVITY_1, "level two")
+	# An unaided pass is what moves the learner to Demonstrated. A fresh activity is
+	# needed: assistance is now counted from the record, and this one has a failure.
+	independent = runner.submit(ACTIVITY_2, "level two")
 	_assert(independent["outcome"] == "Pass", "An unaided correct answer was not marked Pass")
 	_assert(
 		_state() == "Demonstrated",
@@ -609,16 +619,20 @@ def check_escalation_to_human_review():
 	_make_learner(TEST_LEARNER)
 	frappe.db.commit()
 
-	attempt = _new_attempt(None, outcome="Fail")
-	frappe.db.commit()
-
 	original_user = frappe.session.user
 	try:
 		frappe.set_user(TEST_LEARNER)
+
+		own_attempt = frappe.new_doc("Sparsh Attempt")
+		own_attempt.learner = TEST_LEARNER
+		own_attempt.activity = ACTIVITY_1
+		own_attempt.hint_level_used = 0
+		own_attempt.insert()
+
 		question = escalation.raise_question(
 			"Should I advise stopping this medicine?",
 			activity=ACTIVITY_1,
-			attempt=attempt.name,
+			attempt=own_attempt.name,
 			reason="Safety critical",
 		)
 		doc = frappe.get_doc("Sparsh Escalation Question", question)
@@ -726,13 +740,13 @@ def check_other_domain_runs_unchanged():
 	activity.insert(ignore_permissions=True)
 	frappe.db.commit()
 
-	wrong = runner.submit(OTHER_ACTIVITY, "file")
-	_assert(wrong["outcome"] == "Fail", "The other-domain activity did not evaluate a wrong answer")
-	_assert(wrong["hint"], "The other-domain activity returned no hint")
-
 	right = runner.submit(OTHER_ACTIVITY, "Share")
 	_assert(right["outcome"] == "Pass", "The other-domain activity did not evaluate a correct answer")
 	_assert(right.get("evidence"), "The other-domain pass produced no evidence")
+
+	wrong = runner.submit(OTHER_ACTIVITY, "file")
+	_assert(wrong["outcome"] == "Fail", "The other-domain activity did not evaluate a wrong answer")
+	_assert(wrong["hint"], "The other-domain activity returned no hint")
 
 	state = frappe.db.get_value(
 		"Sparsh Mastery State", {"learner": LEARNER, "competency": OTHER_COMPETENCY}, "state"
@@ -1062,6 +1076,77 @@ def check_matrix_loads_as_draft():
 	frappe.db.commit()
 
 
+def check_clearance_must_be_backed_by_review():
+	"""The cleared flag is worthless unless a real approved review stands behind it."""
+	_reset_competency()
+	evidence = _new_evidence(ACTIVITY_1, "Fail", critical_error=1)
+
+	def forge_clearance():
+		evidence.db_set("critical_error_cleared", 1)
+		evidence.reload()
+		evidence.save(ignore_permissions=True)
+
+	_raises(forge_clearance, "A clearance without a review was accepted")
+
+	# And a safety error cannot be made to vanish by cancelling the record.
+	evidence.reload()
+	frappe.db.set_value("Sparsh Evidence", evidence.name, "critical_error_cleared", 0)
+	evidence.reload()
+	_raises(
+		lambda: evidence.cancel(),
+		"Evidence carrying an unresolved critical error was cancelled",
+	)
+	frappe.db.commit()
+
+
+def check_cancelling_review_restores_block():
+	"""Withdrawing a clearance restores the block it lifted."""
+	_reset_competency()
+	critical = _new_evidence(ACTIVITY_1, "Fail", critical_error=1)
+	_new_evidence(ACTIVITY_1, "Pass")
+	_assert(_state() == "Practising", f"Expected Practising, got {_state()}")
+
+	review = frappe.new_doc("Sparsh Human Review")
+	review.evidence = critical.name
+	review.learner = LEARNER
+	review.competency = COMPETENCY
+	review.review_status = "Approved"
+	review.clears_critical_error = 1
+	review.insert(ignore_permissions=True)
+	review.submit()
+	_assert(_state() == "Demonstrated", f"After clearance expected Demonstrated, got {_state()}")
+
+	review.cancel()
+	critical.reload()
+	_assert(not critical.critical_error_cleared, "Cancelling the review left the clearance in place")
+	_assert(
+		_state() == "Practising",
+		f"Cancelling the review left the state at {_state()}",
+	)
+	frappe.db.commit()
+
+
+def check_learner_cannot_read_answer_key():
+	"""The person being assessed cannot read the answer."""
+	_make_learner(TEST_LEARNER)
+	frappe.db.commit()
+
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+		doc = frappe.get_doc("Sparsh Activity", ACTIVITY_1)
+		# This is what the REST and desk layers do before handing a document to a user.
+		doc.apply_fieldlevel_read_permissions()
+		_assert(not doc.get("expected_response"), "A learner could read the expected response")
+		_assert(not doc.get("critical_errors"), "A learner could read the critical-error markers")
+
+		levels = frappe.get_meta("Sparsh Activity").get_permlevel_access("read", user=TEST_LEARNER)
+		_assert(1 not in levels, f"A learner holds permlevel-1 read on Activity: {levels}")
+	finally:
+		frappe.set_user(original_user)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -1106,6 +1191,9 @@ CHECKS = (
 	("refresher_time_based", check_refresher_time_based),
 	("refresher_on_rule_change", check_refresher_on_rule_change),
 	("matrix_loads_as_draft", check_matrix_loads_as_draft),
+	("clearance_must_be_backed_by_review", check_clearance_must_be_backed_by_review),
+	("cancelling_review_restores_block", check_cancelling_review_restores_block),
+	("learner_cannot_read_answer_key", check_learner_cannot_read_answer_key),
 	("cleanup", check_cleanup),
 )
 

@@ -36,3 +36,19 @@ class SparshHumanReview(Document):
 		from sparsh_los.mastery import recompute_mastery
 
 		recompute_mastery(evidence.learner, evidence.competency)
+
+	def on_cancel(self):
+		"""Withdrawing the review withdraws the clearance it granted."""
+		if not (self.clears_critical_error and self.evidence):
+			return
+
+		evidence = frappe.get_doc("Sparsh Evidence", self.evidence)
+		if evidence.cleared_by_review != self.name:
+			return
+
+		evidence.db_set("critical_error_cleared", 0)
+		evidence.db_set("cleared_by_review", None)
+
+		from sparsh_los.mastery import recompute_mastery
+
+		recompute_mastery(evidence.learner, evidence.competency)

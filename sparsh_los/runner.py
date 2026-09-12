@@ -90,8 +90,31 @@ def start(activity):
 	}
 
 
+def _session_position(learner, activity):
+	"""Assistance level and retry index, counted from the record, not from the caller.
+
+	Trusting the caller here let a learner claim an unaided pass after reading the
+	hints: assistance is a fact about the session, so the server owns it.
+	"""
+	attempts = frappe.get_all(
+		"Sparsh Attempt",
+		filters={"learner": learner, "activity": activity},
+		fields=["outcome", "hint_level_used"],
+		order_by="creation asc",
+	)
+
+	failures_since_pass = 0
+	for row in attempts:
+		if row.outcome == "Pass":
+			failures_since_pass = 0
+		else:
+			failures_since_pass += 1
+
+	return min(failures_since_pass, MAX_HINT_LEVEL), len(attempts)
+
+
 @frappe.whitelist()
-def submit(activity, response, hint_level=0, retry_index=0):
+def submit(activity, response):
 	"""Record one response, evaluate it, and return the minimum help required.
 
 	A pass produces Evidence, which recomputes mastery. A failure returns the next
@@ -99,9 +122,8 @@ def submit(activity, response, hint_level=0, retry_index=0):
 	top of the ladder.
 	"""
 	doc = _activity(activity)
-	hint_level = int(hint_level or 0)
-	retry_index = int(retry_index or 0)
 	learner = frappe.session.user
+	hint_level, retry_index = _session_position(learner, activity)
 
 	outcome, critical_error = evaluate(doc, response)
 

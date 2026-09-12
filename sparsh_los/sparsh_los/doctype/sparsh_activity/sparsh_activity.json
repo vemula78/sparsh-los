@@ -101,7 +101,8 @@
    "fieldname": "hint_ladder",
    "fieldtype": "Table",
    "label": "Hint Ladder",
-   "options": "Sparsh Hint Ladder Step"
+   "options": "Sparsh Hint Ladder Step",
+   "permlevel": 1
   },
   {
    "fieldname": "section_break_errors",
@@ -112,7 +113,8 @@
    "fieldname": "critical_errors",
    "fieldtype": "Table",
    "label": "Critical Errors",
-   "options": "Sparsh Critical Error"
+   "options": "Sparsh Critical Error",
+   "permlevel": 1
   },
   {
    "fieldname": "evaluation_mode",
@@ -127,12 +129,13 @@
    "fieldtype": "Small Text",
    "label": "Expected Response",
    "description": "Accepted answers, one per line. Compared case-insensitively after trimming.",
-   "depends_on": "eval:doc.evaluation_mode=='Deterministic'"
+   "depends_on": "eval:doc.evaluation_mode=='Deterministic'",
+   "permlevel": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-12 21:46:01.829231",
+ "modified": "2026-09-12 22:10:49.147407",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Activity",
@@ -182,6 +185,32 @@
    "share": 0,
    "submit": 0,
    "write": 0
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 1,
+   "read": 1,
+   "write": 1,
+   "create": 0,
+   "delete": 0,
+   "print": 1,
+   "email": 1,
+   "export": 1,
+   "report": 1,
+   "share": 0
+  },
+  {
+   "role": "Sparsh Reviewer",
+   "permlevel": 1,
+   "read": 1,
+   "write": 1,
+   "create": 0,
+   "delete": 0,
+   "print": 1,
+   "email": 1,
+   "export": 1,
+   "report": 1,
+   "share": 0
   }
  ],
  "sort_field": "modified",
