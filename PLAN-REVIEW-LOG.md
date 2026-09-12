@@ -155,3 +155,50 @@ DEFERRED
 
 ### Coverage
 No audit covers the current HEAD: three rounds of fixes landed after audit 3 ran.
+
+## 2026-09-12 · Audit 4 + phases 7-8
+Commits: refreshers, matrix loader, audit-4 blockers, audit-4 majors.
+Acceptance 26 -> 35 checks, `failed=0`, twice at each step. 13 top-level doctypes, 8 child.
+
+### Audit 4 (gpt-5.6-sol) — 4 blockers, 10 major, 9 minor
+BLOCKERS, ALL CONFIRMED AND FIXED
+- A learner could read the answer key. `Sparsh Learner` held full read on Activity including
+  `expected_response`, the hint ladder and critical-error markers. Those three fields now sit behind
+  permlevel 1, which only reviewers hold. Combined with the next item this was a complete defeat of
+  the evidence model through the ordinary API.
+- The runner trusted caller-supplied `hint_level`/`retry_index`. Assistance is a fact about the
+  session, so the server counts it from the attempt record; `submit()` no longer accepts either.
+- `critical_error_cleared` is allow-on-submit and nothing validated it: a reviewer could set the flag
+  or create pre-cleared critical evidence. It now requires a submitted, approved review citing that
+  evidence, re-checked on update-after-submit.
+- Cancelling evidence made a safety error vanish, and cancelling the clearing review left the
+  clearance standing. Both closed.
+
+MAJOR, CONFIRMED AND FIXED
+- The runner claimed "a reviewer has been notified" when nothing was notified. It now raises a real
+  escalation.
+- Substring critical matching flagged "do not stop the medicine" as unsafe. Word-boundary matching
+  with a negation guard; detection stays advisory, which is why every critical result is escalated.
+- Evidence could upgrade a failed or assisted attempt into a clean independent pass.
+- Runner attempts never set `rule`, so every `rule_version` was 0.
+- Human Review's learner/competency were caller-supplied; copied from the evidence now.
+- The learner dashboard hid certification suspension.
+- `open_queue` exposed every learner's escalation text; `raise_question` accepted another learner's
+  attempt. Both gated.
+- The runner was callable by any authenticated account; callers must now be enrolled.
+
+ALREADY FIXED BEFORE THE AUDIT REPORTED THEM
+- Findings 5 and 8 (dashboard and orchestrator leaking another learner's record) were closed while
+  audit 4 was still running — found by writing its own brief, which is a point in favour of writing
+  adversarial prompts even when a model will run them.
+
+DEFERRED
+- Human-review activities record a Not Evaluated attempt but have no completion path: a reviewer must
+  create the evidence by hand. Needs a review-to-evidence flow.
+- The identifier guard misses hyphenated Aadhaar, `WS-12345`, phone numbers, emails, names and dates.
+  Deliberately narrow; broadening it needs the programme's own identifier inventory.
+- No rate limiting on runner/escalation endpoints.
+- Retry metadata still weakly constrained.
+
+### Coverage
+Audits 1-4 all ran at `sol`; `astra` is unavailable on this account. No audit covers HEAD.
