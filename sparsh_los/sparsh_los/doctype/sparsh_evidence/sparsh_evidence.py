@@ -16,8 +16,42 @@ class SparshEvidence(Document):
 		if self.critical_error and self.outcome == "Pass":
 			frappe.throw(_("Evidence carrying a critical error cannot record a passing outcome"))
 
+		self._reconcile_with_attempt()
+
 		if not self.recorded_at:
 			self.recorded_at = frappe.utils.now_datetime()
+
+	def _reconcile_with_attempt(self):
+		"""Evidence may not contradict the attempt it cites.
+
+		Without this an attempt flagged critical could be cited by evidence declaring
+		critical_error=0 and outcome=Pass, which walks straight past the safety gate.
+		"""
+		if not self.attempt:
+			return
+
+		attempt = frappe.db.get_value(
+			"Sparsh Attempt",
+			self.attempt,
+			["learner", "activity", "critical_error"],
+			as_dict=True,
+		)
+		if not attempt:
+			return
+
+		if attempt.learner != self.learner:
+			frappe.throw(_("Evidence and the attempt it cites must belong to the same learner"))
+
+		if self.activity and attempt.activity and attempt.activity != self.activity:
+			frappe.throw(_("Evidence and the attempt it cites must refer to the same activity"))
+
+		if attempt.critical_error and not self.critical_error:
+			# Inherit rather than reject: the critical error is a fact about what happened.
+			self.critical_error = 1
+			if self.outcome == "Pass":
+				frappe.throw(
+					_("Evidence citing an attempt with a critical error cannot record a pass")
+				)
 
 	def on_submit(self):
 		recompute_mastery(self.learner, self.competency)

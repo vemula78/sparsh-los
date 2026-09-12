@@ -29,3 +29,11 @@ class SparshMasteryState(Document):
 			)
 
 		self.state = derive_state(self.learner, self.competency)
+
+
+def on_doctype_update():
+	# The controller's duplicate check loses a race between concurrent recomputes.
+	# Enforce the pair at the storage layer, where nothing can bypass it.
+	frappe.db.add_unique(
+		"Sparsh Mastery State", ["learner", "competency"], constraint_name="unique_learner_competency"
+	)

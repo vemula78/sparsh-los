@@ -40,7 +40,9 @@ def _submitted_evidence(learner, competency):
 
 
 def _sort_key(row):
-	return (row.recorded_at or row.creation, row.creation)
+	# Order by `creation` alone. It is assigned by the database and cannot be supplied
+	# by a caller, so ordering cannot be manipulated by backdating `recorded_at`.
+	return row.creation
 
 
 def _independent_passes(rows):
@@ -62,7 +64,9 @@ def has_blocking_critical_error(learner, competency) -> bool:
 	if not passes:
 		return True
 
-	return _sort_key(critical[-1]) > _sort_key(passes[-1])
+	# max() by the same key on both sides: taking list[-1] assumed the query order
+	# matched the comparison key, which it did not.
+	return _sort_key(max(critical, key=_sort_key)) > _sort_key(max(passes, key=_sort_key))
 
 
 def derive_state(learner, competency) -> str:
@@ -74,7 +78,9 @@ def derive_state(learner, competency) -> str:
 	passes = _independent_passes(rows)
 	distinct_activities = {r.activity for r in passes if r.activity}
 
-	if len(distinct_activities) >= 2 or (not distinct_activities and len(passes) >= 2):
+	# Mastery requires independent passes across two distinct activities. Passes with no
+	# activity recorded cannot establish it: provenance matters most exactly here.
+	if len(distinct_activities) >= 2:
 		state = MASTERED
 	elif passes:
 		state = DEMONSTRATED
@@ -86,7 +92,8 @@ def derive_state(learner, competency) -> str:
 	if has_blocking_critical_error(learner, competency):
 		# A standing critical error caps progression: competence cannot be claimed
 		# while the most recent evidence of unsafe practice is unanswered.
-		state = min(state, PRACTISING, key=STATE_ORDER.index)
+		if STATE_ORDER.index(state) > STATE_ORDER.index(PRACTISING):
+			state = PRACTISING
 
 	return state
 
@@ -109,6 +116,7 @@ def recompute_mastery(learner, competency):
 		"Sparsh Mastery State", {"learner": learner, "competency": competency}, "name"
 	)
 
+	previous_flag = frappe.flags.in_mastery_recompute
 	frappe.flags.in_mastery_recompute = True
 	try:
 		if name:
@@ -133,6 +141,6 @@ def recompute_mastery(learner, competency):
 			)
 		doc.save(ignore_permissions=True)
 	finally:
-		frappe.flags.in_mastery_recompute = False
+		frappe.flags.in_mastery_recompute = previous_flag
 
 	return doc.name

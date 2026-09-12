@@ -10,7 +10,9 @@ from frappe.model.document import Document
 RULE_ID_PATTERN = re.compile(r"^[A-Z0-9-]+$")
 
 
-class SparshSourceOfTruthRule(Document):
+# Frappe derives the controller class as doctype.replace(" ", ""), which keeps the
+# lowercase "of". The odd casing is required: renaming it breaks controller loading.
+class SparshSourceofTruthRule(Document):
 	def validate(self):
 		if not RULE_ID_PATTERN.match(self.rule_id or ""):
 			frappe.throw(_("Rule ID must contain only A-Z, 0-9 and hyphen"))

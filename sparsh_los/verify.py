@@ -76,8 +76,10 @@ def teardown():
 	"""Delete fixtures in dependency order. Safe to call when nothing exists."""
 	competencies = [COMPETENCY, COMPETENCY_2]
 	_delete_all("Sparsh Certification Record", {"competency": ("in", competencies)})
-	_delete_all("Sparsh Mastery State", {"competency": ("in", competencies)})
+	# Evidence before Mastery State: cancelling Evidence triggers a recompute that
+	# recreates the Mastery row, so deleting Mastery first leaves one behind.
 	_delete_all("Sparsh Evidence", {"competency": ("in", competencies)})
+	_delete_all("Sparsh Mastery State", {"competency": ("in", competencies)})
 	_delete_all("Sparsh Attempt", {"activity": ("in", [ACTIVITY_1, ACTIVITY_2])})
 	_delete_all("Sparsh Activity", {"name": ("in", [ACTIVITY_1, ACTIVITY_2])})
 	_delete_all("Sparsh Competency", {"name": ("in", competencies)})
@@ -187,6 +189,27 @@ def check_rule_version_snapshot():
 		attempt_1.save(ignore_permissions=True)
 
 	_raises(mutate, "Editing a stored rule_version was allowed")
+	frappe.db.commit()
+
+
+def check_evidence_cannot_contradict_attempt():
+	"""Evidence may not launder a critical attempt into a clean pass."""
+	# No rule needed: this check is about the attempt/evidence relationship only.
+	attempt = _new_attempt(None, outcome="Fail", critical_error=1)
+
+	def launder():
+		evidence = frappe.new_doc("Sparsh Evidence")
+		evidence.learner = LEARNER
+		evidence.competency = COMPETENCY
+		evidence.activity = ACTIVITY_1
+		evidence.activity_version = 1
+		evidence.attempt = attempt.name
+		evidence.outcome = "Pass"
+		evidence.assistance_level = 0
+		evidence.critical_error = 0
+		evidence.insert(ignore_permissions=True)
+
+	_raises(launder, "Evidence citing a critical attempt was allowed to record a pass")
 	frappe.db.commit()
 
 
@@ -308,6 +331,7 @@ def check_cleanup():
 
 CHECKS = (
 	("rule_version_snapshot", check_rule_version_snapshot),
+	("evidence_cannot_contradict_attempt", check_evidence_cannot_contradict_attempt),
 	("mastery_not_directly_settable", check_mastery_not_directly_settable),
 	("mastery_derived_from_evidence", check_mastery_derived_from_evidence),
 	("critical_error_blocks", check_critical_error_blocks),
@@ -319,6 +343,7 @@ CHECKS = (
 
 
 def run():
+	results.clear()
 	frappe.flags.in_mastery_recompute = False
 	teardown()
 	setup()

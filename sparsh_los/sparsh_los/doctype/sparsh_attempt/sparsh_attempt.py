@@ -33,3 +33,7 @@ class SparshAttempt(Document):
 			stored = frappe.db.get_value(self.doctype, self.name, "rule_version")
 			if stored is not None and int(self.rule_version or 0) != int(stored):
 				frappe.throw(_("Rule version is a historical snapshot and cannot be changed"))
+
+			# An attempt records what a learner did at a point in time. Editing it after
+			# the fact would make the evidence trail unreliable, so nothing may change.
+			frappe.throw(_("An attempt is a historical record and cannot be edited once created"))
