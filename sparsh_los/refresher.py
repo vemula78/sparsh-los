@@ -114,6 +114,8 @@ def on_rule_superseded(rule):
 				RULE_CHANGED,
 				f"Rule {rule} was superseded after this competency was demonstrated.",
 			)
+			# The recompute that follows an assignment lives in the Refresher
+			# Assignment controller, so every trigger gets it, not just this one.
 			if name:
 				assigned.append(name)
 

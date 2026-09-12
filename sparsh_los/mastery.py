@@ -16,8 +16,9 @@ PRACTISING = "Practising"
 DEMONSTRATED = "Demonstrated"
 MASTERED = "Mastered"
 
-# Ordered weakest to strongest. "Refresh Due" is deliberately absent: it is a valid
-# stored state but no time-based transition is in scope for this engine.
+# Ordered weakest to strongest. "Refresh Due" is deliberately absent from the order: it
+# is not a rung on the ladder but a flag that a strong state has gone stale, so it has
+# no meaningful position relative to Practising.
 REFRESH_DUE = "Refresh Due"
 
 STATE_ORDER = (NOT_STARTED, EXPLORING, PRACTISING, DEMONSTRATED, MASTERED)
@@ -114,10 +115,32 @@ def derive_state(learner, competency) -> str:
 
 	# Applied last, and never before the cap: Refresh Due is outside STATE_ORDER, so
 	# any ordering comparison must already be done by the time it is set.
-	if state in (DEMONSTRATED, MASTERED) and _refresh_overdue(learner, competency):
+	if state in (DEMONSTRATED, MASTERED) and (
+		_refresh_overdue(learner, competency) or _has_open_refresher(learner, competency)
+	):
 		state = REFRESH_DUE
 
 	return state
+
+
+def _has_open_refresher(learner, competency):
+	"""True while a refresher stands unfinished.
+
+	Time is not the only thing that makes a demonstration stale. A rule superseded
+	underneath the learner assigned a refresher but left the state at Demonstrated and
+	the certificate Active, so the person went on being certified against a rule the
+	programme had already replaced. The time-based path persisted that regression from
+	the start; this is the same rule applied to the other two triggers.
+
+	Refresher Assignment is itself derived — the engine writes it, no role creates one
+	— so reading it here does not make mastery user-writable.
+	"""
+	return bool(
+		frappe.db.exists(
+			"Sparsh Refresher Assignment",
+			{"learner": learner, "competency": competency, "status": "Assigned"},
+		)
+	)
 
 
 def _refresh_overdue(learner, competency):

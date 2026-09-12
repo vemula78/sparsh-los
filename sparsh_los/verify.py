@@ -128,6 +128,9 @@ def _reset_competency(competency=None):
 	_delete_all("Sparsh Evidence", {"competency": competency})
 	_delete_mastery({"competency": competency})
 	_delete_all("Sparsh Attempt", {"activity": ("in", [ACTIVITY_1, ACTIVITY_2])})
+	# An open refresher now holds the competency at Refresh Due, so a stale one left by
+	# an earlier check reads as a regression in the check that follows it.
+	_delete_all("Sparsh Refresher Assignment", {"competency": competency})
 	frappe.db.commit()
 
 
@@ -1146,6 +1149,36 @@ def check_refresher_on_rule_change():
 	_assert(
 		any(a.learner == LEARNER for a in assignments),
 		"The learner judged against the old rule was not scheduled",
+	)
+
+	# Scheduling the work is not the same as marking the demonstration stale. Until
+	# this held, the learner stayed Demonstrated and kept a standing certificate
+	# against a rule the programme had already replaced — the time-based trigger
+	# persisted that regression from the start, this one did not.
+	_assert(
+		_state() == "Refresh Due",
+		f"After the rule changed underneath them the learner is {_state()}",
+	)
+
+	# And completing the refresher gives the competency back, or the state the
+	# assignment caused would never be released.
+	assignment = frappe.get_all(
+		"Sparsh Refresher Assignment",
+		filters={
+			"competency": COMPETENCY,
+			"learner": LEARNER,
+			"trigger_reason": refresher.RULE_CHANGED,
+			"status": "Assigned",
+		},
+		pluck="name",
+	)
+	_assert(assignment, "No open refresher to complete")
+	done = frappe.get_doc("Sparsh Refresher Assignment", assignment[0])
+	done.status = "Completed"
+	done.save(ignore_permissions=True)
+	_assert(
+		_state() == "Demonstrated",
+		f"Completing the refresher left the learner at {_state()}",
 	)
 	frappe.db.commit()
 
