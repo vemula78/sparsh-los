@@ -17,6 +17,19 @@ import pathlib
 import frappe
 
 DATA = pathlib.Path(__file__).parent / "data" / "source_of_truth_matrix.json"
+CASES = pathlib.Path(__file__).parent / "data" / "starter_case_pack.json"
+
+# The three competencies the programme chose to stress-test different parts of the
+# engine. Named here because the case pack refers to them in prose.
+MVP_COMPETENCIES = {
+	"Risk stratification": ("SSP-RISK", "Risk judgement"),
+	"Pledge co-creation": ("SSP-PLEDGE", "Coaching"),
+	"Pledge co-creation / contextual coaching": ("SSP-PLEDGE", "Coaching"),
+	"Contextual coaching": ("SSP-PLEDGE", "Coaching"),
+	"Scope boundary / escalation": ("SSP-SCOPE", "Safety"),
+	"Documentation": ("SSP-DOC", "Documentation"),
+	"Follow-up coaching and documentation": ("SSP-DOC", "Documentation"),
+}
 
 
 def _rows():
@@ -89,4 +102,90 @@ def matrix_status():
 			for r in rows
 			if r.status == "Validated" and r.automation_status == "Safe as fixed logic"
 		],
+	}
+
+
+def _competency_for(label):
+	return MVP_COMPETENCIES.get(label.strip())
+
+
+def load_case_pack():
+	"""Load the Starter Case Pack as activities awaiting human review.
+
+	Every case arrives in Human review mode with no expected response. That is not a
+	shortcut: not one of the rules these cases turn on has been validated, so the
+	engine must not auto-score any of them. A reviewer judges each attempt until the
+	programme owner locks the rules, at which point the activities can be given
+	deterministic answers.
+
+	Returns (created, skipped).
+	"""
+	created, skipped = [], []
+	domains, competencies = set(), {}
+
+	for case in json.loads(CASES.read_text()):
+		mapping = _competency_for(case["competency"])
+		if not mapping:
+			skipped.append(case["code"])
+			continue
+
+		competency_id, domain_name = mapping
+		domains.add(domain_name)
+		competencies[competency_id] = (domain_name, case["competency"])
+
+	for domain_name in sorted(domains):
+		domain_id = domain_name.upper().replace(" ", "-")
+		if not frappe.db.exists("Sparsh Competency Domain", domain_id):
+			doc = frappe.new_doc("Sparsh Competency Domain")
+			doc.domain_id = domain_id
+			doc.domain_name = domain_name
+			doc.insert(ignore_permissions=True)
+
+	for competency_id, (domain_name, label) in competencies.items():
+		if frappe.db.exists("Sparsh Competency", competency_id):
+			continue
+		doc = frappe.new_doc("Sparsh Competency")
+		doc.competency_id = competency_id
+		doc.competency_name = label
+		doc.domain = domain_name.upper().replace(" ", "-")
+		doc.insert(ignore_permissions=True)
+
+	for case in json.loads(CASES.read_text()):
+		mapping = _competency_for(case["competency"])
+		if not mapping:
+			continue
+
+		if frappe.db.exists("Sparsh Activity", case["code"]):
+			skipped.append(case["code"])
+			continue
+
+		activity = frappe.new_doc("Sparsh Activity")
+		activity.activity_id = case["code"]
+		activity.title = case["title"]
+		activity.competency = mapping[0]
+		activity.activity_type = "Short case"
+		activity.instruction = f"{case['scenario']}\n\n{case['task']}"
+		activity.expected_evidence = case["engine"]
+		activity.version = 1
+		# Human review, always. No rule behind these cases is validated yet.
+		activity.evaluation_mode = "Human review"
+		activity.insert(ignore_permissions=True)
+		created.append(activity.name)
+
+	frappe.db.commit()
+	return created, skipped
+
+
+@frappe.whitelist()
+def case_pack_status():
+	"""What the case pack looks like in the system, and what it still needs."""
+	activities = frappe.get_all(
+		"Sparsh Activity",
+		filters={"activity_id": ("like", "SC-%")},
+		fields=["name", "competency", "evaluation_mode", "expected_response"],
+	)
+	return {
+		"loaded": len(activities),
+		"awaiting_human_review": len([a for a in activities if a.evaluation_mode == "Human review"]),
+		"auto_scored": [a.name for a in activities if a.evaluation_mode == "Deterministic"],
 	}

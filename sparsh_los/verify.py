@@ -1565,6 +1565,37 @@ def check_review_queue_page():
 	frappe.db.commit()
 
 
+def check_case_pack_loads_for_review_only():
+	"""The programme's cases load, and not one of them can auto-score anybody."""
+	from sparsh_los import seed
+
+	created, skipped = seed.load_case_pack()
+	status = seed.case_pack_status()
+
+	_assert(status["loaded"] >= 9, f"Only {status['loaded']} cases loaded")
+	_assert(
+		status["loaded"] == status["awaiting_human_review"],
+		f"Cases are set to auto-score: {status['auto_scored']}",
+	)
+	_assert(not status["auto_scored"], f"These cases would score without a person: {status['auto_scored']}")
+
+	# The competencies the cases belong to exist.
+	for competency_id in ("SSP-RISK", "SSP-PLEDGE", "SSP-SCOPE"):
+		_assert(
+			frappe.db.exists("Sparsh Competency", competency_id),
+			f"Competency {competency_id} was not created",
+		)
+
+	# Re-running does not duplicate.
+	before = frappe.db.count("Sparsh Activity", {"activity_id": ("like", "SC-%")})
+	seed.load_case_pack()
+	_assert(
+		frappe.db.count("Sparsh Activity", {"activity_id": ("like", "SC-%")}) == before,
+		"Re-running the case pack loader duplicated activities",
+	)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -1622,6 +1653,7 @@ CHECKS = (
 	("constraints_are_in_the_database", check_constraints_are_in_the_database),
 	("rule_refresher_uses_provenance", check_rule_refresher_uses_provenance),
 	("review_queue_page", check_review_queue_page),
+	("case_pack_loads_for_review_only", check_case_pack_loads_for_review_only),
 	("cleanup", check_cleanup),
 )
 

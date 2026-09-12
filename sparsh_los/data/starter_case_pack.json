@@ -1,0 +1,92 @@
+[
+ {
+  "code": "SC-01",
+  "title": "Risk level boundary",
+  "competency": "Risk stratification",
+  "scenario": "A caregiver has overweight/central adiposity and a strong family history of diabetes, but no confirmed diabetes or other established cardiometabolic diagnosis is documented.",
+  "task": "Ask the learner to assign a SAI SPARSH risk level and explain the deciding factor.",
+  "engine": "Short case -> decision -> brief reasoning -> graded hint if incorrect -> retry with a variant.",
+  "validation": "Exact L1/L2/L3 definitions must be confirmed before scoring is locked.",
+  "status": "Needs review"
+ },
+ {
+  "code": "SC-02",
+  "title": "Stable disease versus acute/high-risk state",
+  "competency": "Risk stratification",
+  "scenario": "A caregiver has established cardiometabolic disease that is clinically stable and is already under medical follow-up. Another similar caregiver is in a recent acute/post-procedure phase.",
+  "task": "Ask the learner whether both belong in the same risk category and why.",
+  "engine": "Branching case; learner must distinguish stable disease from a situation needing more immediate clinical oversight.",
+  "validation": "Exact Level 3/4 boundaries and use of S modifier must be confirmed.",
+  "status": "Needs review"
+ },
+ {
+  "code": "SC-03",
+  "title": "Low-confidence pledge",
+  "competency": "Pledge co-creation",
+  "scenario": "A caregiver proposes a major dietary change but reports low confidence that they can sustain it.",
+  "task": "Ask the learner how they would respond and what they would do next.",
+  "engine": "Simulated caregiver dialogue. Reward exploration of barriers and movement toward a smaller, achievable pledge rather than simple encouragement.",
+  "validation": "Confirm whether the 70%/7-of-10 threshold is a hard rule or a coaching heuristic.",
+  "status": "Needs review"
+ },
+ {
+  "code": "SC-04",
+  "title": "Affordability and contextual adaptation",
+  "competency": "Pledge co-creation / contextual coaching",
+  "scenario": "A caregiver says the suggested 'healthy' foods or oils are too expensive for the household budget.",
+  "task": "Ask the learner to adapt the recommendation without shaming the caregiver or abandoning the goal.",
+  "engine": "Conversational practice with at least two possible barriers: cost and household preference.",
+  "validation": "Use only approved SAI SPARSH dietary guidance and locally appropriate examples.",
+  "status": "Context-dependent"
+ },
+ {
+  "code": "SC-05",
+  "title": "Night-shift exception",
+  "competency": "Contextual coaching",
+  "scenario": "A caregiver works rotating night shifts and says a standard meal-timing recommendation does not fit their work schedule.",
+  "task": "Ask the learner to avoid mechanically applying a daytime rule and instead explore schedule, sleep, meal access and feasible alternatives.",
+  "engine": "Branching conversation; poor path = rigid rule; preferred path = contextual exploration and tailored pledge.",
+  "validation": "Exact approved shift-work guidance should be confirmed before fixed feedback is used.",
+  "status": "Needs review"
+ },
+ {
+  "code": "SC-06",
+  "title": "Symptom that exceeds coaching scope",
+  "competency": "Scope boundary / escalation",
+  "scenario": "During a lifestyle-coaching interaction, a caregiver reports a new symptom that could require medical evaluation.",
+  "task": "Ask the learner whether to continue lifestyle coaching, offer reassurance, or stop and refer/escalate.",
+  "engine": "Safety case with a critical-error flag if the learner gives medical treatment advice or dismisses the symptom.",
+  "validation": "Use programme-approved red-flag/referral rules only.",
+  "status": "Needs review"
+ },
+ {
+  "code": "SC-07",
+  "title": "Medication question",
+  "competency": "Scope boundary / escalation",
+  "scenario": "A caregiver reports a possible medication side effect and asks whether they should stop or change the medicine.",
+  "task": "Ask the learner to respond while preserving the volunteer's role boundary.",
+  "engine": "Dialogue exercise; correct path should set the boundary, support the caregiver, and route to the appropriate clinician rather than alter medication.",
+  "validation": "Specific urgency/timing language requires programme-owner approval.",
+  "status": "Needs review"
+ },
+ {
+  "code": "SC-08",
+  "title": "Missing follow-up data",
+  "competency": "Documentation",
+  "scenario": "A caregiver could not be reached and therefore a planned follow-up measure or behaviour status could not be confirmed.",
+  "task": "Ask the learner how to record the item.",
+  "engine": "Deterministic documentation exercise; distinguish missing/unknown from 'No' or failure.",
+  "validation": "Confirm the programme's official missing-data and denominator policy.",
+  "status": "Needs review"
+ },
+ {
+  "code": "SC-09",
+  "title": "Partial progress",
+  "competency": "Follow-up coaching and documentation",
+  "scenario": "A caregiver completed part, but not all, of an agreed behaviour pledge.",
+  "task": "Ask the learner how to discuss the result and how to document progress.",
+  "engine": "Short case + coaching response. Reward recognition of progress and exploration of barriers rather than binary failure language.",
+  "validation": "Confirm official follow-up status categories and documentation rules.",
+  "status": "Needs review"
+ }
+]

@@ -58,12 +58,20 @@ def _governing_rule(competency):
 	links = frappe.get_all(
 		"Sparsh Competency Rule Link", filters={"parent": competency}, fields=["rule"], pluck="rule"
 	)
-	active = [
-		r
+	if not links:
+		return None
+
+	# Highest version among the rules that are not superseded. Taking whichever link
+	# came first made the recorded governing rule depend on authoring order.
+	candidates = [
+		(frappe.db.get_value("Sparsh Source of Truth Rule", r, "version") or 0, r)
 		for r in links
 		if frappe.db.get_value("Sparsh Source of Truth Rule", r, "status") != "Superseded"
 	]
-	return active[0] if active else (links[0] if links else None)
+	if candidates:
+		return max(candidates)[1]
+
+	return sorted(links)[0]
 
 
 def _lines(text):

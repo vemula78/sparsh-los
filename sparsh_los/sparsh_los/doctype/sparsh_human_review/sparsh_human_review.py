@@ -62,6 +62,23 @@ class SparshHumanReview(Document):
 		if evidence.cleared_by_review != self.name:
 			return
 
+		# Another standing review may still clear this evidence; withdrawing one
+		# reviewer's decision should not discard another's.
+		successor = frappe.db.get_value(
+			"Sparsh Human Review",
+			{
+				"evidence": self.evidence,
+				"docstatus": 1,
+				"review_status": "Approved",
+				"clears_critical_error": 1,
+				"name": ("!=", self.name),
+			},
+			"name",
+		)
+		if successor:
+			evidence.db_set("cleared_by_review", successor)
+			return
+
 		evidence.db_set("critical_error_cleared", 0)
 		evidence.db_set("cleared_by_review", None)
 
