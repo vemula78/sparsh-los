@@ -60,6 +60,18 @@ def _activities_for(competency):
 
 
 def _passed_activities(learner, competency):
+	"""Activities the learner has passed at least once.
+
+	A reviewer's rejection is excluded: evidence a person judged unsound is not a
+	pass, and counting it retired the activity from the learner's queue.
+
+	Assistance deliberately does **not** disqualify. A pass after a hint is still an
+	activity the learner has met, and this set decides what they have not yet seen --
+	excluding assisted passes would offer the same activity for ever. Independence is
+	what mastery requires, and `mastery._independent_passes` is where it is enforced;
+	conflating the two questions here would be the same mistake as using
+	`is_restricted` to ask who the subject is.
+	"""
 	return {
 		row.activity
 		for row in frappe.get_all(
@@ -69,6 +81,7 @@ def _passed_activities(learner, competency):
 				"competency": competency,
 				"outcome": "Pass",
 				"critical_error": 0,
+				"human_review_status": ("!=", "Rejected"),
 				"docstatus": 1,
 			},
 			fields=["activity"],

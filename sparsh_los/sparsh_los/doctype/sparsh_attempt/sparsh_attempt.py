@@ -34,12 +34,32 @@ class SparshAttempt(Document):
 			# never supplies it. Limiting it here would stop the engine grading at all.
 			return
 
-		if not is_restricted():
+		# The question is "is this person writing about themselves?", which
+		# `is_restricted` cannot answer: it means "is this a reviewer?", so a user
+		# holding both roles read as trusted and could file their own attempt claiming
+		# outcome=Pass at hint level 0. A second reviewer turning that into Evidence
+		# made it an unaided pass. Roles do not matter here; the subject does.
+		if self.learner == frappe.session.user:
+			self.outcome = "Not Evaluated"
+			self.critical_error = 0
+
+			# Assistance is counted from the record, never taken from the writer —
+			# the same rule the runner follows. Trusting the submitted level let a
+			# self-filed attempt claim hint level 0 on an activity the person had
+			# already been given hints for.
+			from sparsh_los.runner import _session_position
+
+			hint_level, retry_index = _session_position(self.learner, self.activity)
+			self.hint_level_used = hint_level
+			if self.retry_index is None:
+				self.retry_index = retry_index
 			return
 
-		self.learner = frappe.session.user
-		self.outcome = "Not Evaluated"
-		self.critical_error = 0
+		if is_restricted():
+			# A learner may not file an attempt under somebody else's name.
+			self.learner = frappe.session.user
+			self.outcome = "Not Evaluated"
+			self.critical_error = 0
 
 	def validate(self):
 		reject_identifiers(self.response)

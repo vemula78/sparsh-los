@@ -1658,6 +1658,10 @@ def check_constraints_are_in_the_database():
 	first.attempt = attempt.name
 	first.save(ignore_permissions=True)
 	first.submit()
+	# Committed before the duplicate is attempted: the rollback that follows the
+	# constraint violation would otherwise take this row with it, and the survivor
+	# count below would be measuring the rollback rather than the constraint.
+	frappe.db.commit()
 
 	def duplicate_evidence():
 		second = frappe.new_doc("Sparsh Evidence")
@@ -1672,13 +1676,26 @@ def check_constraints_are_in_the_database():
 		second.flags.ignore_validate = True
 		second.insert(ignore_permissions=True)
 
-	raised = False
+	# The exception has to be the duplicate-key one. Accepting any exception meant a
+	# missing table, a link-validation failure or a controller error all read as proof
+	# that the database constraint held.
+	raised = None
 	try:
 		duplicate_evidence()
-	except Exception:
-		raised = True
+	except Exception as exc:  # noqa: BLE001
+		raised = exc
 		frappe.db.rollback()
-	_assert(raised, "The database accepted two evidence rows for one attempt")
+	_assert(raised is not None, "The database accepted two evidence rows for one attempt")
+	_assert(
+		isinstance(raised, frappe.exceptions.UniqueValidationError)
+		or "duplicate" in str(raised).lower()
+		or "1062" in str(raised),
+		f"The insert failed, but not on the unique constraint: {type(raised).__name__}: {raised}",
+	)
+
+	# And exactly one row survived, which is the thing the constraint exists to ensure.
+	surviving = frappe.db.count("Sparsh Evidence", {"attempt": attempt.name, "docstatus": ("<", 2)})
+	_assert(surviving == 1, f"{surviving} evidence rows exist for one attempt, expected 1")
 	frappe.db.commit()
 
 
@@ -2103,6 +2120,68 @@ def check_superseded_resource_does_not_rewrite_history():
 			frappe.delete_doc(
 				"Sparsh Learning Resource", name, force=True, ignore_permissions=True
 			)
+		frappe.db.commit()
+
+
+def check_dual_role_cannot_forge_their_own_attempt():
+	"""Holding the reviewer role does not let you write your own verdict.
+
+	The chain an independent audit set out: a learner who is also a reviewer takes a
+	hint on an activity, then files an Attempt through the ordinary document API
+	claiming outcome=Pass at hint level 0. A second reviewer turns that attempt into
+	Evidence, and it counts as an unaided pass. The controller skipped its limits for
+	anyone unrestricted, and `is_restricted` means "is this a reviewer?" -- the wrong
+	question when the subject and the writer are the same person.
+	"""
+	dual = DUAL_LEARNER
+	user = _make_learner(dual)
+	if "Sparsh Reviewer" not in [r.role for r in user.roles]:
+		user.append("roles", {"role": "Sparsh Reviewer"})
+		user.save(ignore_permissions=True)
+	_reset_competency()
+	frappe.db.commit()
+
+	activity = frappe.get_doc("Sparsh Activity", ACTIVITY_1)
+	original_mode, original_expected = activity.evaluation_mode, activity.expected_response
+	activity.evaluation_mode = "Deterministic"
+	activity.expected_response = "level two"
+	activity.save(ignore_permissions=True)
+	frappe.db.commit()
+
+	original_user = frappe.session.user
+	try:
+		# A real hint, earned the ordinary way.
+		_submit(ACTIVITY_1, "wrong on purpose", as_user=dual)
+
+		frappe.set_user(dual)
+		forged = frappe.new_doc("Sparsh Attempt")
+		forged.learner = dual
+		forged.activity = ACTIVITY_1
+		forged.response = "level two"
+		forged.hint_level_used = 0
+		forged.outcome = "Pass"
+		forged.critical_error = 0
+		forged.insert(ignore_permissions=True)
+
+		_assert(
+			forged.outcome == "Not Evaluated",
+			f"A dual-role user wrote their own verdict: {forged.outcome}",
+		)
+		_assert(
+			forged.hint_level_used >= 1,
+			f"A dual-role user claimed hint level {forged.hint_level_used} after taking a hint",
+		)
+		_assert(
+			not forged.independent,
+			"A self-filed attempt after a hint was recorded as independent",
+		)
+	finally:
+		frappe.set_user(original_user)
+		activity.reload()
+		activity.evaluation_mode = original_mode
+		activity.expected_response = original_expected
+		activity.save(ignore_permissions=True)
+		_delete_all("Sparsh Attempt", {"learner": dual})
 		frappe.db.commit()
 
 
@@ -2846,6 +2925,7 @@ CHECKS = (
 	("rejected_evidence_does_not_count", check_rejected_evidence_does_not_count),
 	("pathway_walks_in_order", check_pathway_walks_in_order),
 	("pathway_does_not_hand_over_a_gated_activity", check_pathway_does_not_hand_over_a_gated_activity),
+	("dual_role_cannot_forge_their_own_attempt", check_dual_role_cannot_forge_their_own_attempt),
 	("draft_rule_cannot_auto_score", check_draft_rule_cannot_auto_score),
 	("unbuilt_evaluator_modes_fall_to_a_person", check_unbuilt_evaluator_modes_fall_to_a_person),
 	("superseded_resource_does_not_rewrite_history", check_superseded_resource_does_not_rewrite_history),

@@ -27,6 +27,11 @@ class SparshSourceofTruthRule(Document):
 			previous = frappe.db.get_value(
 				self.doctype, self.supersedes, ["rule_id", "version"], as_dict=True
 			)
+			# A Link field is validated after this runs, so a name that does not exist
+			# arrived here as None and raised AttributeError instead of the intended
+			# message.
+			if not previous:
+				frappe.throw(_("The rule this supersedes does not exist"))
 			if previous.rule_id != self.rule_id:
 				frappe.throw(_("A rule can only supersede another version of the same Rule ID"))
 			if previous.version >= (self.version or 0):

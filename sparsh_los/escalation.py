@@ -98,12 +98,25 @@ def raise_question(question_text, activity=None, attempt=None, reason="Unknown")
 
 	throttle("Sparsh Escalation Question", limit=20)
 
+	if activity and not frappe.db.exists("Sparsh Activity", activity):
+		frappe.throw(_("That activity does not exist"))
+
 	if attempt:
-		owner = frappe.db.get_value("Sparsh Attempt", attempt, "learner")
-		if owner and owner != frappe.session.user and is_restricted():
+		row = frappe.db.get_value(
+			"Sparsh Attempt", attempt, ["learner", "activity"], as_dict=True
+		)
+		if not row:
+			frappe.throw(_("That attempt does not exist"))
+		if row.learner != frappe.session.user and is_restricted():
 			frappe.throw(
 				_("You can only raise a question about your own attempt"), frappe.PermissionError
 			)
+		# The two references have to describe the same piece of work, or the question
+		# and its context snapshot contradict each other and the reviewer is answering
+		# about something the learner did not do.
+		if activity and activity != row.activity:
+			frappe.throw(_("That attempt is not about that activity"))
+		activity = activity or row.activity
 
 	question = frappe.new_doc("Sparsh Escalation Question")
 	question.learner = frappe.session.user

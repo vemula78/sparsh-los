@@ -486,3 +486,20 @@ adjudicated — recorded here so they are not lost.
 ### Acceptance
 
 `sparsh_los.verify.run` — **63 passed, 0 failed**. `MIN_CHECKS` 63.
+
+### Audit 10 — remaining findings, adjudicated
+
+| § | Finding | Disposition |
+|---|---|---|
+| 2.3 | Dual-role user forges their own Attempt: `_apply_learner_limits` returned early for anyone unrestricted, so a learner-reviewer could file `outcome=Pass` at `hint_level_used=0` for themselves, and a second reviewer turning it into Evidence made it an unaided pass | **Confirmed, fixed.** Limits now key on "is the subject the writer?", not on roles; assistance is recomputed from the record rather than taken from the writer. New check `dual_role_cannot_forge_their_own_attempt` |
+| 4.3 | Orchestrator counts assisted and rejected passes as completed activities | **Confirmed in part.** Rejected evidence excluded — a reviewer's rejection is not a pass. Assistance deliberately still counts: `_passed_activities` answers "what has this learner met?", and excluding assisted passes would offer the same activity for ever. Independence is enforced in `mastery._independent_passes`, and conflating the two questions here would repeat the `is_restricted` mistake. Reason written into the function |
+| 4.7 | Escalation activity and attempt never reconciled | **Confirmed, fixed.** Both must exist, and a supplied activity must match the attempt's |
+| 4.9 | `supersedes` dereferenced before the Link is validated, giving `AttributeError` instead of the message | **Confirmed, fixed** |
+| 4.10 | `days` accepted negatives and unbounded values | **Confirmed, fixed** — 1 to 3650 |
+| 3.8 | Constraint probe accepted any exception as proof the database held | **Confirmed, fixed.** Now requires the duplicate-key error specifically and asserts exactly one row survives. Committing the first row first, so the rollback does not take it |
+| 3.13 | Global `>= 1` assertions satisfiable by unrelated site data | **Deferred.** Real, but the site is a demo with no other learners; worth closing before any shared-site deployment |
+| 3.9, 3.10 | Row-scope check covers only Attempt; domain-neutrality scan misses fieldnames | **Deferred** — logged, not safety-bearing |
+| 2.5, 2.8 | "Learners cannot read Activity at all"; strict one-way flow | **Accepted as documentation defects** — `CLAUDE.md` corrected |
+| 3.11 | No `MIN_CHECKS` guard | **Rejected** — it exists in `scripts/install_verify.sh`, which was not in the bundle the audit received |
+
+`sparsh_los.verify.run` — **64 passed, 0 failed**. `MIN_CHECKS` 64.

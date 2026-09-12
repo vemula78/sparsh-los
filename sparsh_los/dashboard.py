@@ -190,7 +190,15 @@ def programme_summary(days=30):
 	"""
 	_require_supervisor()
 
-	days = int(days)
+	# A reporting window, not free input: a negative value silently produced a cutoff
+	# in the future (so every count read zero), and an enormous one an unbounded scan.
+	try:
+		days = int(days)
+	except (TypeError, ValueError):
+		frappe.throw(_("Reporting period must be a whole number of days"))
+	if days < 1 or days > 3650:
+		frappe.throw(_("Reporting period must be between 1 and 3650 days"))
+
 	since = frappe.utils.add_days(frappe.utils.now_datetime(), -days)
 
 	learners = {
