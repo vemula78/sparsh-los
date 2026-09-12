@@ -64,6 +64,9 @@ class SparshCertificationRecord(Document):
 			frappe.throw(_("That certification is no longer standing"), frappe.ValidationError)
 
 	def before_submit(self):
+		if self.learner == frappe.session.user:
+			frappe.throw(_("You cannot certify your own competence"), frappe.PermissionError)
+
 		# Attribution belongs to the act of certifying, not to the last draft save.
 		self.certified_by = frappe.session.user
 		self.certified_on = frappe.utils.now_datetime()
@@ -96,6 +99,12 @@ class SparshCertificationRecord(Document):
 		# The check above loses a race between two concurrent submissions; this key is
 		# what actually guarantees it, because the database rejects the duplicate.
 		self.standing_key = f"{self.learner}::{self.competency}"
+
+	def on_cancel(self):
+		# Otherwise the unique key stays occupied by a cancelled record and no future
+		# certification for this pair can be submitted.
+		self.db_set("standing_key", None)
+		self.db_set("certification_state", "Revoked")
 
 	def on_submit(self):
 		if self.certification_status == "Revoked" and self.revokes:
@@ -133,4 +142,17 @@ def current(learner, competency):
 		fields=["name", "certification_status", "certification_state", "certified_on", "certified_by"],
 		order_by="creation desc",
 	)
-	return rows[0] if rows else None
+	if not rows:
+		return None
+
+	# Expiry is noticed at read time, and the daily job may not have run. Answering
+	# "Active" for a competence that has since lapsed would be the wrong answer at
+	# exactly the moment somebody is asking.
+	from sparsh_los.mastery import DEMONSTRATED, MASTERED, derive_state
+
+	row = rows[0]
+	if derive_state(learner, competency) not in (DEMONSTRATED, MASTERED):
+		row["certification_state"] = "Suspended"
+		row["suspended_at_read_time"] = True
+
+	return row

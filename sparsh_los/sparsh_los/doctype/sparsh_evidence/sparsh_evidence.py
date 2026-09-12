@@ -13,15 +13,41 @@ class SparshEvidence(Document):
 		if self.assistance_level is None or self.assistance_level < 0 or self.assistance_level > 4:
 			frappe.throw(_("Assistance level must be between 0 and 4"))
 
+		if self.outcome == "Pass" and not (self.assistance_level or 0) and not self.activity:
+			frappe.throw(
+				_(
+					"An unaided pass must name the activity it was earned on. Evidence "
+					"with no activity carries no provenance."
+				),
+				frappe.ValidationError,
+			)
+
 		if self.critical_error and self.outcome == "Pass":
 			frappe.throw(_("Evidence carrying a critical error cannot record a passing outcome"))
 
+		self._no_self_evidence()
 		self._validate_clearance()
 		self._reconcile_with_attempt()
 		self._validate_activity_competency()
 
 		if not self.recorded_at:
 			self.recorded_at = frappe.utils.now_datetime()
+
+	def _no_self_evidence(self):
+		"""A dual-role user must not be able to write their own evidence.
+
+		The guarded path through review.record_evidence checks this; creating the
+		Evidence directly did not, which made the guard bypassable by anybody holding
+		both roles.
+		"""
+		if frappe.flags.in_sparsh_runner:
+			# The engine wrote it from a graded attempt, not the learner.
+			return
+
+		if self.learner and self.learner == frappe.session.user:
+			frappe.throw(
+				_("You cannot create evidence about your own work"), frappe.PermissionError
+			)
 
 	def _validate_clearance(self):
 		"""A cleared critical error must be backed by a submitted, approved review.
@@ -56,6 +82,7 @@ class SparshEvidence(Document):
 
 	def on_update_after_submit(self):
 		# allow_on_submit fields are still fields: re-check the clearance.
+		self._no_self_evidence()
 		self._validate_clearance()
 
 	def before_cancel(self):

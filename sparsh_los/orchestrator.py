@@ -142,7 +142,13 @@ def next_experience(competency, learner=None):
 def _last_critical_activity(learner, competency):
 	rows = frappe.get_all(
 		"Sparsh Evidence",
-		filters={"learner": learner, "competency": competency, "critical_error": 1, "docstatus": 1},
+		filters={
+			"learner": learner,
+			"competency": competency,
+			"critical_error": 1,
+			"critical_error_cleared": 0,
+			"docstatus": 1,
+		},
 		fields=["activity"],
 		order_by="creation desc",
 		limit=1,

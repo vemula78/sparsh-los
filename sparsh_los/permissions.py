@@ -51,15 +51,14 @@ def is_restricted(user=None):
 
 
 def _is_restricted(user):
-	"""True when the user is a learner and nothing more."""
-	if not user or user == "Administrator":
-		return False
+	"""True unless the user is a reviewer.
 
-	roles = set(frappe.get_roles(user))
-	if roles & UNRESTRICTED_ROLES:
-		return False
-
-	return "Sparsh Learner" in roles
+	This used to mean "holds the learner role and nothing privileged", which read as
+	unrestricted for a user with no Sparsh role at all — the wrong way round for a
+	check that gates other people's records. Restriction is now the default and
+	reviewer membership is the exception.
+	"""
+	return not is_reviewer(user)
 
 
 def _conditions(doctype, user):

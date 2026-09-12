@@ -87,6 +87,8 @@ def raise_question(question_text, activity=None, attempt=None, reason="Unknown")
 @frappe.whitelist()
 def route(question, reviewer):
 	"""Put the question in a named reviewer's queue."""
+	require_reviewer()
+
 	doc = frappe.get_doc("Sparsh Escalation Question", question)
 	doc.routed_to = reviewer
 	doc.status = "Routed to Human"
@@ -107,7 +109,12 @@ def answer(question, answer_text, disposition):
 	if not (answer_text or "").strip():
 		frappe.throw(_("An answer cannot be empty"))
 
+	require_reviewer()
+
 	doc = frappe.get_doc("Sparsh Escalation Question", question)
+	if doc.learner == frappe.session.user:
+		frappe.throw(_("You cannot answer your own question"), frappe.PermissionError)
+
 	doc.answer_text = answer_text
 	doc.disposition = disposition
 	doc.answered_by = frappe.session.user

@@ -26,6 +26,12 @@ from sparsh_los.permissions import throttle
 MAX_HINT_LEVEL = 4
 
 
+def _require_enrolment():
+	roles = set(frappe.get_roles(frappe.session.user))
+	if not roles & {"Sparsh Learner", "Sparsh Reviewer", "System Manager", "Administrator"}:
+		frappe.throw(_("You are not enrolled in this programme"), frappe.PermissionError)
+
+
 def _activity(name):
 	return frappe.get_cached_doc("Sparsh Activity", name)
 
@@ -147,6 +153,7 @@ def evaluate(activity, response):
 @frappe.whitelist()
 def start(activity):
 	"""Open a session on one activity. Returns the instruction and nothing more."""
+	_require_enrolment()
 	doc = _activity(activity)
 	return {
 		"activity": doc.name,
@@ -190,9 +197,7 @@ def submit(activity, response):
 	doc = _activity(activity)
 	learner = frappe.session.user
 
-	roles = set(frappe.get_roles(learner))
-	if not roles & {"Sparsh Learner", "Sparsh Reviewer", "System Manager", "Administrator"}:
-		frappe.throw(_("You are not enrolled in this programme"), frappe.PermissionError)
+	_require_enrolment()
 
 	throttle("Sparsh Attempt")
 	hint_level, retry_index = _session_position(learner, activity)
@@ -227,7 +232,12 @@ def submit(activity, response):
 	}
 
 	if outcome == "Pass" or critical_error:
-		result["evidence"] = _record_evidence(doc, attempt, learner)
+		previous_flag = frappe.flags.in_sparsh_runner
+		frappe.flags.in_sparsh_runner = True
+		try:
+			result["evidence"] = _record_evidence(doc, attempt, learner)
+		finally:
+			frappe.flags.in_sparsh_runner = previous_flag
 		result["state"] = frappe.db.get_value(
 			"Sparsh Mastery State", {"learner": learner, "competency": doc.competency}, "state"
 		)

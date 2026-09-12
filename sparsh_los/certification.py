@@ -28,7 +28,15 @@ def _evidence_summary(learner, competency):
 	rows = frappe.get_all(
 		"Sparsh Evidence",
 		filters={"learner": learner, "competency": competency, "docstatus": 1},
-		fields=["name", "activity", "outcome", "assistance_level", "critical_error", "recorded_at"],
+		fields=[
+			"name",
+			"activity",
+			"outcome",
+			"assistance_level",
+			"critical_error",
+			"critical_error_cleared",
+			"recorded_at",
+		],
 		order_by="creation asc",
 	)
 
@@ -37,7 +45,7 @@ def _evidence_summary(learner, competency):
 		"evidence_count": len(rows),
 		"independent_passes": len(independent),
 		"distinct_activities": sorted({r.activity for r in independent if r.activity}),
-		"critical_errors": [r for r in rows if r.critical_error],
+		"critical_errors": [r for r in rows if r.critical_error and not r.critical_error_cleared],
 		"records": rows,
 	}
 

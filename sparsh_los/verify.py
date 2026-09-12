@@ -24,7 +24,7 @@ PATHWAY = PREFIX + "PATH"
 OTHER_DOMAIN = PREFIX + "DOM2"
 OTHER_COMPETENCY = PREFIX + "COMP3"
 OTHER_ACTIVITY = PREFIX + "ACT3"
-LEARNER = "Administrator"
+LEARNER = "zzv-subject@example.invalid"
 DOMAIN = PREFIX + "DOM"
 COMPETENCY = PREFIX + "COMP"
 COMPETENCY_2 = PREFIX + "COMP2"
@@ -126,13 +126,18 @@ def teardown():
 	_delete_all("Sparsh Pathway", {"name": PATHWAY})
 	_delete_all("Sparsh Competency Domain", {"name": ("in", [DOMAIN, OTHER_DOMAIN])})
 	_delete_all("Sparsh Source of Truth Rule", {"rule_id": RULE_ID})
-	for user in (TEST_LEARNER, OTHER_LEARNER):
+	for user in (LEARNER, TEST_LEARNER, OTHER_LEARNER):
 		if frappe.db.exists("User", user):
 			frappe.delete_doc("User", user, force=True, ignore_permissions=True)
 	frappe.db.commit()
 
 
 def setup():
+	# The verification subject is a real learner account: a reviewer may not write
+	# evidence about their own work, so the harness cannot be its own subject.
+	_make_learner(LEARNER)
+	frappe.db.commit()
+
 	domain = frappe.new_doc("Sparsh Competency Domain")
 	domain.domain_id = DOMAIN
 	domain.domain_name = "Verification Domain"
@@ -197,6 +202,18 @@ def _new_evidence(activity, outcome, assistance_level=0, critical_error=0,
 	if submit:
 		evidence.submit()
 	return evidence
+
+
+def _submit(activity, response, as_user=None):
+	"""Run one practice submission as the learner, not as the reviewer running this."""
+	from sparsh_los import runner
+
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(as_user or LEARNER)
+		return runner.submit(activity, response)
+	finally:
+		frappe.set_user(original_user)
 
 
 def _state(learner=None):
@@ -564,7 +581,7 @@ def check_runner_loop():
 	_assert(opened["instruction"], "Runner returned no instruction")
 	_assert(opened["hint_level"] == 0, "A session did not open at hint level 0")
 
-	wrong = runner.submit(ACTIVITY_1, "level four")
+	wrong = _submit(ACTIVITY_1, "level four")
 	_assert(wrong["outcome"] == "Fail", "A wrong answer was not marked Fail")
 	_assert(wrong["hint_level"] == 1, "The hint ladder did not advance")
 	_assert(wrong["hint"], "No hint was returned after a wrong answer")
@@ -573,7 +590,7 @@ def check_runner_loop():
 
 	# A pass after a hint is practice evidence, not demonstration. The distinction is
 	# the point of the hint ladder: help received is part of the record.
-	right = runner.submit(ACTIVITY_1, "  Level Two  ")
+	right = _submit(ACTIVITY_1, "  Level Two  ")
 	_assert(right["outcome"] == "Pass", "A correct answer was not marked Pass")
 	_assert(right.get("evidence"), "A pass produced no evidence")
 	_assert(
@@ -586,7 +603,7 @@ def check_runner_loop():
 
 	# An unaided pass is what moves the learner to Demonstrated. A fresh activity is
 	# needed: assistance is now counted from the record, and this one has a failure.
-	independent = runner.submit(ACTIVITY_2, "level two")
+	independent = _submit(ACTIVITY_2, "level two")
 	_assert(independent["outcome"] == "Pass", "An unaided correct answer was not marked Pass")
 	_assert(
 		_state() == "Demonstrated",
@@ -599,7 +616,7 @@ def check_runner_flags_critical_response():
 	"""A response matching a declared critical error fails and blocks progression."""
 	from sparsh_los import runner
 
-	result = runner.submit(ACTIVITY_1, "I would tell them to stop the medicine")
+	result = _submit(ACTIVITY_1, "I would tell them to stop the medicine")
 	_assert(result["critical_error"] == 1, "A critical response was not flagged")
 	_assert(result["outcome"] == "Fail", "A critical response was not failed")
 	_assert(result.get("evidence"), "A critical response recorded no evidence")
@@ -740,11 +757,11 @@ def check_other_domain_runs_unchanged():
 	activity.insert(ignore_permissions=True)
 	frappe.db.commit()
 
-	right = runner.submit(OTHER_ACTIVITY, "Share")
+	right = _submit(OTHER_ACTIVITY, "Share")
 	_assert(right["outcome"] == "Pass", "The other-domain activity did not evaluate a correct answer")
 	_assert(right.get("evidence"), "The other-domain pass produced no evidence")
 
-	wrong = runner.submit(OTHER_ACTIVITY, "file")
+	wrong = _submit(OTHER_ACTIVITY, "file")
 	_assert(wrong["outcome"] == "Fail", "The other-domain activity did not evaluate a wrong answer")
 	_assert(wrong["hint"], "The other-domain activity returned no hint")
 
@@ -871,8 +888,11 @@ def check_activityless_evidence_cannot_demonstrate():
 	"""Evidence with no activity carries no provenance and proves nothing."""
 	_reset_competency()
 
-	_new_evidence(None, "Pass")
-	_new_evidence(None, "Pass")
+	# The invalid record is refused outright now, rather than created and ignored.
+	_raises(
+		lambda: _new_evidence(None, "Pass", submit=False),
+		"An unaided pass with no activity was accepted",
+	)
 	_assert(
 		_state() not in ("Demonstrated", "Mastered"),
 		f"Evidence with no activity reached {_state()}",
@@ -1176,7 +1196,7 @@ def check_critical_response_reaches_a_person():
 	_delete_all("Sparsh Escalation Question", {"learner": LEARNER})
 	frappe.db.commit()
 
-	result = runner.submit(ACTIVITY_1, "I would tell them to stop the medicine")
+	result = _submit(ACTIVITY_1, "I would tell them to stop the medicine")
 	_assert(result["critical_error"] == 1, "A critical response was not flagged")
 	_assert(result.get("escalation"), "A critical response raised no escalation")
 
@@ -1185,18 +1205,18 @@ def check_critical_response_reaches_a_person():
 	_assert(question.escalation_reason == "Safety critical", "The escalation reason is wrong")
 
 	# A directly negated mention is not unsafe.
-	negated = runner.submit(ACTIVITY_1, "I would tell them to not stop the medicine")
+	negated = _submit(ACTIVITY_1, "I would tell them to not stop the medicine")
 	_assert(
 		not negated["critical_error"],
 		"A negated mention of a critical marker was flagged as unsafe",
 	)
 
 	# Punctuation does not smuggle an unsafe answer past the marker.
-	punctuated = runner.submit(ACTIVITY_1, "Simple: stop the medicine.")
+	punctuated = _submit(ACTIVITY_1, "Simple: stop the medicine.")
 	_assert(punctuated["critical_error"] == 1, "Punctuation defeated the critical marker")
 
 	# And a distant negation is not a negation of this phrase.
-	distant = runner.submit(ACTIVITY_1, "Do not hesitate to stop the medicine")
+	distant = _submit(ACTIVITY_1, "Do not hesitate to stop the medicine")
 	_assert(
 		distant["critical_error"] == 1,
 		"A distant negation wrongly suppressed a critical marker",
@@ -1254,7 +1274,7 @@ def check_runner_records_the_governing_rule():
 	competency.save(ignore_permissions=True)
 	frappe.db.commit()
 
-	result = runner.submit(ACTIVITY_1, "level two")
+	result = _submit(ACTIVITY_1, "level two")
 	attempt = frappe.get_doc("Sparsh Attempt", result["attempt"])
 	_assert(attempt.rule == rule.name, f"The attempt recorded rule {attempt.rule}")
 	_assert(attempt.rule_version == 1, f"The attempt recorded version {attempt.rule_version}")
@@ -1413,9 +1433,14 @@ def check_practice_page_builds():
 	frappe.db.commit()
 
 	context = frappe._dict()
-	practice.get_context(context)
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(LEARNER)
+		practice.get_context(context)
+	finally:
+		frappe.set_user(original_user)
 
-	_assert(context.learner == frappe.session.user, "The page named the wrong learner")
+	_assert(context.learner == LEARNER, "The page named the wrong learner")
 	_assert(context.view["competencies"], "The page shows no competencies")
 	_assert(
 		any(c["competency"] == COMPETENCY for c in context.view["competencies"]),

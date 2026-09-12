@@ -92,8 +92,13 @@ def record_evidence(attempt, outcome, assistance_level=None, critical_error=0, c
 	evidence.critical_error = critical_error
 	evidence.ai_feedback_summary = comments
 	evidence.human_review_status = "Approved"
-	evidence.insert(ignore_permissions=True)
-	evidence.submit()
+	previous_flag = frappe.flags.in_sparsh_runner
+	frappe.flags.in_sparsh_runner = True
+	try:
+		evidence.insert(ignore_permissions=True)
+		evidence.submit()
+	finally:
+		frappe.flags.in_sparsh_runner = previous_flag
 
 	# The attempt is not rewritten: it records what the learner did, and a reviewer's
 	# verdict is a separate fact. "Has this been judged?" is answered by whether
