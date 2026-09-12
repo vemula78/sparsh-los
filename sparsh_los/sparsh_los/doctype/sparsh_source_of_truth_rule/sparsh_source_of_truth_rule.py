@@ -38,6 +38,16 @@ class SparshSourceofTruthRule(Document):
 				frappe.throw(_("A superseded rule cannot be reverted to an active status"))
 
 	def on_update(self):
-		if self.supersedes:
-			if frappe.db.get_value(self.doctype, self.supersedes, "status") != "Superseded":
-				frappe.db.set_value(self.doctype, self.supersedes, "status", "Superseded")
+		if not self.supersedes:
+			return
+
+		if frappe.db.get_value(self.doctype, self.supersedes, "status") == "Superseded":
+			return
+
+		frappe.db.set_value(self.doctype, self.supersedes, "status", "Superseded")
+
+		# A rule change does not quietly invalidate past assessments; it schedules the
+		# people who were judged against the old rule to meet the new one.
+		from sparsh_los.refresher import on_rule_superseded
+
+		on_rule_superseded(self.supersedes)

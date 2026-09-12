@@ -36,3 +36,12 @@ has_permission = {
 	"Sparsh Certification Record": "sparsh_los.permissions.has_permission",
 	"Sparsh Escalation Question": "sparsh_los.permissions.has_permission",
 }
+
+# Scheduled jobs
+# --------------
+# Time-based refreshers. The same function is callable directly, so the acceptance
+# harness does not depend on the scheduler running.
+
+scheduler_events = {
+	"daily": ["sparsh_los.refresher.daily"],
+}

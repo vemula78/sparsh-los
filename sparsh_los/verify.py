@@ -106,6 +106,7 @@ def teardown():
 	):
 		frappe.db.set_value("Sparsh Evidence", name, "cleared_by_review", None)
 	frappe.db.commit()
+	_delete_all("Sparsh Refresher Assignment", {"competency": ("in", competencies)})
 	_delete_all("Sparsh Human Review", {"competency": ("in", competencies)})
 	_delete_all("Sparsh Certification Record", {"competency": ("in", competencies)})
 	# Evidence before Mastery State: cancelling Evidence triggers a recompute that
@@ -960,6 +961,75 @@ def check_whitelisted_reads_are_scoped():
 	frappe.db.commit()
 
 
+def check_refresher_time_based():
+	"""Competence expires on time when the competency says it does."""
+	from sparsh_los import refresher
+	from sparsh_los.mastery import REFRESH_DUE
+
+	_reset_competency()
+	_delete_all("Sparsh Refresher Assignment", {"competency": COMPETENCY})
+
+	frappe.db.set_value("Sparsh Competency", COMPETENCY, "refresh_interval_days", 90)
+	evidence = _new_evidence(ACTIVITY_1, "Pass")
+	_assert(_state() == "Demonstrated", f"Expected Demonstrated, got {_state()}")
+
+	# Age the demonstration past the interval.
+	old = frappe.utils.add_days(frappe.utils.now_datetime(), -200)
+	frappe.db.set_value("Sparsh Evidence", evidence.name, "recorded_at", old)
+	frappe.db.set_value("Sparsh Evidence", evidence.name, "creation", old)
+	frappe.db.commit()
+
+	from sparsh_los.mastery import derive_state
+
+	_assert(
+		derive_state(LEARNER, COMPETENCY) == REFRESH_DUE,
+		f"An aged demonstration derived {derive_state(LEARNER, COMPETENCY)}",
+	)
+
+	assigned = refresher.evaluate_time_based()
+	_assert(assigned, "No refresher was assigned for an aged demonstration")
+
+	# Idempotent: a second run does not pile up duplicates.
+	again = refresher.evaluate_time_based()
+	_assert(not again, "A second run duplicated the refresher assignment")
+
+	frappe.db.set_value("Sparsh Competency", COMPETENCY, "refresh_interval_days", 0)
+	frappe.db.commit()
+
+
+def check_refresher_on_rule_change():
+	"""Superseding a rule schedules everyone judged against the old one."""
+	from sparsh_los import refresher
+
+	_reset_competency()
+	_delete_all("Sparsh Refresher Assignment", {"competency": COMPETENCY})
+	_delete_all("Sparsh Source of Truth Rule", {"rule_id": RULE_ID})
+	frappe.db.commit()
+
+	rule_v1 = _new_rule(1)
+	competency = frappe.get_doc("Sparsh Competency", COMPETENCY)
+	competency.set("linked_rules", [])
+	competency.append("linked_rules", {"rule": rule_v1.name})
+	competency.save(ignore_permissions=True)
+
+	_new_evidence(ACTIVITY_1, "Pass")
+	_assert(_state() == "Demonstrated", f"Expected Demonstrated, got {_state()}")
+
+	_new_rule(2, supersedes=rule_v1.name)
+
+	assignments = frappe.get_all(
+		"Sparsh Refresher Assignment",
+		filters={"competency": COMPETENCY, "trigger_reason": refresher.RULE_CHANGED},
+		fields=["learner", "status"],
+	)
+	_assert(assignments, "Superseding a rule assigned no refresher")
+	_assert(
+		any(a.learner == LEARNER for a in assignments),
+		"The learner judged against the old rule was not scheduled",
+	)
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -1001,6 +1071,8 @@ CHECKS = (
 	("identifiers_are_refused", check_identifiers_are_refused),
 	("certification_readiness", check_certification_readiness),
 	("whitelisted_reads_are_scoped", check_whitelisted_reads_are_scoped),
+	("refresher_time_based", check_refresher_time_based),
+	("refresher_on_rule_change", check_refresher_on_rule_change),
 	("cleanup", check_cleanup),
 )
 

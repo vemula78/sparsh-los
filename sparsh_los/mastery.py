@@ -18,6 +18,8 @@ MASTERED = "Mastered"
 
 # Ordered weakest to strongest. "Refresh Due" is deliberately absent: it is a valid
 # stored state but no time-based transition is in scope for this engine.
+REFRESH_DUE = "Refresh Due"
+
 STATE_ORDER = (NOT_STARTED, EXPLORING, PRACTISING, DEMONSTRATED, MASTERED)
 
 
@@ -100,7 +102,30 @@ def derive_state(learner, competency) -> str:
 		if STATE_ORDER.index(state) > STATE_ORDER.index(PRACTISING):
 			state = PRACTISING
 
+	# Applied last, and never before the cap: Refresh Due is outside STATE_ORDER, so
+	# any ordering comparison must already be done by the time it is set.
+	if state in (DEMONSTRATED, MASTERED) and _refresh_overdue(learner, competency):
+		state = REFRESH_DUE
+
 	return state
+
+
+def _refresh_overdue(learner, competency):
+	"""True when the last demonstration is older than the competency's interval.
+
+	Competence is a claim about now, not a claim about the past. A competency with
+	no interval set never expires on time alone.
+	"""
+	interval = frappe.db.get_value("Sparsh Competency", competency, "refresh_interval_days")
+	if not interval:
+		return False
+
+	last = _last_demonstrated(learner, competency)
+	if not last:
+		return False
+
+	age = frappe.utils.date_diff(frappe.utils.now_datetime(), last)
+	return age is not None and age > int(interval)
 
 
 def _last_demonstrated(learner, competency):
