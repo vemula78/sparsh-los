@@ -194,7 +194,12 @@ def _reconcile_certifications(learner, competency, state):
 		filters={"learner": learner, "competency": competency, "docstatus": 1},
 		fields=["name", "certification_state", "certification_status"],
 	):
-		if row.certification_status == "Revoked" or row.certification_state == target:
+		# A revoked certification stays revoked: evidence cannot un-revoke a governance
+		# decision.
+		if row.certification_status == "Revoked" or row.certification_state == "Revoked":
+			continue
+
+		if row.certification_state == target:
 			continue
 
 		frappe.db.set_value("Sparsh Certification Record", row.name, "certification_state", target)

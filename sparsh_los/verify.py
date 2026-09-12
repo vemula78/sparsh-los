@@ -1295,6 +1295,69 @@ def check_review_is_not_open_to_learners():
 	frappe.db.commit()
 
 
+def check_one_standing_certification():
+	"""The ledger can answer 'is this person certified right now?'."""
+	from sparsh_los.sparsh_los.doctype.sparsh_certification_record import (
+		sparsh_certification_record as cert,
+	)
+
+	_reset_competency()
+	_new_evidence(ACTIVITY_1, "Pass")
+	_assert(_state() == "Demonstrated", f"Expected Demonstrated, got {_state()}")
+
+	first = frappe.new_doc("Sparsh Certification Record")
+	first.learner = LEARNER
+	first.competency = COMPETENCY
+	first.certification_status = "Full"
+	first.insert(ignore_permissions=True)
+	first.submit()
+
+	standing = cert.current(LEARNER, COMPETENCY)
+	_assert(standing and standing["name"] == first.name, "The ledger lost the standing certification")
+
+	# A second certification cannot stand alongside the first.
+	def duplicate():
+		second = frappe.new_doc("Sparsh Certification Record")
+		second.learner = LEARNER
+		second.competency = COMPETENCY
+		second.certification_status = "Full"
+		second.insert(ignore_permissions=True)
+		second.submit()
+
+	_raises(duplicate, "Two certifications stand for the same competency")
+
+	# A revocation must name what it withdraws.
+	def unattached_revocation():
+		bad = frappe.new_doc("Sparsh Certification Record")
+		bad.learner = LEARNER
+		bad.competency = COMPETENCY
+		bad.certification_status = "Revoked"
+		bad.insert(ignore_permissions=True)
+
+	_raises(unattached_revocation, "A revocation naming no certification was accepted")
+
+	revocation = frappe.new_doc("Sparsh Certification Record")
+	revocation.learner = LEARNER
+	revocation.competency = COMPETENCY
+	revocation.certification_status = "Revoked"
+	revocation.revokes = first.name
+	revocation.insert(ignore_permissions=True)
+	revocation.submit()
+
+	first.reload()
+	_assert(first.certification_state == "Revoked", f"The revoked record is {first.certification_state}")
+	_assert(
+		cert.current(LEARNER, COMPETENCY) is None,
+		"A revoked certification still reads as standing",
+	)
+
+	# Evidence cannot un-revoke a governance decision.
+	_new_evidence(ACTIVITY_2, "Pass")
+	first.reload()
+	_assert(first.certification_state == "Revoked", "New evidence resurrected a revoked certification")
+	frappe.db.commit()
+
+
 def check_cleanup():
 	teardown()
 	for doctype, filters in (
@@ -1347,6 +1410,7 @@ CHECKS = (
 	("runner_records_the_governing_rule", check_runner_records_the_governing_rule),
 	("human_review_activity_completes", check_human_review_activity_completes),
 	("review_is_not_open_to_learners", check_review_is_not_open_to_learners),
+	("one_standing_certification", check_one_standing_certification),
 	("cleanup", check_cleanup),
 )
 
