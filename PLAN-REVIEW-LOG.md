@@ -847,3 +847,28 @@ mention SAI SPARSH"), and fieldnames were the one thing it did not read. Now cov
 name and every fieldname as well.
 
 **67 passed, 0 failed.**
+
+## 13-Sep-2026 — Programme owner's two open decisions, resolved
+
+Both were decisions for Praveen, not findings. Recorded here because they change where the
+acceptance evidence comes from.
+
+1. **Local development bench — adopted.** Dr. Nayanjeet marked a separate development
+   environment MANDATORY. Development and the harness now run on the local `frappe_docker`
+   bench on Praveen's Mac (`frappe_docker-backend-1`, site `sparsh.localhost`, created fresh).
+   `scripts/install_verify.sh` and `scripts/uninstall.sh` take `TARGET=local` (default) or
+   `TARGET=remote`; the hospital bench can no longer be reached by accident. 67/67 from a clean
+   uninstall-then-install on the new site — the same result the remote bench gave at `a88519f`,
+   so the retarget invalidates no prior evidence. Commit `5bfddb4`.
+
+   Two local-bench defects surfaced and are documented in CLAUDE.md: `sites/apps.txt` has no
+   trailing newline (a blind append fused `sssihms_vms` onto `sparsh_los`), and the local compose
+   stack runs no rq worker, so queued jobs accumulate until Frappe refuses to enqueue — which
+   `bench execute` reports as `NameError: name 'sparsh_los' is not defined` because it falls back
+   to `eval()` and prints that failure instead of the real `QueueOverloaded`.
+
+2. **DPDP wording — adopted as he asked.** The brief says the de-identification requirement is
+   "a SAI SPARSH privacy and data-governance requirement, intended to comply with applicable DPDP
+   requirements as they come into force" rather than asserting compliance. This is framing only:
+   no code, no check and no engineering rule changed, and no identifiable data leaves the bench
+   either way. Brief at v8.1.
