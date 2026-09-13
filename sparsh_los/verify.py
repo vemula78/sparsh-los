@@ -2419,33 +2419,69 @@ def check_model_ledger_records_cost_and_makes_no_call():
 
 
 def _declared_dependencies(path):
-	"""Every dependency pyproject declares, across all the places it can declare one.
+	"""Every dependency the file declares, wherever it declares one.
 
-	Parsed with `tomllib`, not a regex. The hand-rolled version counted a *commented
-	out* dependency — the check was green because it read `# "frappe~=16.0.0"` — and
-	returned nothing at all for an ordinary extras spec like `celery[redis]>=5`,
-	because its non-greedy match stopped at the first `]`. It also could not see
-	`[project.optional-dependencies]` or a poetry table. A dependency in any of those
-	is a dependency.
+	Parsed with `tomllib`, and walked rather than read from a fixed list of tables. A
+	regex version counted a *commented out* dependency and returned nothing at all for
+	`celery[redis]>=5`; a fixed-table version still missed modern poetry groups
+	(`tool.poetry.group.dev.dependencies`), PEP 735 `[dependency-groups]` and
+	`build-system.requires`. Any of those is a dependency that ships.
+
+	Walking every table named like a dependency list means a packaging convention
+	invented after this was written is caught too, rather than silently passing.
 	"""
+	import re as _re
 	import tomllib
 
-	data = tomllib.loads(path.read_text(encoding="utf-8"))
-	raw = list(data.get("project", {}).get("dependencies", []) or [])
-	for group in (data.get("project", {}).get("optional-dependencies", {}) or {}).values():
-		raw.extend(group or [])
+	keys = {
+		"dependencies",
+		"dev-dependencies",
+		"optional-dependencies",
+		"dependency-groups",
+		"requires",
+	}
+	found = []
 
-	poetry = data.get("tool", {}).get("poetry", {})
-	for key in ("dependencies", "dev-dependencies"):
-		raw.extend((poetry.get(key, {}) or {}).keys())
+	def walk(node):
+		if isinstance(node, dict):
+			for key, value in node.items():
+				if key in keys:
+					if isinstance(value, list):
+						found.extend(value)
+					elif isinstance(value, dict) and all(
+						isinstance(v, str) for v in value.values()
+					):
+						# poetry's shape: name -> constraint string.
+						found.extend(value.keys())
+					elif isinstance(value, dict):
+						# A table of named groups: PEP 735's `[dependency-groups]` maps
+						# a group name to a list. Take the lists, not the group names --
+						# and not the table name either, which is how
+						# `[deploy.dependencies.apt]` was read as a package called apt.
+						for grouped in value.values():
+							if isinstance(grouped, list):
+								found.extend(grouped)
+							else:
+								walk(grouped)
+					continue
+				walk(value)
+		elif isinstance(node, list):
+			for item in node:
+				walk(item)
 
-	import re as _re
+	walk(tomllib.loads(path.read_text(encoding="utf-8")))
 
 	names = []
-	for entry in raw:
+	for entry in found:
+		if isinstance(entry, dict):
+			names.extend(entry.keys())
+			continue
 		# "frappe[all] >= 15" / "frappe @ git+https://..." -> "frappe"
 		names.append(_re.split(r"[<>=!~\[@ ;]", str(entry).strip())[0].lower())
-	return sorted(n for n in names if n and n != "python")
+
+	# `python` is a poetry interpreter constraint, not a package. Everything else counts,
+	# including the build backend: a build-time dependency is still code that ships.
+	return sorted({n for n in names if n} - {"python"})
 
 
 def check_no_module_imports_a_network_client():
@@ -2517,9 +2553,13 @@ def check_no_module_imports_a_network_client():
 	pyproject = root / "pyproject.toml"
 	_assert(pyproject.exists(), "pyproject.toml was not found, so the real control is unchecked")
 	declared = _declared_dependencies(pyproject)
+	# `frappe` is the framework and `flit_core`/`setuptools` are build backends, which
+	# do not ship into the running app. Anything else is a runtime dependency.
+	permitted = {"frappe", "flit_core", "setuptools", "hatchling", "wheel"}
+	unexpected = [d for d in declared if d not in permitted]
 	_assert(
-		declared == [] or declared == ["frappe"],
-		f"pyproject.toml declares third-party dependencies: {declared}. "
+		not unexpected,
+		f"pyproject.toml declares third-party dependencies: {unexpected}. "
 		"The engine is stdlib plus frappe, and that list is what actually keeps it deterministic.",
 	)
 

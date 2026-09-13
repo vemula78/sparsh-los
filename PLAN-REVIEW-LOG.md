@@ -754,3 +754,27 @@ rather than left for someone to rediscover as a confusing "patient identifier" r
 `./scripts/uninstall.sh` then `./scripts/install_verify.sh` — clean install from nothing:
 **67 passed, 0 failed**. This is the test that actually exercises schema sync, `on_doctype_update`
 index creation and the install path, rather than re-running against an already-migrated site.
+
+### Dependency scan — three more shapes, found before audit 15 reported
+
+Checked empirically rather than assumed, after the `tomllib` rewrite: a fixed list of tables
+still missed **modern poetry groups** (`[tool.poetry.group.dev.dependencies]` — the current
+spelling), **PEP 735 `[dependency-groups]`**, and **`[build-system] requires`**. Any of those
+ships code.
+
+The parser now walks every table named like a dependency list, so a packaging convention
+invented after this was written is caught rather than silently passing. Two traps found while
+doing it, both by running the parser rather than reading it:
+
+- `[deploy.dependencies.apt]` (OS packages, present in the real file) was read as a Python
+  package called `apt`, because a nested table's keys were taken as poetry name→constraint.
+  Now only a table whose values are all strings is treated that way.
+- PEP 735 maps a group *name* to a list, so taking keys yielded the group name. Now the lists
+  are taken and the names ignored.
+
+The permitted set is explicit — `frappe` plus build backends, which do not ship into the running
+app — rather than an equality check against one expected list.
+
+Proved: adding a PEP 735 `[dependency-groups] dev = ["openai"]` fails the check.
+
+**67 passed, 0 failed.**
