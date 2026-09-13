@@ -58,31 +58,46 @@ class SparshEscalationQuestion(Document):
 			return
 
 		before = self.get_doc_before_save()
-		was_answered = bool(before and before.status == "Answered")
-		answering = self.status == "Answered" or self.answer_text or self.answered_by
+		if not before:
+			return
 
-		if was_answered:
-			# An answer is what the learner was actually told. Editing it afterwards
-			# rewrites the record of advice already given -- and the stale `answered_by`
-			# made that edit look like the original reviewer's work.
-			for field in ("answer_text", "disposition", "answered_by", "status"):
-				if self.get(field) != before.get(field):
+		# Whose question this is cannot change. The guard below compares the session
+		# user with `self.learner`, and `learner` was itself part of the payload: a
+		# dual-role user could point the question at a colleague, answer it as
+		# themselves, and point it back in a second save. Two saves, and the comparison
+		# was true in neither of them. Nothing legitimate reassigns a question anyway.
+		if self.learner != before.learner:
+			frappe.throw(
+				_("A question belongs to the learner who raised it"), frappe.PermissionError
+			)
+
+		if before.status == "Answered":
+			# An answer is what the learner was actually told, and it is read together
+			# with the question that produced it. Freezing only the answer fields let
+			# the question, the attempt it cites and the context snapshot be rewritten
+			# underneath it, so the same answer came to address something else.
+			for field, value in before.as_dict().items():
+				if field in ("modified", "modified_by", "_user_tags", "_comments",
+							 "_assign", "_liked_by", "idx", "docstatus"):
+					continue
+				if self.get(field) != value:
 					frappe.throw(
-						_("This question has already been answered and cannot be rewritten"),
+						_("This question has already been answered and cannot be changed"),
 						frappe.PermissionError,
 					)
 			return
 
+		answering = self.status == "Answered" or self.answer_text or self.answered_by
 		if not answering:
 			return
 
 		if frappe.session.user == self.learner:
 			frappe.throw(_("You cannot answer your own question"), frappe.PermissionError)
 
-		# Attribution is taken from the session, not accepted from the document, so a
-		# stored answer always names the person who actually wrote it.
+		# Attribution and timing are taken from the request, not accepted from the
+		# document. `self.answered_at or now()` let a reviewer date their own answer.
 		self.answered_by = frappe.session.user
-		self.answered_at = self.answered_at or frappe.utils.now_datetime()
+		self.answered_at = frappe.utils.now_datetime()
 		self.status = "Answered"
 
 		if not (self.answer_text or "").strip():

@@ -3624,6 +3624,67 @@ def check_escalation_cannot_be_self_answered_by_update():
 		"The stored answer is not what the reviewer wrote",
 	)
 
+	# The two-save bypass: point the question at somebody else, answer it as yourself
+	# while the comparison is false, then point it back. Neither save compared the
+	# session user against the real owner, because `learner` was part of the payload.
+	fresh = None
+	try:
+		frappe.set_user(DUAL_LEARNER)
+		fresh = escalation.raise_question("A second question I intend to answer", activity=ACTIVITY_1)
+		frappe.db.commit()
+
+		def reassign_then_answer():
+			doc = frappe.get_doc("Sparsh Escalation Question", fresh)
+			doc.learner = OTHER_LEARNER
+			doc.status = "Answered"
+			doc.answer_text = "Answered while the question pointed at somebody else."
+			doc.disposition = "Private answer"
+			doc.save()
+
+		frappe.db.savepoint("sparsh_reassign")
+		try:
+			reassign_then_answer()
+		except frappe.PermissionError:
+			frappe.db.rollback(save_point="sparsh_reassign")
+		else:
+			frappe.db.rollback(save_point="sparsh_reassign")
+			raise AssertionError(
+				"A learner reassigned their own question and answered it"
+			)
+	finally:
+		frappe.set_user(original)
+
+	_assert(
+		frappe.db.get_value("Sparsh Escalation Question", fresh, "learner") == DUAL_LEARNER,
+		"The question changed hands",
+	)
+	_assert(
+		frappe.db.get_value("Sparsh Escalation Question", fresh, "status") == "Open",
+		"The reassigned question was answered anyway",
+	)
+
+	# And the rest of an answered record is frozen too: rewriting the question after
+	# the fact makes the stored answer address something the reviewer never saw.
+	try:
+		frappe.set_user(OTHER_LEARNER)
+
+		def rewrite_the_question():
+			doc = frappe.get_doc("Sparsh Escalation Question", name)
+			doc.question_text = "A different question entirely."
+			doc.save()
+
+		frappe.db.savepoint("sparsh_requestion")
+		try:
+			rewrite_the_question()
+		except frappe.PermissionError:
+			frappe.db.rollback(save_point="sparsh_requestion")
+		else:
+			frappe.db.rollback(save_point="sparsh_requestion")
+			raise AssertionError("The question behind an answer was rewritten after the fact")
+	finally:
+		frappe.set_user(original)
+
+	_delete_all("Sparsh Escalation Question", {"learner": OTHER_LEARNER})
 	_delete_all("Sparsh Escalation Question", {"learner": DUAL_LEARNER})
 	frappe.db.commit()
 
@@ -3801,6 +3862,36 @@ def check_resource_lineage_is_checked():
 		"A valid supersession did not retire its predecessor",
 	)
 	_assert(successor.status == "Current", "A valid successor did not become Current")
+
+	# The index constrains `current_key`; nothing asserted the field was ever set, so a
+	# regression where no Current version claimed a key passed every check above.
+	_assert(
+		frappe.db.get_value("Sparsh Learning Resource", successor.name, "current_key")
+		== PREFIX + "LIN-A",
+		"The Current version does not hold the key the index constrains",
+	)
+	_assert(
+		frappe.db.get_value("Sparsh Learning Resource", first.name, "current_key") is None,
+		"The superseded version still holds the key",
+	)
+
+	# An ordinary edit to a Current resource must not release the key. It did: validation
+	# cleared it, and `on_update` restored it only on a transition, so the row stayed
+	# Current holding nothing and the next version could claim the key beside it.
+	successor.reload()
+	successor.title = "Lineage fixture, retitled"
+	successor.save(ignore_permissions=True)
+	frappe.db.commit()
+	_assert(
+		frappe.db.get_value("Sparsh Learning Resource", successor.name, "current_key")
+		== PREFIX + "LIN-A",
+		"An ordinary edit released the Current version's key",
+	)
+	_raises(
+		lambda: _resource(PREFIX + "LIN-A", 9, status="Current"),
+		"A second Current version was allowed after the first was edited",
+		expect="already the current version",
+	)
 
 	# The query above loses a race between two successors of the same predecessor: both
 	# see one Current version, both exempt it, both insert. Only the database can settle
@@ -4134,6 +4225,29 @@ def check_queue_shows_work_that_is_actually_waiting():
 	waiting_attempt = _new_attempt(rule.name, outcome="Not Evaluated")
 	frappe.db.commit()
 
+	# An older *eligible* attempt on another competency, so the competency predicate is
+	# exercised too: without it in the query, this row consumes a slot and hides the one
+	# the caller asked for.
+	other_activity_id = PREFIX + "QUEUE-OTHER"
+	_delete_all("Sparsh Activity", {"activity_id": other_activity_id})
+	other_activity = frappe.new_doc("Sparsh Activity")
+	other_activity.activity_id = other_activity_id
+	other_activity.title = "Verification Activity"
+	other_activity.competency = COMPETENCY_2
+	other_activity.activity_type = "Knowledge check"
+	other_activity.instruction = "Verification instruction."
+	other_activity.version = 1
+	other_activity.evaluation_mode = "Human review"
+	other_activity.insert(ignore_permissions=True)
+	other_attempt = _new_attempt(rule.name, outcome="Not Evaluated", activity=other_activity.name)
+	frappe.db.commit()
+
+	scoped = review.pending(competency=COMPETENCY, limit=2)
+	_assert(
+		not any(row["name"] == other_attempt.name for row in scoped),
+		"A competency-scoped queue returned an attempt from another competency",
+	)
+
 	# A limit of two: under the old ordering both slots went to the reviewed attempts
 	# and the one genuinely waiting was invisible.
 	queue = review.pending(limit=2)
@@ -4142,6 +4256,8 @@ def check_queue_shows_work_that_is_actually_waiting():
 		"An attempt waiting for review was hidden behind older attempts that were "
 		"already judged",
 	)
+	_delete_all("Sparsh Attempt", {"activity": other_activity.name})
+	_delete_all("Sparsh Activity", {"activity_id": other_activity_id})
 	_reset_competency()
 	frappe.db.commit()
 
@@ -4184,6 +4300,15 @@ def check_ledger_with_no_price_reports_unknown_not_zero():
 			report["interactions_with_no_cost_recorded"] >= 1,
 			"The costless interaction was not counted as unknown",
 		)
+		_assert(
+			report["total_covers_every_interaction"] is False,
+			"A period containing an unpriced interaction claimed its totals were complete",
+		)
+
+		# The empty-period branch (`bool(rows)` in `nothing_priced`) is deliberately not
+		# asserted here: `spend` bounds `days` at 1, and this bench's ledger always holds
+		# another check's rows inside any window it will accept. Loosening the bound to
+		# make it testable would be changing the code to suit the test.
 	finally:
 		_delete_all("Sparsh Model Interaction", {"provider": "zzv-nocost"})
 		frappe.db.commit()

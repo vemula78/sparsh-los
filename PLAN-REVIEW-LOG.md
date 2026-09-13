@@ -1144,3 +1144,71 @@ permits a Deterministic activity whose competency links no rule — readiness bl
 it, the execution path is unchanged, and closing it properly means deciding whether a
 cross-domain competency may ever auto-score without a rule; and the matrix and case-pack counts,
 which establish volume rather than identity.
+
+## 13-Sep-2026 — Audit 19 (independent, ChatGPT) at 9e498fe, and the fixes
+
+The fourth external audit. It confirmed the queue, gateway, answer-key, supervisor and
+migration work, and the SQL specifically ("`competency` and `limit` are bound parameters…
+filtering occurs before limiting"). It then found that **both major round-3 fixes were still
+bypassable** — through state transitions my new tests did not exercise. That is the second
+round running where my fix survived its own check and not the audit.
+
+Both defects were the same mistake in different files: **I froze the fields the attack had used
+and not the field the guard depended on.**
+
+### A19-1 — self-answer by reassigning the learner twice. Major, high confidence.
+
+The guard compares `frappe.session.user` with `self.learner`, and `learner` was part of the
+payload and outside my immutability list. So: point the question at a colleague, answer it as
+yourself while the comparison is false, then point it back. Two saves, and the comparison was
+true in neither. The second save passed because the record was already Answered and none of the
+four fields I had frozen changed.
+
+Fixed by freezing identity: `learner` cannot change after insert at all — nothing legitimate
+reassigns a question — and once a question is Answered *no* field may change, not the four I
+happened to think of. The audit was right that `question_text`, `activity`, `attempt` and
+`context_snapshot` mattered too: rewriting the question underneath a stored answer makes that
+answer address something the reviewer never saw.
+
+Also fixed: `self.answered_at = self.answered_at or now()` let a reviewer date their own answer.
+Attribution and timing both come from the request now.
+
+### A19-2 — an ordinary edit released the resource's unique key. Major, high confidence.
+
+`_check_lineage` cleared `current_key` unconditionally while `on_update` restored it only on a
+transition. So correcting a Current resource's title dropped its key, `became_current` was
+False, and the row stayed Current holding nothing — leaving the next version free to claim the
+key with the unique index none the wiser. Two Current versions, one constrained.
+
+The key is now preserved when the resource was already Current and deferred only while it is
+becoming Current. The audit confirmed the concurrent-successor path itself is now sound.
+
+### The checks that let both through
+
+- The self-answer check tried honest attribution, a spoofed `answered_by`, and overwriting a
+  reviewer's answer. It never touched `learner` — the one field the guard reads.
+- The resource check asserted the index exists and is unique, and never asserted any row
+  actually holds a key. A regression where no Current version ever claimed one passed it.
+- The queue check proved reviewed attempts do not consume the limit, and never exercised the
+  competency predicate, so deleting that clause from the SQL would not have failed anything.
+
+All three now do. Both fixes were proved by reverting them: "A learner reassigned their own
+question and answered it" and "An ordinary edit released the Current version's key".
+
+### Minor items closed
+
+`nothing_priced` conflated an empty period with a priced-nothing one — no usage is a fact, not a
+gap — so it is now `bool(rows) and not priced`. And the totals sum only priced rows, so a period
+containing an unpriced interaction reported a subtotal as though it were the cost:
+`total_covers_every_interaction` now says otherwise.
+
+The empty-period branch is deliberately unasserted: `spend` bounds `days` at 1, and this bench's
+ledger always holds another check's rows inside any window it accepts. Loosening the bound to
+make it testable would be changing the code to suit the test.
+
+### Still open
+
+The assistance race; rule-free automatic scoring, where the readiness verdict is honest and the
+execution path is not, and closing it is the programme owner's call; and the programme-name
+scanner, which reads `.py` string constants and so cannot see client-side templates or a name
+assembled from separate literals — a tripwire, as the determinism scan is.

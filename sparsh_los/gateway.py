@@ -249,7 +249,10 @@ def spend(days=30):
 	# Reporting 0.0 reads as cheap, which is the same misreading the `*_recorded` flags
 	# were introduced to end -- and the comment above already said so while the code
 	# still returned the zero.
-	nothing_priced = not priced
+	#
+	# An empty period is a third thing again, and folding it in here said "unknown" about
+	# a period where nothing happened. No usage and no recorded spend are both facts.
+	nothing_priced = bool(rows) and not priced
 	# Mixed currencies suppress the totals, not the report. Returning a different shape
 	# meant every other figure -- including the count of calls made with no
 	# de-identification assertion, the number worth escalating -- vanished exactly when
@@ -272,6 +275,10 @@ def spend(days=30):
 		if (mixed_currency or nothing_priced)
 		else round(sum(cost(r) for r in estimated_rows), 6),
 		"interactions_with_no_cost_recorded": len(unknown_rows),
+		# The totals sum the rows that carry a price. When some row does not, they are a
+		# subtotal of the known part, not the period's cost -- a reader comparing two
+		# periods needs to be told that before comparing them.
+		"total_covers_every_interaction": not unknown_rows,
 		"cost_is_partly_estimated": bool(estimated_rows),
 		"learners": len(learners),
 		"cost_per_learner": None

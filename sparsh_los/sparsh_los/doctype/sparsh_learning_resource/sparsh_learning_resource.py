@@ -50,7 +50,17 @@ class SparshLearningResource(Document):
 		# The key is claimed in `on_update`, after the predecessor has released it --
 		# claiming it here would collide with the version this one is replacing, which
 		# is still Current until validation passes.
-		self.current_key = None
+		#
+		# Only while *becoming* Current, though. Clearing it unconditionally meant any
+		# ordinary edit to an already-Current resource -- a corrected title -- dropped
+		# the key and `on_update` never restored it, because that is not a transition.
+		# The row stayed Current holding nothing, and the next version could claim the
+		# key without the unique index noticing two Current versions.
+		before = self.get_doc_before_save()
+		if before and before.status == "Current":
+			self.current_key = self.resource_id
+		else:
+			self.current_key = None
 
 		# The predecessor is still Current while this one is being saved -- `on_update`
 		# demotes it only after validation passes -- so the version being superseded is
