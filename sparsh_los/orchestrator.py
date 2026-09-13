@@ -253,17 +253,27 @@ def next_in_pathway(pathway, learner=None):
 			# A rejected review, or a pass carried by hints, does not complete a
 			# mandatory step — the same filters mastery.py applies to an independent
 			# pass, applied here too so the two modules cannot disagree.
-			done = frappe.db.count(
-				"Sparsh Evidence",
-				{
-					"learner": learner,
-					"activity": step.activity,
-					"outcome": "Pass",
-					"critical_error": 0,
-					"assistance_level": 0,
-					"human_review_status": ("!=", "Rejected"),
-					"docstatus": 1,
-				},
+			# `get_all`, not `db.count`. Both take the same filters, but only
+			# `get_all` routes through db_query, which renders `!=` as
+			# `ifnull(col, '') != value`; `db.count` builds a bare `<>`, which drops a
+			# NULL review status. That is the divergence from the Python sites in
+			# mastery.py that the comment above claimed was closed -- it was closed at
+			# one of the two sites and asserted at both.
+			done = len(
+				frappe.get_all(
+					"Sparsh Evidence",
+					filters={
+						"learner": learner,
+						"activity": step.activity,
+						"outcome": "Pass",
+						"critical_error": 0,
+						"assistance_level": 0,
+						"human_review_status": ("!=", "Rejected"),
+						"docstatus": 1,
+					},
+					limit=1,
+					pluck="name",
+				)
 			)
 			if not done:
 				suggestion = next_experience(competency, learner)

@@ -778,3 +778,54 @@ app — rather than an equality check against one expected list.
 Proved: adding a PEP 735 `[dependency-groups] dev = ["openai"]` fails the check.
 
 **67 passed, 0 failed.**
+
+## Audit 15 — 13-Sep-2026 — against `d65bf8d`
+
+### F1 — the seventh instance, and this one had teeth
+
+The comment written in round 6 to replace an overclaiming comment said: *"Frappe renders `!=` as
+`ifnull(col, '') != value`, which keeps a NULL row exactly as the Python sites do."* True of
+`frappe.get_all`, which routes through `db_query`. **False of `frappe.db.count`**, which builds
+via `frappe.qb` with no coalesce — a bare `<>`, which drops a NULL row.
+
+`next_in_pathway` used `db.count`. So the divergence the comment declared closed was closed at
+one of the two sites it changed and asserted at both. A mandatory step passed on Evidence with a
+NULL review status would be counted as not done and re-offered for ever, while
+`_passed_activities` and `mastery` counted it.
+
+Fixed by making both sites use `get_all`, so they share one query path rather than two with
+different NULL semantics. Narrow in practice — the field carries a default — but the comment was
+wrong at the line it was written to justify.
+
+That is seven consecutive rounds, and the third time the defect was *inside the comment written
+to close the previous round's comment finding*.
+
+### F4/F5 — the currency set was computed over rows with no cost
+
+`currencies = {r.cost_currency or "unspecified" for r in rows}` included rows carrying no cost at
+all, so one cost-less entry with a blank currency suppressed `total_cost`, `total_actual`,
+`total_estimated` and `cost_per_learner` for the whole period — while contributing nothing to
+them. And when every priced row was blank, `len(currencies) == 1` and the report returned a real
+total labelled `currency: "unspecified"`: a total in an unknown unit, presented as a
+single-currency total, by the same line whose comment said blank counts as *another* currency.
+
+Now computed over priced rows only; a blank alongside a real currency counts as mixed; an
+all-blank ledger reports no currency and names the count.
+
+### F2, F3 — already closed / closed now
+
+F2 (the parser missing poetry groups, PEP 735 and `build-system.requires`) was found
+independently and fixed in `90778b1`, after this audit began reading. F3 is valid: `tomllib` is
+stdlib from 3.11 while `requires-python` declared `>=3.10`, and "the container runs 3.14" is a
+property of one machine, not of the declared floor. The floor is now 3.11.
+
+The backfill docstring still described the old `> 0` predicate; an earlier edit had silently not
+applied because the text differed. Fixed, and a reminder that a string replace that matches
+nothing is a change that did not happen.
+
+### Deferred
+
+F7 (a model id shaped like an MRN trips the guard and `record()` throws, losing the ledger row
+this module says must never be lost — worth its own message), the `sorted(set(...))` dedupe.
+
+**67 passed, 0 failed.**

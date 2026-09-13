@@ -233,16 +233,23 @@ def spend(days=30):
 	# A blank currency counts as another currency, not as "the same as the rest". It
 	# used to be dropped from the set while its amount stayed in the total, so one
 	# unlabelled row was summed into a figure reported as INR.
-	currencies = {r.cost_currency or "unspecified" for r in rows}
+	# Only rows whose cost is actually summed. Taking every row meant one cost-less
+	# entry with a blank currency blanked the totals for the whole period, though it
+	# contributed nothing to them. And when every priced row is blank there is no
+	# currency to report: a total in an unknown unit is not a single-currency total.
+	priced = [r for r in rows if r.actual_cost_recorded or r.estimated_cost_recorded]
+	currencies = {r.cost_currency for r in priced if r.cost_currency}
+	unlabelled = any(not r.cost_currency for r in priced)
+	mixed_currency = len(currencies) > 1 or (bool(currencies) and unlabelled)
 	# Mixed currencies suppress the totals, not the report. Returning a different shape
 	# meant every other figure -- including the count of calls made with no
 	# de-identification assertion, the number worth escalating -- vanished exactly when
 	# the ledger was messiest, and any caller reading them got a KeyError.
-	mixed_currency = len(currencies) > 1
 	return {
 		"period_days": days,
 		"interactions": len(rows),
-		"currency": None if mixed_currency else (sorted(currencies)[0] if currencies else None),
+		"currency": None if mixed_currency or not currencies else sorted(currencies)[0],
+		"priced_interactions_without_a_currency": len([r for r in priced if not r.cost_currency]),
 		"currencies": sorted(currencies),
 		"mixed_currency": mixed_currency,
 		"total_cost": None if mixed_currency else round(total, 6),

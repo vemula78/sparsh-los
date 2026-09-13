@@ -8,8 +8,8 @@ shipped, and a new Check defaults to 0 — so every row written before them woul
 reclassified as "nothing known" and its stored cost dropped out of `spend()`'s totals.
 
 The backfill is necessarily a guess for exactly one case, and it guesses the way that
-loses the least: a stored cost greater than zero was certainly recorded, so the flag is
-set. A stored 0.0 is ambiguous in old rows — the flag exists precisely because the
+loses the least: a stored cost other than zero was certainly recorded -- including a
+negative one, since `actual_cost` now permits a credit -- so the flag is set. A stored 0.0 is ambiguous in old rows — the flag exists precisely because the
 number cannot say — and is left unset, which reports it as unknown rather than
 asserting a billed nil nobody recorded.
 

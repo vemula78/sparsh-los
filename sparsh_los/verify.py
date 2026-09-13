@@ -2430,6 +2430,8 @@ def _declared_dependencies(path):
 	Walking every table named like a dependency list means a packaging convention
 	invented after this was written is caught too, rather than silently passing.
 	"""
+	# tomllib is stdlib from 3.11, which is why `requires-python` declares 3.11 rather
+	# than 3.10. The bench runs far newer; the floor is what this depends on.
 	import re as _re
 	import tomllib
 
