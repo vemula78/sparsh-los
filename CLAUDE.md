@@ -43,7 +43,7 @@ docker exec -u frappe frappe_docker-backend-1 bash -lc \
 Tear down: `./scripts/uninstall.sh`. A clean uninstall-then-install is the real regression test for
 schema work — run it after touching any DocType JSON.
 
-### Four things that will waste your time
+### Five things that will waste your time
 
 - `bench get-app <local path>` is **broken** on both benches (`AttributeError: 'App' object has no
   attribute 'org'`, bench 5.31). The script's `pip install -e` + `apps.txt` fallback is load-bearing.
@@ -58,10 +58,17 @@ schema work — run it after touching any DocType JSON.
 - DocType JSON is only re-synced when its `modified` timestamp is newer than the database's. Editing
   a JSON without bumping `modified` means `bench migrate` silently ignores your change — and
   `on_doctype_update` (where unique indexes are created) never fires.
+- Bumping `modified` is **necessary and not sufficient**: `install-app` is a no-op on an app that is
+  already installed, so nothing re-reads the JSON at all. `install_verify.sh` runs `migrate` for
+  exactly this reason. Without it a new column silently does not exist and every read of it fails
+  with `Unknown column`. Note that `bench migrate` cannot be scoped to one app — there is no
+  `--app` flag — so on a shared site it runs every installed app's pending patches.
 
 ## Architecture
 
 Eighteen modules over 16 top-level DocTypes and 7 child tables, all prefixed `Sparsh `.
+The acceptance harness is **80 checks**; raise `MIN_CHECKS` in `install_verify.sh` with it, or an
+empty `CHECKS` tuple reads as success.
 
 | Module | Role |
 |---|---|
@@ -132,6 +139,20 @@ proven otherwise.
   certification history.
 - **The event log is a log.** No role may write one, `events.emit` never raises, and no learner
   response or answer key goes into a `detail` string.
+- **A guard may not read a field the caller can write.** Whoever is acting is a fact about the
+  request — `frappe.session.user` — never about the payload. Two audits running broke the
+  self-answer rule this way: first by reading `answered_by` off the document, then by comparing
+  against a `learner` field the same save could change. A question cannot change hands, and an
+  answered one is immutable in full rather than in the fields someone thought to list.
+- **A uniqueness rule that a query enforces is not enforced.** Two transactions both read a free
+  slot and both take it. `Sparsh Certification Record.standing_key` and
+  `Sparsh Learning Resource.current_key` are held only while the row is standing or current, NULL
+  otherwise — NULLs do not collide — with a unique index behind each. The query stays for the
+  readable error. Whatever sets such a key must also cover the ordinary edit: clearing it on every
+  validate left a Current row holding nothing and the index blind to a second Current version.
+- **A queue filters before it limits.** `review.pending` applies eligibility in the query, because
+  taking the oldest N rows and then discarding the ineligible ones returns an empty queue while
+  work waits behind it, and says nothing about having truncated.
 
 ### Trusted-code flags
 
@@ -160,7 +181,8 @@ Starter Case Pack activities load in **Human review** mode so the engine cannot 
 the current position rather than assuming:
 
 ```bash
-bench --site erp.sssihms.org execute sparsh_los.seed.programme_readiness
+docker exec -u frappe frappe_docker-backend-1 bash -lc \
+  'cd /home/frappe/frappe-bench && bench --site sparsh.localhost execute sparsh_los.seed.programme_readiness'
 ```
 
 Do not give a case an `expected_response` or set it Deterministic until the rule behind it is
@@ -176,12 +198,27 @@ value — if something is missing, the output says missing.
   mastery for a learner who no longer exists.
 - Comments explain why, not what. Do not write a comment asserting a guarantee you have not
   established — a reassuring comment is worse than a documented gap, because it stops the next
-  person looking.
+  person looking. Nine separate defects here were first described accurately by the comment beside
+  the code that did not implement them.
+- `_raises` is for `frappe.ValidationError`, `_refused` for `frappe.PermissionError` — the two are
+  not related by inheritance on this version, so a permission refusal reaching `_raises` fails the
+  check it should satisfy. Pass `expect=` always: without it a check passes on a refusal from any
+  layer, which is how several of them came to test nothing.
+- **Assert on the fixture by name, or on a delta. Never on a floor.** `>= 1` is satisfied by another
+  check's leftovers on a shared site. Three checks were found hollow this way, including one whose
+  fixture never produced the state it claimed to test.
+- **A fix is not verified until its check has been shown to fail with the fix reverted.** This is
+  the single most productive rule in the project; it has exposed a check that tested one DocType
+  under a name covering six, one that passed on ambient state, and several that asserted nothing at
+  all.
 
 ## History
 
 `PLAN.md` holds the original plan and the decisions taken against it. `PLAN-REVIEW-LOG.md` is an
-append-only record of seven independent audits and the disposition of every finding, including the
-ones rejected with evidence. Read the log before re-litigating a design decision — several
+append-only record of nineteen review rounds — four of them genuinely independent, run outside this
+toolchain — and the disposition of every finding, including the ones rejected with evidence. The
+independent rounds found what the in-house ones could not: the blocker that Draft rules did not
+prevent automatic scoring, and then, twice running, that a fix had survived its own new check.
+**Their most valuable findings have been about the harness, not the app, in every round.** Read the log before re-litigating a design decision — several
 obvious-looking "improvements" were tried and rejected there for reasons that are not obvious from
 the code.
