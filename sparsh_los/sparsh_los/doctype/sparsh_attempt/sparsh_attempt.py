@@ -39,6 +39,12 @@ class SparshAttempt(Document):
 		# holding both roles read as trusted and could file their own attempt claiming
 		# outcome=Pass at hint level 0. A second reviewer turning that into Evidence
 		# made it an unaided pass. Roles do not matter here; the subject does.
+		if not self.learner:
+			# Neither branch below matches a blank subject, so the submitted outcome
+			# survived. `reqd` on the field caught it, but by accident of a JSON flag
+			# rather than by this function, which is where the rule lives.
+			frappe.throw(_("An attempt must name the learner it is about"))
+
 		if self.learner == frappe.session.user:
 			self.outcome = "Not Evaluated"
 			self.critical_error = 0
@@ -51,10 +57,23 @@ class SparshAttempt(Document):
 
 			hint_level, retry_index = _session_position(self.learner, self.activity)
 			self.hint_level_used = hint_level
-			if self.retry_index is None:
-				self.retry_index = retry_index
+			# Unconditional. Guarding on `is None` made this dead code -- the field
+			# carries a default of 0, so a self-filer could set any retry index they
+			# liked and the comment above would still claim both values came from the
+			# record.
+			self.retry_index = retry_index
+			# Same reasoning for the timestamp: a self-filed attempt could carry any
+			# time, on the one record this function exists to sanitise.
+			self.attempted_at = frappe.utils.now_datetime()
 			return
 
+		# A reviewer filing an attempt about somebody else keeps the values they
+		# supplied, and `review.record_evidence` only refuses evidence about *itself* —
+		# so two reviewers, or one reviewer twice, can manufacture an unaided pass for a
+		# learner. That is the same trust a reviewer already holds when they reject
+		# evidence or assign a refresher, and it is recorded rather than denied: the
+		# engine's protection against a corrupt reviewer is the audit trail, not a
+		# check.
 		if is_restricted():
 			# A learner may not file an attempt under somebody else's name.
 			self.learner = frappe.session.user
