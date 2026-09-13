@@ -39,6 +39,13 @@ class SparshAttempt(Document):
 		# holding both roles read as trusted and could file their own attempt claiming
 		# outcome=Pass at hint level 0. A second reviewer turning that into Evidence
 		# made it an unaided pass. Roles do not matter here; the subject does.
+		if not self.activity:
+			# `_session_position` below queries on this. A blank one is answered by
+			# Frappe's NULL-filter semantics rather than by an empty match, which
+			# could sweep in unrelated rows and inflate the assistance count. The
+			# field is `reqd`, but this runs before mandatory validation.
+			frappe.throw(_("An attempt must name the activity it is about"))
+
 		if not self.learner:
 			# Neither branch below matches a blank subject, so the submitted outcome
 			# survived. `reqd` on the field caught it, but by accident of a JSON flag

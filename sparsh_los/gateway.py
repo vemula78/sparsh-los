@@ -82,7 +82,10 @@ def record(
 
 	# The free-text surface, checked before it is stored. Cheap, and it is the app's
 	# established control for exactly this accident.
-	reject_identifiers(notes, prompt_template, prompt_version, model_version)
+	# Every free-text field on the row, not a subset. `provider` and `model_id` are
+	# `reqd`, so a hurried caller always fills them, and they are the two shown in the
+	# list view of a table two roles can export.
+	reject_identifiers(notes, prompt_template, prompt_version, model_version, provider, model_id)
 
 	previous = frappe.flags.in_sparsh_gateway
 	frappe.flags.in_sparsh_gateway = True

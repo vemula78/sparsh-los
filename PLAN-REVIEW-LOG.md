@@ -650,8 +650,10 @@ continuation, an import after a semicolon.
 | F11 | `without_deidentification_assertion` was *weakened*: the old `== 0` tested both directions, the new `>= 1` only one, so a full inversion of the flag passed | **Fixed** — exact counts both ways |
 | F12 | `is_restricted`'s public docstring still said "a learner and nothing more" — the precise reading `_is_restricted` was changed to reject, and that `sparsh_attempt.py` warns future readers against. A sixth instance, pre-existing | **Fixed** |
 | F1b | `scanned >= 20` against a tree of 68 files | **Fixed** — 50 |
-| F4 | No migration for `actual_cost_recorded`: pre-existing rows silently reclassify | **Deferred** — no rows exist, nothing calls a model. Must be a patch before any provider is wired |
-| F7, F8, F9, F13 | `provider`/`model_id` unchecked free text; `attempted_at` overwritten on the self-filed path; `_session_position` with a blank activity; JSON reformat inflating the diff | **Deferred**, recorded |
+| F4 | No migration for `actual_cost_recorded`: pre-existing rows silently reclassify and their stored cost drops out of the totals | **Fixed** — `patches/v1_0/backfill_cost_recorded_flags`, confirmed in the Patch Log on the site. A stored cost above zero was certainly recorded; a stored 0.0 in an old row is genuinely ambiguous and is left unset, reporting unknown rather than asserting a billed nil nobody recorded |
+| F7 | `provider`/`model_id` are `reqd` free text, shown in the list view of an exportable table, and were not passed to the identifier guard | **Fixed** — every free-text field now, not a subset |
+| F9 | `_session_position` called with a possibly-blank activity, answered by Frappe's NULL-filter semantics rather than an empty match | **Fixed** — refused alongside the blank learner, since the function's premise is that the subject is known |
+| F8, F13 | `attempted_at` overwritten on the self-filed path (anti-forgery, but an unannounced capability loss); JSON reformat inflating the diff | **Deferred**, recorded |
 
 ### Acceptance
 
