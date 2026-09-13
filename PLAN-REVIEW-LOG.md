@@ -550,3 +550,71 @@ the field has a default), 6.1 (query counts). All real, none safety-bearing toda
 ### Acceptance
 
 `sparsh_los.verify.run` — **65 passed, 0 failed**. `MIN_CHECKS` 65.
+
+## Audit 12 — 13-Sep-2026 — the model-cost ledger, at `ba8ad74`
+
+Non-independent. 2 near-blockers, 13 major, 18 minor, all against code written the same hour.
+
+### G1 — the determinism check did not check determinism
+
+`banned = ("import requests", ..., "from anthropic", "from openai")`. Every module was banned in
+exactly **one** of its two spellings, and for the two that matter most the wrong one:
+`import openai` and `import anthropic` — the form every provider quickstart uses — passed
+untouched, as did `from requests import post`. The commit message claimed the check was there
+so the guarantee would not rest on a docstring. The docstring was the more reliable of the two.
+
+Rewritten: a regex over both spellings for nine modules, plus Frappe's own request helpers
+(which need no import line at all), scanning the **repo root** rather than the inner package so
+`pyproject.toml` — where a dependency would actually arrive, and the real control — is included.
+Tokens are split (`"re" + "quests"`) so the check scans its own file instead of exempting it by
+path substring.
+
+Proved: adding `import openai` to `gateway.py` gives
+`FAIL no_module_imports_a_network_client: gateway.py imports a network client (openai)`.
+
+`CLAUDE.md` now says plainly that this is a tripwire for the careless case and not a proof, and
+names `pyproject.toml` as the control. It cannot see a dynamic import or `frappe.get_attr`.
+
+### The cost arithmetic was wrong three ways
+
+| # | Finding | Disposition |
+|---|---|---|
+| S1 | `cost()` tested truthiness, so a genuine `actual_cost` of 0.0 — the one case where the true cost is *known* — was discarded and the estimate substituted | **Fixed**, and the first fix was also wrong: a Frappe Float is `0.0` when unset, never `None`, so `is not None` never fires. Needed an explicit `actual_cost_recorded` flag to tell "billed nil" from "not yet known" |
+| S2 | One boolean could not distinguish estimate-substituted, genuinely-zero and nothing-known. A ledger with no costs reported `total_cost: 0.0`, which reads as "cheap" rather than "unknown" | **Fixed** — `total_actual`, `total_estimated`, `interactions_with_no_cost_recorded` |
+| S3 | `cost_per_learner` divided the **whole** total by only the learners who appeared, inflating it without bound — and returned 0 for a period that cost real money when no row named anybody | **Fixed** — divides only learner-attributed cost, and reports `interactions_with_no_learner` |
+| S4 | Totals summed across currencies with no currency in the output | **Fixed** — a mixed-currency period returns no total and says why |
+| S9 | A provider refusal was counted as an error | **Fixed** — counted separately; on a clinical corpus it is the more interesting number |
+| L3 | `validate` refused every update, so the `actual_cost` fallback presumed a write path the DocType forbade; the only repair was insert-a-second-row (double counts) or delete-and-reinsert (worse trail) | **Fixed** — `reconcile()`, deliberately narrow: actual cost and notes only |
+| O4 | `provider`/`model_id` free text, so two spellings were two cost buckets | **Fixed** — normalised on write |
+
+### P2 / O1 — the docstring asserted a control it did not call
+
+The module's own docstring said "`reject_identifiers` on learner free text is the control that
+actually runs" while `gateway.py` did not import it. Meanwhile `notes`, `prompt_template` and the
+version strings are exactly where a caller with no template registry puts a rendered prompt —
+a learner's typed response — on a row two roles can read **and export**.
+
+`reject_identifiers` now runs over all four. The docstring no longer claims per-competency or
+per-certification reports (the columns exist; the reports do not), and no longer says `record()`
+is the only way to call a model — nothing calls a model, and there is no interception point.
+
+**Third recurrence of the banned-comment class**, in a module whose docstring was written to
+pre-empt exactly that criticism.
+
+### Harness
+
+V1–V5 all confirmed: global `>=` bounds on a ledger the check did not own (the audit-10 §3.13
+pattern recurring the same day), `cost_is_partly_estimated` asserted only in its trivially-true
+state, nothing re-read what was written, and the ledger absent from `teardown()`. All fixed —
+the check now re-reads eight fields, creates all three cost states, and asserts the identifier
+guard refuses a row.
+
+### Deferred
+
+G4 (dynamic import — unclosable by a source scan; documented instead), G6 (page JS), G7, L4
+(`db.set_value` bypass — known class), L5, P3, P7, S7 (`spend()` unindexed scan — matters at
+volume), S8, V7, V9, O2, O3, O5.
+
+### Acceptance
+
+`sparsh_los.verify.run` — **67 passed, 0 failed**. `MIN_CHECKS` 67.

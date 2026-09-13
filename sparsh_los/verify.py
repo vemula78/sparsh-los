@@ -172,6 +172,9 @@ def teardown():
 	# fixtures, and the module's claim to delete everything it created stops being true.
 	_delete_all("Sparsh Event", {"learner": ("like", PREFIX.lower() + "%")})
 	_delete_all("Sparsh Event", {"competency": ("in", competencies)})
+	# Same reasoning as events: undeletable outside maintenance, and its rows point at
+	# fixture learners this teardown is about to delete.
+	_delete_all("Sparsh Model Interaction", {"provider": ("like", "zzv%")})
 	_delete_all("Sparsh Competency Domain", {"name": ("in", [DOMAIN, OTHER_DOMAIN])})
 	_delete_all("Sparsh Source of Truth Rule", {"rule_id": RULE_ID})
 	# Everything belonging to the fixture learners, whatever competency it names.
@@ -2248,16 +2251,74 @@ def check_model_ledger_records_cost_and_makes_no_call():
 	)
 	_assert(name, "The gateway recorded nothing")
 
+	# Re-read what was written. `name` being truthy proves an insert happened, not that
+	# any field landed -- a typo'd attribute would be accepted silently by Frappe.
+	stored = frappe.get_doc("Sparsh Model Interaction", name)
+	for field, expected in (
+		("model_version", "2026-09"),
+		("prompt_version", "3"),
+		("input_tokens", 1200),
+		("output_tokens", 300),
+		("latency_ms", 820),
+		("learner", LEARNER),
+		("competency", COMPETENCY),
+		("deidentified", 1),
+	):
+		_assert(
+			stored.get(field) == expected,
+			f"{field} was recorded as {stored.get(field)!r}, expected {expected!r}",
+		)
+	_assert(stored.provider == "zzv-test", f"provider was not normalised: {stored.provider}")
+
+	# A second row with a real actual cost, and a third asserting nothing, so the report
+	# has all three states to distinguish rather than one trivially-true one.
+	gateway.record(
+		provider="ZZV-Test", model_id="ZZV-Model-1", purpose="Other", actual_cost=2.0, deidentified=1
+	)
+	gateway.record(provider="zzv-test", model_id="zzv-model-1", purpose="Other", deidentified=0)
+	frappe.db.commit()
+
 	report = gateway.spend(days=1)
-	_assert(report["interactions"] >= 1, "The spend report counted no interactions")
-	_assert(report["total_cost"] >= 1.5, f"The spend report totalled {report['total_cost']}")
+	_assert(report["interactions"] >= 3, "The spend report counted fewer than the three fixtures")
+	_assert(
+		report["total_actual"] >= 2.0,
+		f"The billed cost was not reported as actual: {report['total_actual']}",
+	)
+	_assert(
+		report["total_estimated"] >= 1.5,
+		f"The estimate was not reported as estimated: {report['total_estimated']}",
+	)
 	_assert(
 		report["cost_is_partly_estimated"],
 		"An estimate-only interaction was reported as an actual cost",
 	)
 	_assert(
-		report["without_deidentification_assertion"] == 0,
-		"An interaction asserting de-identification was counted as not asserting it",
+		report["interactions_with_no_cost_recorded"] >= 1,
+		"An interaction with no cost at all was not reported as unknown",
+	)
+	_assert(
+		report["without_deidentification_assertion"] >= 1,
+		"An interaction that asserted nothing was counted as having asserted",
+	)
+
+	# A genuine zero is not an estimate. This is the case truthiness discarded.
+	zero = gateway.record(
+		provider="zzv-test", model_id="zzv-model-1", purpose="Other",
+		actual_cost=0.0, estimated_cost=9.0, deidentified=1,
+	)
+	frappe.db.commit()
+    
+	zero_doc = frappe.get_doc("Sparsh Model Interaction", zero)
+	_assert(zero_doc.actual_cost == 0.0, "A zero actual cost was not stored")
+
+	# And the privacy control runs on what this module can see.
+	_raises(
+		lambda: gateway.record(
+			provider="zzv-test", model_id="zzv-model-1", purpose="Other",
+			notes="caregiver WS123456 on 9876543210", deidentified=1,
+		),
+		"An identifier reached the cost ledger",
+		expect="identif",
 	)
 
 	# The ledger is a ledger: not writable by hand, even by a System Manager.
@@ -2272,22 +2333,72 @@ def check_model_ledger_records_cost_and_makes_no_call():
 
 	_raises(hand_written, "A model interaction could be written by hand", expect="gateway")
 
-	# And the determinism guarantee, checked against the source rather than asserted.
-	root = pathlib.Path(frappe.get_app_path("sparsh_los"))
-	banned = ("import requests", "import httpx", "import urllib", "import socket", "from anthropic", "from openai")
-	for path in root.rglob("*.py"):
-		# Skip this file (it names the tokens it forbids) and compiled artefacts, which
-		# are not utf-8 and are not source.
-		if "verify.py" in str(path) or "__pycache__" in str(path):
-			continue
-		text = path.read_text(encoding="utf-8", errors="ignore")
-		for token in banned:
-			_assert(
-				token not in text,
-				f"{path.name} imports a network client ({token}); the engine must make no call",
-			)
 
 	_delete_all("Sparsh Model Interaction", {"provider": "zzv-test"})
+	frappe.db.commit()
+
+
+def check_no_module_imports_a_network_client():
+	"""A tripwire for the accident, not a proof of determinism. Say which it is.
+
+	The first version of this banned each module in exactly one of its two spellings --
+	`import requests` but not `from requests import post`, `from openai` but not
+	`import openai`, which is the form every provider quickstart uses. It would have
+	caught almost nothing it was written for.
+
+	It still cannot see a dynamic import, `frappe.get_attr("requests.get")`, or Frappe's
+	own post/get request helpers, which need no new import line at all. The control that
+	actually holds is `pyproject.toml` declaring no third-party dependency, which is
+	why that file is scanned too. This check catches the careless case and nothing more,
+	and the docs should not claim otherwise.
+	"""
+	import pathlib
+	import re
+
+	# Split so this file can scan itself: naming the tokens plainly would make the
+	# check exempt exactly one file, and exempting by path substring is how the
+	# previous version let its own source through.
+	modules = (
+		"re" + "quests",
+		"ht" + "tpx",
+		"url" + "lib",
+		"soc" + "ket",
+		"aio" + "http",
+		"anth" + "ropic",
+		"op" + "enai",
+		"ftp" + "lib",
+		"smtp" + "lib",
+	)
+	pattern = re.compile(
+		r"^\s*(?:import|from)\s+(" + "|".join(modules) + r")\b", re.MULTILINE
+	)
+	# Frappe's own helpers open a socket without any import this could see.
+	helpers = ("make_post" + "_request", "make_get" + "_request")
+
+	# The repo root, not the inner package: pyproject.toml is where a dependency would
+	# actually arrive, and get_app_path points one level below it.
+	root = pathlib.Path(frappe.get_app_path("sparsh_los")).parent
+	scanned = 0
+	for path in list(root.rglob("*.py")) + list(root.glob("pyproject.toml")):
+		if "__pycache__" in str(path):
+			continue
+		scanned += 1
+		text = path.read_text(encoding="utf-8", errors="ignore")
+		found = pattern.search(text)
+		_assert(
+			not found,
+			f"{path.name} imports a network client ({found.group(1) if found else ''}); "
+			"the engine must make no call",
+		)
+		for helper in helpers:
+			_assert(
+				helper not in text,
+				f"{path.name} calls frappe.{helper}; the engine must make no call",
+			)
+
+	_assert(scanned >= 20, f"The determinism scan only saw {scanned} files; it is not scanning")
+	pyproject = root / "pyproject.toml"
+	_assert(pyproject.exists(), "pyproject.toml was not found, so the real control is unchecked")
 	frappe.db.commit()
 
 
@@ -3112,6 +3223,7 @@ CHECKS = (
 	("pathway_does_not_hand_over_a_gated_activity", check_pathway_does_not_hand_over_a_gated_activity),
 	("dual_role_cannot_forge_their_own_attempt", check_dual_role_cannot_forge_their_own_attempt),
 	("model_ledger_records_cost_and_makes_no_call", check_model_ledger_records_cost_and_makes_no_call),
+	("no_module_imports_a_network_client", check_no_module_imports_a_network_client),
 	("answered_refresher_is_not_reassigned", check_answered_refresher_is_not_reassigned),
 	("draft_rule_cannot_auto_score", check_draft_rule_cannot_auto_score),
 	("unbuilt_evaluator_modes_fall_to_a_person", check_unbuilt_evaluator_modes_fall_to_a_person),

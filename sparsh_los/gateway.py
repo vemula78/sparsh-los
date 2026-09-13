@@ -16,14 +16,29 @@ somebody routes around: if the only supported way to call a model is one that pr
 a row here, the cost and privacy questions stay answerable.
 
 The de-identification flag is the caller's assertion, recorded and never verified —
-this module cannot inspect a prompt it never sees. `reject_identifiers` on learner free
-text is the control that actually runs; this is the audit trail for what was claimed.
+this module cannot inspect a prompt it never sees.
+
+It *can* inspect what it is asked to store, and does: `reject_identifiers` runs over
+`notes`, `prompt_template` and the version strings. Those are the fields a hurried
+caller with no template registry will put a rendered prompt into, and they land on a
+row two roles can read and export. An earlier version of this docstring said
+`reject_identifiers` "is the control that actually runs" while this module did not call
+it at all.
+
+What `spend()` answers today is cost per learner, over rows that name a learner. Cost
+per competency and per certification are **not** implemented: the columns are recorded
+so the history exists when those reports are written, which is the whole reason for
+building the ledger before the caller.
+
+And `record()` is not yet the only way to call a model, because nothing calls a model.
+There is no interception point in this app; making this the sole route is a decision
+for whoever wires the first provider, not something already enforced here.
 """
 
 import frappe
 from frappe import _
 
-from sparsh_los.permissions import require_reviewer
+from sparsh_los.permissions import reject_identifiers, require_reviewer
 
 PURPOSES = (
 	"Free-text interpretation",
@@ -54,17 +69,30 @@ def record(
 	deidentified=0,
 	notes=None,
 ):
-	"""Record one model interaction. Not whitelisted: callers are server-side only."""
+	"""Record one model interaction. Not whitelisted: callers are server-side only.
+
+	Unlike `events.emit`, a failure here is **not** swallowed. That is deliberate and it
+	is the opposite trade: an event is an observation, and losing one is better than
+	losing a learner's attempt, but an unrecorded model call is money spent with no
+	record of spending it -- which is the single thing this ledger exists to prevent. A
+	caller that would rather lose the record than the work should catch it and say so.
+	"""
 	if purpose not in PURPOSES:
 		frappe.throw(_("{0} is not a recognised purpose").format(purpose))
+
+	# The free-text surface, checked before it is stored. Cheap, and it is the app's
+	# established control for exactly this accident.
+	reject_identifiers(notes, prompt_template, prompt_version, model_version)
 
 	previous = frappe.flags.in_sparsh_gateway
 	frappe.flags.in_sparsh_gateway = True
 	try:
 		doc = frappe.new_doc("Sparsh Model Interaction")
 		doc.occurred_at = frappe.utils.now_datetime()
-		doc.provider = provider
-		doc.model_id = model_id
+		# Normalised: `by_model` and the cost index treat these as buckets, so
+		# claude-opus-5 and Claude-Opus-5 would be two models and two totals.
+		doc.provider = (provider or "").strip().lower()
+		doc.model_id = (model_id or "").strip().lower()
 		doc.model_version = model_version
 		doc.purpose = purpose
 		doc.learner = learner
@@ -75,7 +103,8 @@ def record(
 		doc.input_tokens = input_tokens
 		doc.output_tokens = output_tokens
 		doc.estimated_cost = estimated_cost
-		doc.actual_cost = actual_cost
+		doc.actual_cost = actual_cost or 0
+		doc.actual_cost_recorded = 1 if actual_cost is not None else 0
 		doc.cost_currency = cost_currency
 		doc.latency_ms = latency_ms
 		doc.outcome_status = outcome_status
@@ -83,6 +112,34 @@ def record(
 		doc.deidentified = 1 if deidentified else 0
 		doc.notes = notes
 		doc.insert(ignore_permissions=True)
+		return doc.name
+	finally:
+		frappe.flags.in_sparsh_gateway = previous
+
+
+def reconcile(interaction, actual_cost, notes=None):
+	"""Write the provider's billed cost onto an existing row.
+
+	`spend()` falls back to the estimate when no actual cost is recorded, which presumes
+	an actual that arrives later -- providers reconcile in batch, and a streaming call
+	reports usage after the fact. The ledger refused every update, so the only way to
+	correct a row was to insert a second one, which double-counts, or to delete and
+	reinsert, which is a worse audit trail than an amendment.
+
+	Deliberately narrow: this is the only field an amendment may touch. Everything else
+	about an interaction is what happened, and stays as recorded.
+	"""
+	reject_identifiers(notes)
+
+	previous = frappe.flags.in_sparsh_gateway
+	frappe.flags.in_sparsh_gateway = True
+	try:
+		doc = frappe.get_doc("Sparsh Model Interaction", interaction)
+		doc.actual_cost = actual_cost
+		doc.actual_cost_recorded = 1
+		if notes:
+			doc.notes = notes
+		doc.save(ignore_permissions=True)
 		return doc.name
 	finally:
 		frappe.flags.in_sparsh_gateway = previous
@@ -116,29 +173,65 @@ def spend(days=30):
 			"output_tokens",
 			"estimated_cost",
 			"actual_cost",
+			"actual_cost_recorded",
 			"outcome_status",
 			"fallback_used",
 			"deidentified",
+			"cost_currency",
 		],
 	)
 
 	def cost(row):
-		# Actual when the provider reported it, estimate otherwise. Mixing them without
-		# saying so would produce a total that looks precise and is not.
-		return row.actual_cost if row.actual_cost else (row.estimated_cost or 0)
+		# A recorded flag, not the number: a Frappe Float is 0.0 when unset, so the
+		# value alone cannot distinguish "the provider billed nil" from "nobody has
+		# told us yet". Truthiness discarded the genuine zero; `is not None` never
+		# fires at all.
+		return row.actual_cost if row.actual_cost_recorded else (row.estimated_cost or 0)
 
-	learners = {r.learner for r in rows if r.learner}
+	actual_rows = [r for r in rows if r.actual_cost_recorded]
+	estimated_rows = [r for r in rows if not r.actual_cost_recorded and r.estimated_cost]
+	unknown_rows = [r for r in rows if not r.actual_cost_recorded and not r.estimated_cost]
+
+	# Cost per learner divides only what was attributed to a learner. Dividing the whole
+	# total by the learners who happened to appear inflated it without bound, and read
+	# as 0 for a period that cost real money when no row named anybody.
+	learner_rows = [r for r in rows if r.learner]
+	learners = {r.learner for r in learner_rows}
+	learner_total = sum(cost(r) for r in learner_rows)
 	total = sum(cost(r) for r in rows)
+
+	# One currency per report or no total at all. Summing across currencies produces a
+	# number that looks like money and is not, which matters more here than elsewhere.
+	currencies = {r.cost_currency for r in rows if r.cost_currency}
+	if len(currencies) > 1:
+		return {
+			"period_days": days,
+			"interactions": len(rows),
+			"total_cost": None,
+			"currencies": sorted(currencies),
+			"message": "Interactions span more than one currency; totals are not comparable.",
+		}
 	return {
 		"period_days": days,
 		"interactions": len(rows),
-		"total_cost": round(total, 4),
-		"cost_is_partly_estimated": any(not r.actual_cost for r in rows),
+		"currency": currencies.pop() if currencies else None,
+		"total_cost": round(total, 6),
+		# Three states, not one flag: what the provider billed, what is only estimated,
+		# and what is not known at all. A ledger with no cost fields used to report
+		# total_cost 0.0, which a reader takes as "cheap" rather than "unknown".
+		"total_actual": round(sum(cost(r) for r in actual_rows), 6),
+		"total_estimated": round(sum(cost(r) for r in estimated_rows), 6),
+		"interactions_with_no_cost_recorded": len(unknown_rows),
+		"cost_is_partly_estimated": bool(estimated_rows),
 		"learners": len(learners),
-		"cost_per_learner": round(total / len(learners), 4) if learners else 0,
+		"cost_per_learner": round(learner_total / len(learners), 6) if learners else None,
+		"interactions_with_no_learner": len(rows) - len(learner_rows),
 		"input_tokens": sum(r.input_tokens or 0 for r in rows),
 		"output_tokens": sum(r.output_tokens or 0 for r in rows),
-		"errors": len([r for r in rows if r.outcome_status != "Success"]),
+		"errors": len([r for r in rows if r.outcome_status in ("Error", "Timeout")]),
+		# Counted apart from errors: a provider refusal is a content-policy event, and
+		# on a clinical corpus it is the more interesting number of the two.
+		"refusals": len([r for r in rows if r.outcome_status == "Refused"]),
 		"fallbacks": len([r for r in rows if r.fallback_used]),
 		# The number worth escalating: calls made without the caller asserting
 		# de-identification. Should be zero, and is a fact rather than a guarantee.

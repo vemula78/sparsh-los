@@ -110,8 +110,12 @@ proven otherwise.
   its evidence stops supporting it, and a revoked one is never resurrected by later evidence.
 - **Deterministic.** No network or model call anywhere at runtime. `ai_feedback_summary` exists for a
   future caller to fill. `gateway.py` records what a model call *cost* and what was asserted
-  about it; it makes no call itself, imports no provider SDK, and a check greps the whole app
-  for network imports rather than trusting this sentence. `Activity.evaluation_mode` declares six evaluator types, but only
+  about it; it makes no call itself and imports no provider SDK. The real control is
+  `pyproject.toml` declaring no third-party dependency. `check_no_module_imports_a_network_client`
+  is a **tripwire for the careless case, not a proof** — it cannot see a dynamic import,
+  `frappe.get_attr("requests.get")`, or Frappe's own request helpers without an import line. Its
+  first version banned each module in one of its two spellings and would have missed
+  `import openai` entirely. `Activity.evaluation_mode` declares six evaluator types, but only
   `Deterministic` is dispatched — every other mode returns `Not Evaluated` and waits for a person.
   An unbuilt mode must never fall through to the string comparison.
 - **Content is versioned apart from the engine.** `Sparsh Learning Resource` carries its own
