@@ -67,7 +67,7 @@ schema work — run it after touching any DocType JSON.
 ## Architecture
 
 Eighteen modules over 16 top-level DocTypes and 7 child tables, all prefixed `Sparsh `.
-The acceptance harness is **80 checks**; raise `MIN_CHECKS` in `install_verify.sh` with it, or an
+The acceptance harness is **82 checks**; raise `MIN_CHECKS` in `install_verify.sh` with it, or an
 empty `CHECKS` tuple reads as success.
 
 | Module | Role |
@@ -111,6 +111,17 @@ proven otherwise.
   record. Demonstrating unaided competence requires a *different* activity.
 - **Nobody judges their own work**, whatever roles they hold — no self-evidence, self-certification,
   self-review or self-answered escalation.
+- **A guard in `validate` is a guard on saving, and on nothing else.** Deletion does not pass
+  through it, and neither do `db_set` or `frappe.db.set_value`. Anything worth freezing on save
+  is worth an `on_trash` too — the answered escalation question was frozen field by field and
+  could still be deleted outright.
+- **A transition test is not a change test.** `became_current` and its like fire on a status
+  moving, so an edit to a row that is *already* in that status is invisible to them. A Current
+  resource's material fields are therefore refused rather than watched for.
+- **A constraint added with its column is not retroactive.** Every row that predates the column
+  holds NULL, and NULLs do not collide, so a unique index installs cleanly over data that already
+  violates it. A new key column needs a backfill patch, and the patch reports what it cannot
+  decide rather than guessing.
 - **No unvalidated rule becomes production logic.** If an activity's competency links a rule
   that is not `Validated`, the runner refuses to auto-score it and routes to a reviewer. This
   was documentation-only until an audit showed a Deterministic activity against a Draft
@@ -215,10 +226,11 @@ value — if something is missing, the output says missing.
 ## History
 
 `PLAN.md` holds the original plan and the decisions taken against it. `PLAN-REVIEW-LOG.md` is an
-append-only record of nineteen review rounds — four of them genuinely independent, run outside this
+append-only record of twenty review rounds — five of them genuinely independent, run outside this
 toolchain — and the disposition of every finding, including the ones rejected with evidence. The
 independent rounds found what the in-house ones could not: the blocker that Draft rules did not
-prevent automatic scoring, and then, twice running, that a fix had survived its own new check.
+prevent automatic scoring, then, twice running, that a fix had survived its own new check, and
+then that three guarantees held on the save path and nowhere else.
 **Their most valuable findings have been about the harness, not the app, in every round.** Read the log before re-litigating a design decision — several
 obvious-looking "improvements" were tried and rejected there for reasons that are not obvious from
 the code.
