@@ -444,7 +444,15 @@ def check_no_pii_fields():
 def check_no_domain_strings():
 	offenders = []
 	for doctype in _sparsh_doctypes():
+		# The DocType name itself, and every fieldname. The convention forbids a
+		# `sparsh_`-prefixed fieldname, and the scan that enforced it read only three
+		# display attributes -- so the one thing named in the rule went unchecked.
+		bare = doctype.replace("Sparsh ", "")
+		if DOMAIN_STRING_PATTERN.search(bare):
+			offenders.append(f"doctype:{doctype}")
 		for field in frappe.get_meta(doctype).fields:
+			if DOMAIN_STRING_PATTERN.search(field.fieldname or ""):
+				offenders.append(f"{doctype}.{field.fieldname} (fieldname)")
 			for attribute in ("label", "options", "description"):
 				value = field.get(attribute)
 				if not value or field.fieldtype in ("Link", "Table", "Table MultiSelect"):
@@ -528,6 +536,35 @@ def check_learner_row_scope():
 		not has_permission(attempt, "read", TEST_LEARNER),
 		"A learner was granted access to another learner's attempt",
 	)
+
+	# All six scoped DocTypes, not just Attempt. A missing hook or a wrong learner
+	# field on any of the others would have left every row of it readable, and this
+	# check -- named for row scope in general -- would still have passed.
+	from sparsh_los import hooks
+	from sparsh_los.permissions import LEARNER_SCOPED
+
+	for doctype, field in LEARNER_SCOPED.items():
+		_assert(
+			doctype in hooks.permission_query_conditions,
+			f"{doctype} is learner-scoped but has no permission_query_conditions hook",
+		)
+		_assert(
+			doctype in hooks.has_permission,
+			f"{doctype} is learner-scoped but has no has_permission hook",
+		)
+		_assert(
+			frappe.get_meta(doctype).get_field(field),
+			f"{doctype} is scoped on {field}, which is not a field on it",
+		)
+		scoped = frappe.get_attr(hooks.permission_query_conditions[doctype])(TEST_LEARNER)
+		_assert(
+			TEST_LEARNER in (scoped or ""),
+			f"{doctype}'s condition does not name the learner: {scoped!r}",
+		)
+		_assert(
+			frappe.get_attr(hooks.permission_query_conditions[doctype])("Administrator") == "",
+			f"{doctype} scoped Administrator like a learner",
+		)
 	_assert(
 		has_permission(attempt, "read", "Administrator"),
 		"Administrator was denied access to an attempt",

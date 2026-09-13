@@ -829,3 +829,21 @@ F7 (a model id shaped like an MRN trips the guard and `record()` throws, losing 
 this module says must never be lost — worth its own message), the `sorted(set(...))` dedupe.
 
 **67 passed, 0 failed.**
+
+### Audit 10's last two harness findings — closed
+
+§3.9: `check_learner_row_scope` exercised `Sparsh Attempt` alone, under a name and a docstring
+covering row scope in general. A missing hook or a wrong learner field on any of the other five
+scoped DocTypes would have left every row of it readable and this check would still have passed.
+It now asserts, for all six: a `permission_query_conditions` hook, a `has_permission` hook, that
+the scoping field exists on the DocType, that the condition names the learner, and that
+Administrator is not scoped. Proved by deleting one hook —
+`FAIL learner_row_scope: Sparsh Refresher Assignment is learner-scoped but has no
+permission_query_conditions hook`.
+
+§3.10: `check_no_domain_strings` read `label`, `options` and `description` only. The convention
+it enforces names **fieldnames** specifically ("nothing in a field name or a validation may
+mention SAI SPARSH"), and fieldnames were the one thing it did not read. Now covers the DocType
+name and every fieldname as well.
+
+**67 passed, 0 failed.**
