@@ -1037,3 +1037,35 @@ Still open from audit 17: the assistance race (needs a lock on (learner, activit
 decision), `review.pending` limit bounds, the Refresh Due guidance text, domain strings in
 validation messages, shared-site lower bounds, and cross-user coverage for
 `certification_record.current()` and `orchestrator.next_in_pathway()`.
+
+## 13-Sep-2026 — Audit 17 follow-up, second pass: four more items closed
+
+Harness at **77 checks**. Each fix below was proved by reverting it and watching its check
+fail.
+
+- **`review.pending(limit)` is bounded.** `limit` is caller input on a whitelisted endpoint and
+  reached the query as `int(limit)`: unbounded it scans the table, negative it means whatever
+  the database decides, and malformed it raised a bare `ValueError` the caller saw as an
+  internal error rather than a rejected argument. Now 1..500, with a message.
+- **Refresh Due advice names the refresher.** `readiness()` told every non-Demonstrated learner
+  that an unaided pass was needed. A Refresh Due learner may already have every unaided pass the
+  rule asks for; the text sent them at the wrong task and implied their earlier evidence had
+  stopped counting, which is precisely what the refresher design promises does not happen.
+- **Cross-user coverage for the two omitted endpoints.** `check_whitelisted_reads_are_scoped`
+  covered most endpoints taking a learner argument and left out
+  `certification_record.current()` and `orchestrator.next_in_pathway()`. Their guards were
+  sound; nothing would have failed if either had been removed. `check_cross_user_endpoints_refuse`
+  now calls both as one learner about another and requires `PermissionError` specifically —
+  a refusal from any other layer is reported as the wrong reason, not accepted as a pass.
+- **The programme's name cannot reach user-facing text.** `check_no_domain_strings` reads
+  DocType names and field metadata; nothing looked at the strings a user actually reads. The
+  `Sparsh ` DocType prefix is the deliberate exception — it is the app namespace, not the
+  programme — so what is banned is "SAI SPARSH" itself, in any `_()` or `frappe.throw` line.
+  Comments are out of scope: they explain the project to the next reader and ship to nobody.
+
+Two of the four new checks failed on their first run for their own reasons — an undefined
+constant and a non-UTF-8 byte in the tree that turned a scan error into a reported violation.
+Both fixed in the check, not worked around in the assertion.
+
+Still open: the assistance race (a lock on (learner, activity), a schema decision) and the
+shared-site lower bounds at nine call sites.

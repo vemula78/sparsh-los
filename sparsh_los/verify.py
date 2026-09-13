@@ -3731,7 +3731,154 @@ def check_unenrolled_learns_nothing_from_the_error():
 	_assert("not enrolled" in errors["real"].lower(), f"Refused for another reason: {errors}")
 
 
+
+def check_queue_limit_is_bounded():
+	"""`limit` is caller input, and it reached the query as int(limit) or an exception."""
+	from sparsh_los import review
+
+	original = frappe.session.user
+	try:
+		frappe.set_user(LEARNER)
+		frappe.get_doc("User", LEARNER)
+	finally:
+		frappe.set_user(original)
+
+	_raises(lambda: review.pending(limit=0), "A zero queue limit was accepted",
+			expect="between 1 and")
+	_raises(lambda: review.pending(limit=-5), "A negative queue limit was accepted",
+			expect="between 1 and")
+	_raises(lambda: review.pending(limit=10 ** 9), "An unbounded queue limit was accepted",
+			expect="between 1 and")
+	_raises(lambda: review.pending(limit="all of them"),
+			"A malformed queue limit raised instead of being rejected",
+			expect="whole number")
+
+	# The ordinary call still works, or the bound has only broken the queue.
+	_assert(isinstance(review.pending(limit=5), list), "A valid queue limit was refused")
+
+
+def check_refresh_due_advice_names_the_refresher():
+	"""A learner held by a refresher may already have every unaided pass required.
+
+	The readiness text told every non-Demonstrated learner to earn an unaided pass,
+	which sends a Refresh Due learner at the wrong task and reads as though their
+	earlier evidence had stopped counting.
+	"""
+	from sparsh_los import certification, refresher
+	from sparsh_los.mastery import DEMONSTRATED, MASTERED, recompute_mastery
+
+	_reset_competency()
+	rule = _new_rule(1)
+	_new_evidence(ACTIVITY_1, "Pass", assistance_level=0)
+	_new_evidence(ACTIVITY_2, "Pass", assistance_level=0)
+	frappe.db.commit()
+
+	_assert(_state() in (DEMONSTRATED, MASTERED), f"The fixture did not demonstrate: {_state()}")
+
+	refresher.assign(LEARNER, COMPETENCY, reason="Rule changed", detail=rule.name)
+	recompute_mastery(LEARNER, COMPETENCY)
+	frappe.db.commit()
+	_assert(_state() == "Refresh Due", f"The fixture is not Refresh Due: {_state()}")
+
+	report = certification.readiness(COMPETENCY, learner=LEARNER)
+	_assert(
+		"refresher" in report["reason"].lower(),
+		f"Refresh Due advice does not mention the refresher: {report['reason']}",
+	)
+	_assert(
+		"unaided pass is needed" not in report["reason"],
+		f"A Refresh Due learner was told to earn an unaided pass: {report['reason']}",
+	)
+
+	_reset_competency()
+	frappe.db.commit()
+
+
+def check_cross_user_endpoints_refuse():
+	"""Every endpoint taking a learner argument is an access decision.
+
+	`check_whitelisted_reads_are_scoped` covered most of them and omitted these two, so
+	removing either owner check would not have failed anything.
+	"""
+	from sparsh_los import orchestrator
+	from sparsh_los.sparsh_los.doctype.sparsh_certification_record import (
+		sparsh_certification_record,
+	)
+
+	_make_learner(TEST_LEARNER)
+	_make_learner(OTHER_LEARNER)
+	frappe.db.commit()
+
+	original = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+		for label, call in (
+			("certification_record.current",
+			 lambda: sparsh_certification_record.current(OTHER_LEARNER, COMPETENCY)),
+			("orchestrator.next_in_pathway",
+			 lambda: orchestrator.next_in_pathway(PATHWAY, learner=OTHER_LEARNER)),
+		):
+			frappe.db.savepoint("sparsh_cross")
+			try:
+				call()
+			except frappe.PermissionError:
+				frappe.db.rollback(save_point="sparsh_cross")
+				continue
+			except Exception as exc:  # noqa: BLE001
+				frappe.db.rollback(save_point="sparsh_cross")
+				raise AssertionError(
+					f"{label} refused another learner for the wrong reason: "
+					f"{type(exc).__name__}: {exc}"
+				) from None
+			frappe.db.rollback(save_point="sparsh_cross")
+			raise AssertionError(f"{label} answered about another learner")
+	finally:
+		frappe.set_user(original)
+
+
+def check_no_programme_name_in_messages():
+	"""The engine is domain-agnostic, and a message is as user-facing as a label.
+
+	`check_no_domain_strings` reads DocType names and field metadata. The invariant also
+	covers validations, and nothing looked at the Python strings a user actually reads.
+	The DocType prefix `Sparsh ` is the deliberate exception -- it is the app namespace,
+	not the programme -- so what is banned here is the programme's own name.
+	"""
+	import os
+	import re
+
+	root = os.path.dirname(os.path.abspath(__file__))
+	programme = re.compile(r"sai\s+sparsh", re.IGNORECASE)
+	offenders = []
+	for dirpath, _dirs, filenames in os.walk(root):
+		for filename in filenames:
+			if not filename.endswith(".py"):
+				continue
+			path = os.path.join(dirpath, filename)
+			try:
+				with open(path, encoding="utf-8") as handle:
+					lines = handle.readlines()
+			except (UnicodeDecodeError, OSError):
+				# A stray non-UTF-8 byte in the tree is not this check's business, and
+				# failing on it would report a scan error as a domain-string violation.
+				continue
+			for number, line in enumerate(lines, 1):
+				stripped = line.strip()
+				# Comments and docstrings explain the project to the next reader and are
+				# not shipped to a user; only quoted message text is in scope.
+				if stripped.startswith("#"):
+					continue
+				if programme.search(line) and ('_("' in line or "frappe.throw" in line):
+					offenders.append(f"{os.path.relpath(path, root)}:{number}")
+
+	_assert(not offenders, f"The programme name appears in user-facing text: {offenders}")
+
+
 CHECKS = (
+	("queue_limit_is_bounded", check_queue_limit_is_bounded),
+	("refresh_due_advice_names_the_refresher", check_refresh_due_advice_names_the_refresher),
+	("cross_user_endpoints_refuse", check_cross_user_endpoints_refuse),
+	("no_programme_name_in_messages", check_no_programme_name_in_messages),
 	("unenrolled_learns_nothing_from_the_error", check_unenrolled_learns_nothing_from_the_error),
 	("escalation_cannot_be_self_answered_by_update", check_escalation_cannot_be_self_answered_by_update),
 	("no_rule_auto_scoring_blocks_the_pilot", check_no_rule_auto_scoring_blocks_the_pilot),

@@ -14,6 +14,7 @@ from frappe import _
 from sparsh_los.mastery import (
 	DEMONSTRATED,
 	MASTERED,
+	REFRESH_DUE,
 	derive_state,
 	has_blocking_critical_error,
 )
@@ -82,6 +83,17 @@ def readiness(competency, learner=None):
 		verdict = READY
 		uncleared = []
 		reason = _("The evidence supports sign-off. The decision remains with the programme.")
+	elif state == REFRESH_DUE:
+		# A learner held by a refresher may already have every unaided pass the rule
+		# asks for. Telling them to earn another sends them at the wrong task and reads
+		# as though their prior work stopped counting, which is exactly what the
+		# refresher design promises does not happen.
+		verdict = INSUFFICIENT
+		uncleared = []
+		reason = _(
+			"A refresher is outstanding. Prior evidence stands; completing the assigned "
+			"refresher restores the competency."
+		)
 	else:
 		verdict = INSUFFICIENT
 		uncleared = []

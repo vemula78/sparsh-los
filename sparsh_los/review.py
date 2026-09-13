@@ -24,17 +24,31 @@ def _require_reviewer():
 	require_reviewer()
 
 
+# A reviewer queue nobody can read is not a queue; this is a sanity bound, not a quota.
+MAX_QUEUE = 500
+
+
 @frappe.whitelist()
 def pending(competency=None, limit=50):
 	"""Attempts waiting on a person: recorded, evaluated by nobody, no evidence yet."""
 	_require_reviewer()
+
+	# `limit` is caller input on a whitelisted endpoint. Unbounded it scans the whole
+	# table; negative it means whatever the database decides; malformed it raised a bare
+	# ValueError the caller saw as an internal error rather than a rejected argument.
+	try:
+		limit = int(limit)
+	except (TypeError, ValueError):
+		frappe.throw(_("A queue limit must be a whole number"))
+	if limit < 1 or limit > MAX_QUEUE:
+		frappe.throw(_("A queue limit must be between 1 and {0}").format(MAX_QUEUE))
 
 	attempts = frappe.get_all(
 		"Sparsh Attempt",
 		filters={"outcome": "Not Evaluated"},
 		fields=["name", "learner", "activity", "response", "hint_level_used", "attempted_at"],
 		order_by="creation asc",
-		limit=int(limit),
+		limit=limit,
 	)
 
 	waiting = []
