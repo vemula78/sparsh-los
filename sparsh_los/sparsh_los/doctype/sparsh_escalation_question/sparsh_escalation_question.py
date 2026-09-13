@@ -2,6 +2,7 @@
 # For license information, please see license.txt
 
 import frappe
+from frappe import _
 from frappe.model.document import Document
 
 from sparsh_los.permissions import is_restricted, reject_identifiers
@@ -34,3 +35,21 @@ class SparshEscalationQuestion(Document):
 
 	def validate(self):
 		reject_identifiers(self.question_text, self.answer_text)
+		self._nobody_answers_their_own_question()
+
+	def _nobody_answers_their_own_question(self):
+		"""The invariant belongs on the document, because every write path passes here.
+
+		`before_insert` closed the insert route and `escalation.answer` closed the
+		endpoint, and between them sat the ordinary save: a reviewer holds write on this
+		DocType, so a user with both roles could set status, answer_text and answered_by
+		on their own question through the generic update API and never reach either
+		guard. Closing two of three doors was worth nothing.
+		"""
+		answering = self.status == "Answered" or self.answer_text or self.answered_by
+		if not answering:
+			return
+
+		actor = self.answered_by or frappe.session.user
+		if actor == self.learner:
+			frappe.throw(_("You cannot answer your own question"), frappe.PermissionError)

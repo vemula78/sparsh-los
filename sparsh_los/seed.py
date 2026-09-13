@@ -304,7 +304,13 @@ def programme_readiness():
 		# This used to report `not without_activities` alone, which answered "does every
 		# competency have something to do?" and was then quoted as "a pilot can run
 		# now" -- a stronger claim than the data supported.
-		"can_pilot_with_human_review": (not without_activities) and not auto_scoring_unvalidated,
+		# A no-rule Deterministic activity scores itself just as surely as one against a
+		# Draft rule -- `_rule_is_validated` returns True when nothing is linked. Naming
+		# it below while still reporting the pilot human-review-safe let the same report
+		# assert both things at once.
+		"can_pilot_with_human_review": (
+			(not without_activities) and not auto_scoring_unvalidated and not no_rule_but_scoring
+		),
 		"auto_scoring_against_unvalidated_rules": auto_scoring_unvalidated,
 		# Reported, not blocking: an activity with no rule linked is the deliberate
 		# hole in the gate. The programme owner should see which activities sit in it.

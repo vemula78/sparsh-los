@@ -11,6 +11,56 @@ class SparshLearningResource(Document):
 		if self.supersedes == self.name:
 			frappe.throw(_("A resource cannot supersede itself"))
 
+		self._check_lineage()
+
+	def _check_lineage(self):
+		"""Supersession is a claim about the same material, so check that it is.
+
+		`on_update` retires the predecessor and marks its readers Refresh Due on the
+		strength of this link alone. With only the self-supersession check, one resource
+		could retire an unrelated one and send those learners back to study material that
+		had not changed, and several versions could be Current at once with no way to say
+		which one a learner is meant to be reading.
+		"""
+		if self.supersedes:
+			before = frappe.db.get_value(
+				"Sparsh Learning Resource", self.supersedes, ["resource_id", "version"], as_dict=True
+			)
+			if not before:
+				frappe.throw(_("The superseded resource does not exist"))
+			if before.resource_id != self.resource_id:
+				frappe.throw(
+					_("A resource may only supersede another version of itself ({0}, not {1})").format(
+						self.resource_id, before.resource_id
+					)
+				)
+			if (self.version or 0) <= (before.version or 0):
+				frappe.throw(
+					_("Version {0} cannot supersede version {1}: a successor comes after").format(
+						self.version, before.version
+					)
+				)
+
+		if self.status != "Current":
+			return
+
+		# The predecessor is still Current while this one is being saved -- `on_update`
+		# demotes it only after validation passes -- so the version being superseded is
+		# not a clash. Anything else Current under the same resource_id is.
+		seen = [self.name]
+		if self.supersedes:
+			seen.append(self.supersedes)
+		clash = frappe.get_all(
+			"Sparsh Learning Resource",
+			filters={"resource_id": self.resource_id, "status": "Current", "name": ("not in", seen)},
+			limit=1,
+			pluck="name",
+		)
+		if clash:
+			frappe.throw(
+				_("{0} is already the current version of {1}").format(clash[0], self.resource_id)
+			)
+
 	def on_update(self):
 		"""Becoming Current retires the predecessor and makes its readers stale.
 

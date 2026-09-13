@@ -14,7 +14,7 @@ stored, so nothing can drift from the evidence it claims to summarise.
 import frappe
 from frappe import _
 
-from sparsh_los.mastery import DEMONSTRATED, MASTERED, PRACTISING
+from sparsh_los.mastery import DEMONSTRATED, MASTERED, PRACTISING, REJECTED
 from sparsh_los.permissions import is_restricted, require_enrolment, require_reviewer
 
 CERTIFIABLE = (DEMONSTRATED, MASTERED)
@@ -99,25 +99,21 @@ def supervisor_view(competency=None):
 		if row.state != PRACTISING or (row.evidence_count or 0) < 3:
 			continue
 
-		assisted = frappe.db.count(
+		# Rejected evidence is excluded from the state in `mastery.derive_state`, so
+		# counting it here made the supervisor's explanation contradict the very state it
+		# was explaining -- three rejected assisted passes read as "Passing only with
+		# help" when nothing supported competence at all.
+		# Filtered in Python, not in the query: `db.count` does not ifnull-wrap `!=`, so
+		# `human_review_status != "Rejected"` drops every row whose status is NULL --
+		# which is every piece of evidence nobody has reviewed, i.e. nearly all of it.
+		evidence = frappe.get_all(
 			"Sparsh Evidence",
-			{
-				"learner": row.learner,
-				"competency": row.competency,
-				"docstatus": 1,
-				"outcome": "Pass",
-				"assistance_level": (">", 0),
-			},
+			filters={"learner": row.learner, "competency": row.competency, "docstatus": 1},
+			fields=["outcome", "assistance_level", "human_review_status"],
 		)
-		failures = frappe.db.count(
-			"Sparsh Evidence",
-			{
-				"learner": row.learner,
-				"competency": row.competency,
-				"docstatus": 1,
-				"outcome": "Fail",
-			},
-		)
+		judged = [e for e in evidence if e.human_review_status != REJECTED]
+		assisted = sum(1 for e in judged if e.outcome == "Pass" and (e.assistance_level or 0) > 0)
+		failures = sum(1 for e in judged if e.outcome == "Fail")
 		reason = (
 			"Passing only with help"
 			if assisted and not failures

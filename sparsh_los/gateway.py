@@ -240,7 +240,11 @@ def spend(days=30):
 	priced = [r for r in rows if r.actual_cost_recorded or r.estimated_cost_recorded]
 	currencies = {r.cost_currency for r in priced if r.cost_currency}
 	unlabelled = any(not r.cost_currency for r in priced)
-	mixed_currency = len(currencies) > 1 or (bool(currencies) and unlabelled)
+	# `bool(currencies) and unlabelled` made the all-blank case fall through: with every
+	# priced row unlabelled the set is empty, so this was False and the report carried a
+	# numeric total under `currency: None` -- an amount in an unknown unit, which is the
+	# one thing the comment above says must not happen.
+	mixed_currency = len(currencies) > 1 or unlabelled
 	# Mixed currencies suppress the totals, not the report. Returning a different shape
 	# meant every other figure -- including the count of calls made with no
 	# de-identification assertion, the number worth escalating -- vanished exactly when

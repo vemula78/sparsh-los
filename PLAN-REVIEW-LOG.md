@@ -940,3 +940,65 @@ Also noted from `runtime-facts.txt`: all 21 endpoints register
 a GET unless the code commits, and no request-reachable function here commits — the explicit
 commits are in `seed.load_matrix`, `seed.load_case_pack`, `install` and `verify`. Defence in
 depth, minor, high confidence.
+
+## 13-Sep-2026 — Audit 17 (independent, ChatGPT) at e4de969, and the fixes
+
+The second external audit. It read the source bundle, the runtime facts and the hostile-probe
+output together, which is why it could be specific about installed permissions rather than
+hedging. It confirmed the endpoint inventory (21, all authenticated, all gated), agreed the
+GET reasoning, and found four major integrity defects plus a set of harness blind spots.
+
+Every fix below was proved by reverting it and watching the new check fail. The five checks
+were written first and all five failed on the unfixed code; the harness is now **72 checks**.
+
+### Confirmed and fixed
+
+| # | Finding | Fix |
+|---|---|---|
+| A17-1 | **Self-answered escalation.** `before_insert` closed the insert route and `escalation.answer` closed the endpoint; the ordinary save was open. A reviewer holds write on the DocType, so a dual-role user could set `status`, `answer_text` and `answered_by` on their own question and never reach either guard | `_nobody_answers_their_own_question` in `validate()`, where every write path passes |
+| A17-2 | **No-rule auto-scoring did not block the pilot.** `_rule_is_validated` returns True when nothing is linked, and `can_pilot_with_human_review` excluded `no_rule_but_scoring` while the same report named it — one document asserting both things | `no_rule_but_scoring` added to the verdict |
+| A17-3 | **Resource lineage unvalidated.** `validate` checked only self-supersession, while `on_update` retired the predecessor and marked its readers Refresh Due. One resource could retire an unrelated one; several versions could be Current at once | same-`resource_id`, increasing-version, and unique-Current checks |
+| A17-4 | **Totals in an unknown currency.** `mixed_currency = len(currencies) > 1 or (bool(currencies) and unlabelled)` is False when *every* priced row is blank, so the report carried numeric totals under `currency: None` — exactly what the comment directly above it says must not happen | `or unlabelled` |
+| A17-5 | **Rejected evidence contaminated the supervisor view.** `derive_state` drops rejected evidence; the dashboard counted it, so three rejected assisted passes read as "Passing only with help" | filtered — in Python, because `db.count` does not ifnull-wrap `!=` and would have dropped every unreviewed row |
+
+A17-4 is the eighth instance of the pattern this log tracks: a comment describing a guarantee
+the code beside it does not implement. The comment was written in the round that introduced the
+bug it describes.
+
+### What the new checks cost to make honest
+
+Four of the five failed correctly on the first attempt. `no_rule_auto_scoring_blocks_the_pilot`
+**passed with its fix reverted** — the pilot verdict was already False because the harness's own
+fixture competencies had no activities, so the assertion was satisfied by ambient state. Making
+it discriminate took four rounds: stand-in activities for the fixture competencies; flipping the
+fixture's mode rather than deleting it, because deleting left its competency with no activity and
+blocked the verdict for a different reason; muting the harness's *other* fixture activities,
+which default to Deterministic with no rule and are therefore no-rule auto-scorers themselves;
+and excluding the fixture under test from that muting. It now fails on the unfixed code and
+refuses to run — rather than pass — if a non-fixture competency would make the comparison
+meaningless.
+
+`check_blank_currency_suppresses_totals` also leaked: on failure it left its unlabelled row in
+the ledger and took `model_ledger_records_cost_and_makes_no_call` down on the next run. Cleanup
+moved into a `finally`.
+
+### Accepted, not fixed
+
+- **Assistance race** (`runner.py:236-241`) — two concurrent submissions can read the same
+  position. The code already documents it and names the fix as a lock on (learner, activity),
+  which is a schema decision. Unchanged, and now recorded as a known break of the stated
+  guarantee rather than as a guarantee.
+- **Activity existence oracle** in `runner.submit` — `_activity()` runs before
+  `_require_enrolment()`, so an unenrolled account can distinguish a real activity name from a
+  fabricated one. Minor; `runner.start` gates first and is the pattern to copy.
+- **`_raises` without `expect`** at 21 call sites — can pass on an unrelated `ValidationError`.
+  Real, and a mechanical sweep; deferred rather than done badly in a hurry.
+- **Unbounded `review.pending(limit)`**, **Refresh Due guidance text**, **domain strings in
+  validation messages**, **shared-site lower bounds**, and the remaining cross-user endpoint
+  coverage gaps (`certification_record.current()`, `orchestrator.next_in_pathway()`).
+- **`Sparsh Certification Record.current()`** is decorated in source but absent from the runtime
+  registry. Worth resolving: either it is unreachable, or the introspection missed it.
+
+The audit also corrected my own F14 write-up: `_apply_learner_limits` replaces the forged outcome,
+which I had verified, but it noted the probe itself never re-read the stored row — true, the
+re-read was a separate script. The probe now stands as evidence of the refusal, not of the value.

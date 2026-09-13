@@ -3374,7 +3374,320 @@ def check_cleanup():
 		_assert(count == 0, f"{doctype} still holds {count} fixture rows")
 
 
+# ------------------------------------------------------- audit 17: closing the gaps
+def check_escalation_cannot_be_self_answered_by_update():
+	"""The self-answer guard has three doors; the harness only ever tried two.
+
+	`check_nobody_judges_their_own_work` exercised Evidence, Certification and Human
+	Review, and `escalation.answer` was covered at the endpoint. Nothing tried an
+	ordinary save on an Escalation Question, which is the route a dual-role user has.
+	"""
+	from sparsh_los import escalation
+
+	_make_learner(DUAL_LEARNER)
+	user = frappe.get_doc("User", DUAL_LEARNER)
+	if "Sparsh Reviewer" not in [r.role for r in user.roles]:
+		user.append("roles", {"role": "Sparsh Reviewer"})
+		user.save(ignore_permissions=True)
+	frappe.db.commit()
+
+	_delete_all("Sparsh Escalation Question", {"learner": DUAL_LEARNER})
+
+	original = frappe.session.user
+	try:
+		frappe.set_user(DUAL_LEARNER)
+		name = escalation.raise_question("A question I intend to answer myself", activity=ACTIVITY_1)
+		frappe.db.commit()
+
+		def answer_by_saving():
+			doc = frappe.get_doc("Sparsh Escalation Question", name)
+			doc.status = "Answered"
+			doc.answer_text = "I am satisfied with my own answer."
+			doc.answered_by = DUAL_LEARNER
+			doc.disposition = "Private answer"
+			doc.save()
+
+		# `_raises` only admits frappe.ValidationError, and PermissionError is not one of
+		# its subclasses on this version, so the refusal has to be caught for what it is.
+		frappe.db.savepoint("sparsh_selfanswer")
+		try:
+			answer_by_saving()
+		except frappe.PermissionError as exc:
+			frappe.db.rollback(save_point="sparsh_selfanswer")
+			_assert("your own question" in str(exc).lower(),
+					f"Refused, but for another reason: {exc}")
+		else:
+			frappe.db.rollback(save_point="sparsh_selfanswer")
+			raise AssertionError("A dual-role user answered their own question by saving it")
+	finally:
+		frappe.set_user(original)
+
+	_assert(
+		frappe.db.get_value("Sparsh Escalation Question", name, "status") == "Open",
+		"The question did not stay Open after the refused self-answer",
+	)
+	_delete_all("Sparsh Escalation Question", {"learner": DUAL_LEARNER})
+	frappe.db.commit()
+
+
+def check_no_rule_auto_scoring_blocks_the_pilot():
+	"""An activity with no rule linked scores itself, so it cannot read as pilot-safe.
+
+	The existing readiness check built a Draft *linked* rule. The one configuration
+	`_rule_is_validated` lets through -- no rule at all -- was named in the report and
+	excluded from the verdict, so the same document said both things.
+	"""
+	from sparsh_los import seed
+
+	_delete_all("Sparsh Activity", {"activity_id": OTHER_ACTIVITY})
+	# `other_domain_runs_unchanged` builds this competency itself and inserts without
+	# checking, so anything created here has to be taken away again.
+	borrowed = not frappe.db.exists("Sparsh Competency", OTHER_COMPETENCY)
+	if borrowed:
+		competency = frappe.new_doc("Sparsh Competency")
+		competency.competency_id = OTHER_COMPETENCY
+		competency.competency_name = "Verification Competency"
+		competency.domain = DOMAIN
+		competency.insert(ignore_permissions=True)
+	frappe.db.commit()
+
+	activity = frappe.new_doc("Sparsh Activity")
+	activity.activity_id = OTHER_ACTIVITY
+	activity.title = "Verification Activity"
+	activity.competency = OTHER_COMPETENCY
+	activity.activity_type = "Knowledge check"
+	activity.instruction = "Verification instruction."
+	activity.version = 1
+	activity.evaluation_mode = "Deterministic"
+	activity.expected_response = "the expected answer"
+	activity.insert(ignore_permissions=True)
+	frappe.db.commit()
+
+	_assert(
+		not frappe.get_all("Sparsh Competency Rule Link", filters={"parent": OTHER_COMPETENCY}, limit=1),
+		"The fixture competency has a rule linked, so this proves nothing",
+	)
+
+	# Ambient blockers have to be cleared or the verdict is False whatever the fixture
+	# does. The only ones on a verification site are the harness's own competencies,
+	# which have no activity; a real one without an activity means this check cannot
+	# discriminate and should say so rather than pass.
+	stand_ins = []
+	muted = []
+	baseline = seed.programme_readiness()
+	baseline_gaps = baseline["competencies_without_activities"]
+
+	# The harness's own fixture activities default to Deterministic and link no rule, so
+	# they are no-rule auto-scorers too and hold the verdict False by themselves. They
+	# are muted for the duration and restored in the finally.
+	for name in baseline["auto_scoring_with_no_rule_linked"]:
+		if name == activity.name:
+			# The fixture under test stays exactly as it is; muting it would hide the
+			# very configuration this check exists to catch.
+			continue
+		activity_id = frappe.db.get_value("Sparsh Activity", name, "activity_id") or ""
+		_assert(
+			activity_id.startswith(PREFIX),
+			f"{name} auto-scores with no rule linked, so the pilot verdict is False "
+			"regardless and this check cannot discriminate",
+		)
+		muted.append(name)
+		frappe.db.set_value("Sparsh Activity", name, "evaluation_mode", "Human review")
+	frappe.db.commit()
+	for competency_id in baseline_gaps:
+		_assert(
+			competency_id.startswith(PREFIX),
+			f"{competency_id} has no activity, so the pilot verdict is False regardless "
+			"and this check cannot discriminate",
+		)
+		stand_in = frappe.new_doc("Sparsh Activity")
+		stand_in.activity_id = PREFIX + "STANDIN-" + competency_id
+		stand_in.title = "Verification Activity"
+		stand_in.competency = competency_id
+		stand_in.activity_type = "Knowledge check"
+		stand_in.instruction = "Verification instruction."
+		stand_in.version = 1
+		# Explicit: a stand-in left on the default mode becomes a no-rule auto-scorer
+		# itself and blocks the very verdict this check is trying to isolate.
+		stand_in.evaluation_mode = "Human review"
+		stand_in.insert(ignore_permissions=True)
+		stand_ins.append(stand_in.activity_id)
+	frappe.db.commit()
+
+	try:
+		readiness = seed.programme_readiness()
+		_assert(
+			activity.name in readiness["auto_scoring_with_no_rule_linked"],
+			"A Deterministic activity with no rule was not reported",
+		)
+		_assert(
+			not readiness["can_pilot_with_human_review"],
+			"Readiness called the pilot human-review-safe while naming a no-rule auto-scorer",
+		)
+
+		# Asserting the verdict is False proves nothing on a site where something else
+		# already blocks the pilot -- and on this one, something did: the first version of
+		# this check passed with the fix reverted. The activity has to be shown to be the
+		# cause. Its mode is flipped rather than the activity deleted, because deleting it
+		# leaves its competency with no activity at all, which blocks the pilot for a
+		# different reason and makes the comparison meaningless.
+		frappe.db.set_value("Sparsh Activity", activity.name, "evaluation_mode", "Human review")
+		frappe.db.commit()
+		without = seed.programme_readiness()
+		_assert(
+			without["can_pilot_with_human_review"],
+			"The pilot is blocked by something other than the fixture, so this check "
+			f"cannot discriminate: gaps={without['competencies_without_activities']} "
+			f"unvalidated={without['auto_scoring_against_unvalidated_rules']} "
+			f"no_rule={without['auto_scoring_with_no_rule_linked']}",
+		)
+	finally:
+		for name in muted:
+			frappe.db.set_value("Sparsh Activity", name, "evaluation_mode", "Deterministic")
+		_delete_all("Sparsh Activity", {"activity_id": OTHER_ACTIVITY})
+		for activity_id in stand_ins:
+			_delete_all("Sparsh Activity", {"activity_id": activity_id})
+		if borrowed:
+			_delete_all("Sparsh Competency", {"competency_id": OTHER_COMPETENCY})
+		frappe.db.commit()
+
+
+def check_resource_lineage_is_checked():
+	"""Supersession retires the predecessor, so the link has to mean what it says.
+
+	The existing resource check built a valid lineage and asserted history survived it.
+	It never tried an invalid one, and the controller validated nothing but
+	self-supersession.
+	"""
+	_delete_all("Sparsh Learning Resource", {"resource_id": ("like", PREFIX + "LIN%")})
+	frappe.db.commit()
+
+	def _resource(resource_id, version, status="Draft", supersedes=None):
+		doc = frappe.new_doc("Sparsh Learning Resource")
+		doc.resource_id = resource_id
+		doc.version = version
+		doc.title = "Lineage fixture"
+		doc.resource_type = "Explainer"
+		doc.status = status
+		doc.supersedes = supersedes
+		doc.insert(ignore_permissions=True)
+		return doc
+
+	first = _resource(PREFIX + "LIN-A", 1, status="Current")
+	stranger = _resource(PREFIX + "LIN-B", 1, status="Current")
+	frappe.db.commit()
+
+	_raises(
+		lambda: _resource(PREFIX + "LIN-B", 2, supersedes=first.name),
+		"A resource superseded an unrelated resource",
+		expect="another version of itself",
+	)
+	later = _resource(PREFIX + "LIN-A", 5)
+	frappe.db.commit()
+	_raises(
+		lambda: _resource(PREFIX + "LIN-A", 3, supersedes=later.name),
+		"A resource superseded a version that is not earlier than it",
+		expect="comes after",
+	)
+	_raises(
+		lambda: _resource(PREFIX + "LIN-A", 3, status="Current"),
+		"A second Current version was allowed for one resource",
+		expect="already the current version",
+	)
+
+	# The legitimate promotion must still work, or the guard has only broken the app.
+	successor = _resource(PREFIX + "LIN-A", 2, status="Current", supersedes=first.name)
+	frappe.db.commit()
+	_assert(
+		frappe.db.get_value("Sparsh Learning Resource", first.name, "status") == "Superseded",
+		"A valid supersession did not retire its predecessor",
+	)
+	_assert(successor.status == "Current", "A valid successor did not become Current")
+
+	_delete_all("Sparsh Learning Resource", {"resource_id": ("like", PREFIX + "LIN%")})
+	frappe.db.commit()
+
+
+def check_blank_currency_suppresses_totals():
+	"""Every priced row unlabelled is not a single-currency ledger.
+
+	The mixed-currency fixture put INR beside USD, so `currencies` was never empty and
+	the all-blank branch -- the one the comment above the code describes -- never ran.
+	"""
+	from sparsh_los import gateway
+
+	_delete_all("Sparsh Model Interaction", {"provider": "zzv-blank"})
+	frappe.db.commit()
+
+	blank = gateway.record(
+		provider="zzv-blank", model_id="zzv-model-blank", purpose="Other",
+		actual_cost=12.5, deidentified=1,
+	)
+	# The field defaults to INR, so the unlabelled case cannot be reached through
+	# record() -- which is why it had no fixture and the branch was never exercised.
+	frappe.db.set_value("Sparsh Model Interaction", blank, "cost_currency", "")
+	frappe.db.commit()
+
+	# Cleanup in a finally: when this check failed, its unlabelled row stayed in the
+	# ledger and took the model-ledger check down with it on the next run.
+	try:
+		report = gateway.spend(days=1)
+		_assert(
+			report["priced_interactions_without_a_currency"] >= 1,
+			"The unlabelled priced row was not counted",
+		)
+		_assert(
+			report["mixed_currency"],
+			"A ledger whose only priced rows carry no currency was reported as single-currency",
+		)
+		for key in ("total_cost", "total_actual", "total_estimated", "cost_per_learner"):
+			_assert(
+				report[key] is None,
+				f"{key} was reported as a number in an unknown currency: {report[key]}",
+			)
+		_assert(report["currency"] is None, "A currency was named when no row carried one")
+	finally:
+		_delete_all("Sparsh Model Interaction", {"provider": "zzv-blank"})
+		frappe.db.commit()
+
+
+def check_supervisor_ignores_rejected_evidence():
+	"""The explanation must be derived from the same rows as the state it explains.
+
+	`derive_state` drops rejected evidence; the dashboard counted it, so a learner held
+	back by nothing could be explained as "Passing only with help".
+	"""
+	from sparsh_los import dashboard
+
+	_reset_competency()
+	for _ in range(3):
+		evidence = _new_evidence(ACTIVITY_1, "Pass", assistance_level=1)
+		frappe.db.set_value("Sparsh Evidence", evidence.name, "human_review_status", "Rejected")
+	frappe.db.commit()
+
+	# The learner is still Practising with three evidence rows, so appearing here is
+	# correct. What must not happen is the explanation citing the rejected passes.
+	rows = [r for r in dashboard.supervisor_view(COMPETENCY)["stuck"] if r["learner"] == LEARNER]
+	for row in rows:
+		_assert(
+			row["assisted_passes"] == 0,
+			f"Rejected assisted passes were counted: {row['assisted_passes']}",
+		)
+		_assert(
+			row["reason"] != "Passing only with help",
+			"A learner whose every pass was rejected was explained as passing with help",
+		)
+
+	_reset_competency()
+	frappe.db.commit()
+
+
 CHECKS = (
+	("escalation_cannot_be_self_answered_by_update", check_escalation_cannot_be_self_answered_by_update),
+	("no_rule_auto_scoring_blocks_the_pilot", check_no_rule_auto_scoring_blocks_the_pilot),
+	("resource_lineage_is_checked", check_resource_lineage_is_checked),
+	("blank_currency_suppresses_totals", check_blank_currency_suppresses_totals),
+	("supervisor_ignores_rejected_evidence", check_supervisor_ignores_rejected_evidence),
 	("rule_version_snapshot", check_rule_version_snapshot),
 	("evidence_cannot_contradict_attempt", check_evidence_cannot_contradict_attempt),
 	("mastery_not_directly_settable", check_mastery_not_directly_settable),
