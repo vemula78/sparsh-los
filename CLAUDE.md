@@ -9,19 +9,17 @@ It records what a learner did, derives a competence state from that record, and 
 person to sign off anything safety-related. SAI SPARSH is its first content pack; nothing in a field
 name or a validation may mention it.
 
-The engine deliberately runs the LMS app (`lms`, installed on the same site) only as the Learn-stage
+The engine deliberately runs the LMS app (`lms`, where a site has it) only as the Learn-stage
 content layer. Do not add a dependency on it — `required_apps` is `["frappe"]` and must stay that
 way.
 
-## Working on a remote site
+## Working on the bench
 
-There is no local bench. The app runs on `erp.sssihms.org` in a Docker container. Every command goes
-through the same chain:
-
-```bash
-ssh -i ~/Downloads/sssihms-web-vm2023_key.pem -p 2222 azureuser@20.219.253.136 \
-  'docker exec -u frappe internal-backend-1 bash -lc "cd /home/frappe/frappe-bench && bench --site erp.sssihms.org <SUBCOMMAND>"'
-```
+Development happens on the **local bench** on this Mac (`frappe_docker`, container
+`frappe_docker-backend-1`, site `sparsh.localhost`). The live hospital bench at
+`erp.sssihms.org` is not a development environment — the programme owner made that a condition
+of approval. Both scripts default to local; reaching the remote needs `TARGET=remote`, set
+deliberately.
 
 Push local edits and run the full check:
 
@@ -36,17 +34,27 @@ nothing — raise it whenever you add checks, or an empty `CHECKS` tuple reads a
 Run the harness alone, or a single check:
 
 ```bash
-bench --site erp.sssihms.org execute sparsh_los.verify.run
-bench --site erp.sssihms.org execute sparsh_los.verify.check_critical_error_blocks
+docker exec -u frappe frappe_docker-backend-1 bash -lc \
+  'cd /home/frappe/frappe-bench && bench --site sparsh.localhost execute sparsh_los.verify.run'
+docker exec -u frappe frappe_docker-backend-1 bash -lc \
+  'cd /home/frappe/frappe-bench && bench --site sparsh.localhost execute sparsh_los.verify.check_critical_error_blocks'
 ```
 
 Tear down: `./scripts/uninstall.sh`. A clean uninstall-then-install is the real regression test for
 schema work — run it after touching any DocType JSON.
 
-### Two things that will waste your time
+### Four things that will waste your time
 
-- `bench get-app <local path>` is **broken** on this bench (`AttributeError: 'App' object has no
+- `bench get-app <local path>` is **broken** on both benches (`AttributeError: 'App' object has no
   attribute 'org'`, bench 5.31). The script's `pip install -e` + `apps.txt` fallback is load-bearing.
+- `sites/apps.txt` on this bench has **no trailing newline**. Appending blind fuses the previous app
+  name onto `sparsh_los` and the install then fails on a module named `sssihms_vmssparsh_los`. The
+  script adds the newline first.
+- The local compose stack runs **no rq worker**, so enqueued jobs accumulate for ever. Past 700 the
+  framework refuses to enqueue at all and the harness dies with `QueueOverloaded` — which
+  `bench execute` then masks as `NameError: name 'sparsh_los' is not defined`, because it falls back
+  to `eval()` on the method string and reports *that* failure instead of the real one. Clear it with
+  `docker exec frappe_docker-redis-queue-1 redis-cli flushall`. Never on the hospital bench.
 - DocType JSON is only re-synced when its `modified` timestamp is newer than the database's. Editing
   a JSON without bumping `modified` means `bench migrate` silently ignores your change — and
   `on_doctype_update` (where unique indexes are created) never fires.
