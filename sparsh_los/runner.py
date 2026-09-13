@@ -138,6 +138,11 @@ def _is_critical(activity, response):
 # mode, an empty field, a value written straight to the column -- goes to a person. Declaring a mode the engine cannot perform and silently scoring it
 # with the deterministic comparison would be the worst of both.
 AUTO_SCORED_MODES = ("Deterministic",)
+# A Reflection is the learner's own written thinking, stored for their record. It is
+# not work awaiting a verdict, so it produces no Evidence and never reaches the review
+# queue -- `review.pending` and `review.record_evidence` both consult this tuple. It
+# was declared and read by nothing, so a Reflection fell through the same path as an
+# unbuilt evaluator and sat in front of a reviewer as if it needed judging.
 NOT_SCORED_MODES = ("Reflection",)
 AWAITING_IMPLEMENTATION_MODES = ("Numeric validation", "Rubric", "AI-assisted")
 
@@ -185,6 +190,14 @@ def evaluate(activity, response):
 	# person; what it no longer does is impose a permanent block on the authority of a
 	# rule nobody has validated.
 	if not _rule_is_validated(activity.competency):
+		return "Not Evaluated", 0
+
+	# A Reflection is stored, not judged, so it is settled before the safety branch:
+	# critical Evidence cannot be cancelled, and a learner's own reflection is not a
+	# demonstration that should carry a permanent block. `submit` still puts a
+	# reflection that matches a critical marker in front of a person, through the same
+	# escalation the unvalidated-rule path uses -- what it does not do is write Evidence.
+	if (activity.evaluation_mode or "") in NOT_SCORED_MODES:
 		return "Not Evaluated", 0
 
 	# Under a validated rule a critical marker bites whatever the mode: an unsafe
@@ -367,6 +380,12 @@ def submit(activity, response):
 			result["message"] = _(
 				"Recorded and sent to a reviewer: this response needs a person to look at it."
 			)
+			return result
+
+		if (doc.evaluation_mode or "") in NOT_SCORED_MODES:
+			# Telling the learner a person would review it promised a verdict that
+			# never comes: nothing queues a Reflection.
+			result["message"] = _("Recorded. A reflection is kept for your record and is not scored.")
 			return result
 
 		result["message"] = _("Recorded. This activity is reviewed by a person.")

@@ -299,12 +299,23 @@ def programme_summary(days=30):
 	# attempt instead counted the reviewed ones for ever: an attempt is immutable, so a
 	# reviewed one keeps that outcome and the figure only ever grew, never agreeing with
 	# the queue it claimed to describe.
+	# The same predicate the reviewer's queue uses, including the Reflection exclusion:
+	# a reflection is stored, not queued, so counting one here would report work waiting
+	# on a person that no person will ever be shown. Counting every `Not Evaluated`
+	# attempt -- the version before this -- also counted the reviewed ones for ever,
+	# because an attempt is immutable and keeps that outcome.
+	from sparsh_los.runner import NOT_SCORED_MODES
+
 	awaiting_person = frappe.db.sql(
 		"""
-		select count(*) from `tabSparsh Attempt` a
+		select count(*)
+		from `tabSparsh Attempt` a
+		inner join `tabSparsh Activity` act on act.name = a.activity
 		where a.outcome = 'Not Evaluated'
+		  and ifnull(act.evaluation_mode, '') not in %(not_scored)s
 		  and not exists (select 1 from `tabSparsh Evidence` e where e.attempt = a.name)
-		"""
+		""",
+		{"not_scored": NOT_SCORED_MODES},
 	)[0][0]
 	open_questions = frappe.db.count(
 		"Sparsh Escalation Question", {"status": ("in", ("Open", "Routed to Human"))}

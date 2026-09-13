@@ -219,6 +219,23 @@ def next_in_pathway(pathway, learner=None):
 	if learner != frappe.session.user and is_restricted():
 		frappe.throw(_("You can only request your own pathway position"), frappe.PermissionError)
 
+	# A pathway carries a status and nothing ever read it, so a Draft sequence -- one
+	# somebody is still assembling, with half its steps missing or in the wrong order --
+	# walked exactly like an approved one. The field existed to say "this is not ready to
+	# put a learner through"; until now it said nothing at all. Retired is refused for
+	# the same reason in reverse: a sequence withdrawn from use should not still be
+	# handing out work.
+	status = frappe.db.get_value("Sparsh Pathway", pathway, "status")
+	if status is None:
+		frappe.throw(_("That pathway does not exist"))
+	if status != "Active":
+		return {
+			"reason": None,
+			"activity": None,
+			"status": status,
+			"message": f"This pathway is {status}, so it is not handing out work.",
+		}
+
 	steps = _pathway_steps(pathway)
 	if not steps:
 		return {"reason": None, "activity": None, "message": "This pathway has no steps."}

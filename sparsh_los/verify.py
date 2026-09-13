@@ -195,6 +195,8 @@ def teardown():
 	_delete_all("Sparsh Attempt", {"activity": ("like", PREFIX + "%")})
 	_delete_all("Sparsh Activity", {"name": ("like", PREFIX + "%")})
 	_delete_all("Sparsh Competency", {"name": ("in", competencies)})
+	# Cohorts point at the pathway and at fixture users; they go before both.
+	_delete_all("Sparsh Cohort", {"name": ("like", PREFIX + "%")})
 	_delete_all("Sparsh Pathway", {"name": PATHWAY})
 	_delete_all("Sparsh Learning Resource", {"resource_id": ("like", PREFIX + "%")})
 	# Events are undeletable outside maintenance by design, which is exactly why the
@@ -219,6 +221,7 @@ def teardown():
 		"zzv-fresh@example.invalid",
 		"zzv-stranger@example.invalid",
 		PREFIX + "pathway@example.invalid",
+		"zzv-reviewer@example.invalid",
 	)
 	for name in frappe.get_all(
 		"Sparsh Evidence", filters={"learner": ("in", fixture_users)}, pluck="name"
@@ -5425,6 +5428,937 @@ def check_practice_page_records_the_session():
 	)
 
 
+# ------------------------------------------------------------ phase 1: cohorts
+COHORT_A = PREFIX + "COH1"
+COHORT_B = PREFIX + "COH2"
+REVIEWER_ONLY = "zzv-reviewer@example.invalid"
+COHORT_ACTIVITY = PREFIX + "ACT-C1"
+
+
+def _make_reviewer(email):
+	"""A reviewer holding no learner role, for asking what the reviewer role alone grants."""
+	if frappe.db.exists("User", email):
+		return frappe.get_doc("User", email)
+	user = frappe.new_doc("User")
+	user.email = email
+	user.first_name = "Verification"
+	user.enabled = 1
+	user.user_type = "System User"
+	user.append("roles", {"role": "Sparsh Reviewer"})
+	user.insert(ignore_permissions=True)
+	return user
+
+
+def _clear_cohorts():
+	_delete_all("Sparsh Cohort", {"name": ("like", PREFIX + "%")})
+	frappe.db.commit()
+
+
+def _new_cohort(cohort_id, learners, status="Draft", pathway=None, joined_on=None):
+	doc = frappe.new_doc("Sparsh Cohort")
+	doc.cohort_id = cohort_id
+	doc.title = "Verification cohort"
+	doc.status = status
+	doc.pathway = pathway
+	for learner in learners:
+		row = {"learner": learner}
+		if joined_on:
+			row["joined_on"] = joined_on
+		doc.append("members", row)
+	doc.insert(ignore_permissions=True)
+	return doc
+
+
+def _member_keys(cohort):
+	return {
+		r.learner: r.active_key
+		for r in frappe.get_all(
+			"Sparsh Cohort Member",
+			filters={"parent": cohort, "parenttype": "Sparsh Cohort"},
+			fields=["learner", "active_key"],
+		)
+	}
+
+
+def check_cohort_permission_model():
+	"""Learners hold nothing on Sparsh Cohort; reviewers manage it but cannot delete it.
+
+	Asked through `frappe.has_permission`, which applies the DocPerm rows, and not
+	through the rows alone: a DocPerm that exists but is ignored would pass a row scan.
+	"""
+	_make_learner(TEST_LEARNER)
+	_make_reviewer(REVIEWER_ONLY)
+	frappe.db.commit()
+
+	learner_rows = frappe.get_all(
+		"DocPerm", filters={"parent": "Sparsh Cohort", "role": "Sparsh Learner"}, pluck="name"
+	)
+	_assert(not learner_rows, f"Sparsh Learner holds {len(learner_rows)} DocPerm row(s) on Sparsh Cohort")
+	for ptype in ("read", "write", "create", "delete"):
+		_assert(
+			not frappe.has_permission("Sparsh Cohort", ptype, user=TEST_LEARNER),
+			f"A learner-only account has {ptype} on Sparsh Cohort",
+		)
+
+	reviewer = frappe.db.get_value(
+		"DocPerm",
+		{"parent": "Sparsh Cohort", "role": "Sparsh Reviewer"},
+		["`read`", "`write`", "`create`", "`delete`"],
+		as_dict=True,
+	)
+	_assert(reviewer, "Sparsh Reviewer has no DocPerm row on Sparsh Cohort")
+	_assert(
+		reviewer.read == 1 and reviewer.write == 1 and reviewer.create == 1,
+		f"Reviewer DocPerm on Sparsh Cohort is read={reviewer.read} write={reviewer.write} create={reviewer.create}",
+	)
+	_assert(reviewer.delete == 0, "Sparsh Reviewer can delete a cohort")
+	for ptype in ("read", "write", "create"):
+		_assert(
+			frappe.has_permission("Sparsh Cohort", ptype, user=REVIEWER_ONLY),
+			f"A reviewer-only account lacks {ptype} on Sparsh Cohort",
+		)
+	_assert(
+		not frappe.has_permission("Sparsh Cohort", "delete", user=REVIEWER_ONLY),
+		"A reviewer-only account can delete a cohort",
+	)
+
+
+def check_cohort_member_indexes_exist():
+	"""Both cohort-member uniqueness rules are indexes, over the columns they claim."""
+	rows = frappe.db.sql("show index from `tabSparsh Cohort Member`", as_dict=1)
+	unique = {}
+	for r in rows:
+		if r["Non_unique"] == 0:
+			unique.setdefault(r["Key_name"], []).append((r["Seq_in_index"], r["Column_name"]))
+	columns = {k: [c for _seq, c in sorted(v)] for k, v in unique.items()}
+
+	_assert(
+		"unique_active_cohort_member" in columns,
+		f"No unique index unique_active_cohort_member; unique indexes are {sorted(columns)}",
+	)
+	_assert(
+		columns["unique_active_cohort_member"] == ["active_key"],
+		f"unique_active_cohort_member covers {columns['unique_active_cohort_member']}, not [active_key]",
+	)
+	_assert(
+		"unique_cohort_learner" in columns,
+		f"No unique index unique_cohort_learner; unique indexes are {sorted(columns)}",
+	)
+	_assert(
+		columns["unique_cohort_learner"] == ["parent", "learner"],
+		f"unique_cohort_learner covers {columns['unique_cohort_learner']}, not [parent, learner]",
+	)
+
+
+def check_cohort_joined_on_is_server_set():
+	"""`joined_on` is the server's clock on insert and frozen thereafter, whatever the payload says."""
+	_make_learner(TEST_LEARNER)
+	_clear_cohorts()
+	try:
+		before = frappe.utils.now_datetime()
+		doc = _new_cohort(COHORT_A, [TEST_LEARNER], joined_on="2001-01-01 00:00:00")
+		frappe.db.commit()
+		stored = frappe.db.get_value(
+			"Sparsh Cohort Member", {"parent": COHORT_A, "learner": TEST_LEARNER}, "joined_on"
+		)
+		_assert(stored is not None, "joined_on was not set at all")
+		_assert(
+			frappe.utils.get_datetime(stored).year != 2001,
+			f"The payload's joined_on was stored: {stored}",
+		)
+		_assert(
+			abs((frappe.utils.get_datetime(stored) - before).total_seconds()) < 120,
+			f"joined_on {stored} is not the server clock at insert ({before})",
+		)
+
+		doc.reload()
+		doc.title = "Verification cohort, edited"
+		doc.members[0].joined_on = "2001-01-01 00:00:00"
+		doc.save(ignore_permissions=True)
+		frappe.db.commit()
+		after = frappe.db.get_value(
+			"Sparsh Cohort Member", {"parent": COHORT_A, "learner": TEST_LEARNER}, "joined_on"
+		)
+		_assert(
+			frappe.utils.get_datetime(after) == frappe.utils.get_datetime(stored),
+			f"An edit changed joined_on from {stored} to {after}",
+		)
+	finally:
+		_clear_cohorts()
+
+
+def check_cohort_refuses_duplicate_member():
+	_make_learner(TEST_LEARNER)
+	_clear_cohorts()
+	try:
+		_raises(
+			lambda: _new_cohort(COHORT_A, [TEST_LEARNER, TEST_LEARNER]),
+			"A learner listed twice in one cohort was accepted",
+			expect="listed twice",
+		)
+		_assert(not frappe.db.exists("Sparsh Cohort", COHORT_A), "The refused cohort was stored")
+	finally:
+		_clear_cohorts()
+
+
+def check_one_active_cohort_per_learner():
+	"""A learner follows one pathway at a time; Draft membership elsewhere is fine."""
+	from sparsh_los import cohort
+
+	_make_learner(TEST_LEARNER)
+	_clear_cohorts()
+	try:
+		_new_cohort(COHORT_A, [TEST_LEARNER], status="Active")
+		frappe.db.commit()
+
+		_raises(
+			lambda: _new_cohort(COHORT_B, [TEST_LEARNER], status="Active"),
+			"A second Active cohort took a learner already in an Active one",
+			expect="already belongs",
+		)
+
+		second = _new_cohort(COHORT_B, [TEST_LEARNER], status="Draft")
+		frappe.db.commit()
+		_assert(cohort.cohort_for(TEST_LEARNER) == COHORT_A, "The Draft cohort displaced the Active one")
+
+		first = frappe.get_doc("Sparsh Cohort", COHORT_A)
+		first.status = "Closed"
+		first.save(ignore_permissions=True)
+		second.reload()
+		second.status = "Active"
+		second.save(ignore_permissions=True)
+		frappe.db.commit()
+		_assert(
+			cohort.cohort_for(TEST_LEARNER) == COHORT_B,
+			f"After closing the first cohort, cohort_for returned {cohort.cohort_for(TEST_LEARNER)!r}",
+		)
+	finally:
+		_clear_cohorts()
+
+
+def check_active_key_is_enforced_below_validate():
+	"""The unique index, not the controller query, holds the one-Active-cohort rule.
+
+	A raw insert carries the key past `validate` entirely; only the database can refuse it.
+	"""
+	_make_learner(TEST_LEARNER)
+	_clear_cohorts()
+	try:
+		_new_cohort(COHORT_A, [TEST_LEARNER], status="Active")
+		_new_cohort(COHORT_B, [], status="Active")
+		frappe.db.commit()
+
+		raised = None
+		try:
+			frappe.db.sql(
+				"""insert into `tabSparsh Cohort Member`
+				   (name, creation, modified, modified_by, owner, docstatus, idx,
+				    parent, parentfield, parenttype, learner, active_key)
+				   values (%(name)s, now(), now(), 'Administrator', 'Administrator', 0, 1,
+				    %(parent)s, 'members', 'Sparsh Cohort', %(learner)s, %(learner)s)""",
+				{"name": PREFIX + "rawmember", "parent": COHORT_B, "learner": TEST_LEARNER},
+			)
+		except Exception as exc:  # noqa: BLE001
+			raised = exc
+		frappe.db.rollback()
+
+		_assert(raised is not None, "A raw insert of a second active_key for one learner was accepted")
+		_assert(
+			isinstance(raised, frappe.UniqueValidationError)
+			or "1062" in str(raised)
+			or "IntegrityError" in type(raised).__name__,
+			f"The raw insert failed, but not on the unique index: {type(raised).__name__}: {raised}",
+		)
+		_assert(
+			frappe.db.count("Sparsh Cohort Member", {"active_key": TEST_LEARNER}) == 1,
+			"More than one row holds the learner's active_key",
+		)
+	finally:
+		_clear_cohorts()
+
+
+def check_active_key_survives_ordinary_edit():
+	"""The key is derived on every save, so an edit or an append to an Active cohort keeps the index armed."""
+	_make_learner(TEST_LEARNER)
+	_make_learner(OTHER_LEARNER)
+	_clear_cohorts()
+	try:
+		doc = _new_cohort(COHORT_A, [TEST_LEARNER], status="Active")
+		frappe.db.commit()
+		_assert(
+			_member_keys(COHORT_A) == {TEST_LEARNER: TEST_LEARNER},
+			f"Activation did not key the member: {_member_keys(COHORT_A)}",
+		)
+
+		doc.reload()
+		doc.title = "Verification cohort, retitled"
+		doc.save(ignore_permissions=True)
+		frappe.db.commit()
+		_assert(
+			_member_keys(COHORT_A) == {TEST_LEARNER: TEST_LEARNER},
+			f"A title edit changed the member's active_key: {_member_keys(COHORT_A)}",
+		)
+
+		doc.reload()
+		doc.append("members", {"learner": OTHER_LEARNER})
+		doc.save(ignore_permissions=True)
+		frappe.db.commit()
+		_assert(
+			_member_keys(COHORT_A) == {TEST_LEARNER: TEST_LEARNER, OTHER_LEARNER: OTHER_LEARNER},
+			f"A member appended to an already-Active cohort was not keyed: {_member_keys(COHORT_A)}",
+		)
+
+		doc.reload()
+		doc.status = "Closed"
+		doc.save(ignore_permissions=True)
+		frappe.db.commit()
+		_assert(
+			_member_keys(COHORT_A) == {TEST_LEARNER: None, OTHER_LEARNER: None},
+			f"Closing did not release the keys: {_member_keys(COHORT_A)}",
+		)
+	finally:
+		_clear_cohorts()
+
+
+def check_pathway_for_refuses_ambiguity():
+	"""Two Active cohorts for one learner, reached by the bypass path, are refused by name -- not resolved."""
+	from sparsh_los import cohort
+
+	_make_learner(TEST_LEARNER)
+	_clear_cohorts()
+	try:
+		_new_cohort(COHORT_A, [TEST_LEARNER], status="Draft")
+		_new_cohort(COHORT_B, [TEST_LEARNER], status="Draft")
+		frappe.db.commit()
+		# `db.set_value` skips validate and the key, so both can be Active at once.
+		frappe.db.set_value("Sparsh Cohort", COHORT_A, "status", "Active")
+		frappe.db.set_value("Sparsh Cohort", COHORT_B, "status", "Active")
+		frappe.db.commit()
+
+		message = None
+		try:
+			cohort.pathway_for(TEST_LEARNER)
+		except frappe.ValidationError as exc:
+			message = str(exc)
+		_assert(message is not None, "pathway_for picked a pathway for a learner in two Active cohorts")
+		_assert(
+			COHORT_A in message and COHORT_B in message,
+			f"The refusal does not name both cohorts: {message}",
+		)
+		_assert("more than one active cohort" in message.lower(), f"Refused for another reason: {message}")
+	finally:
+		_clear_cohorts()
+
+
+def check_cohort_members_is_a_reviewer_action():
+	from sparsh_los import cohort
+
+	_make_learner(TEST_LEARNER)
+	_clear_cohorts()
+	try:
+		_new_cohort(COHORT_A, [TEST_LEARNER], status="Active")
+		frappe.db.commit()
+
+		original_user = frappe.session.user
+		try:
+			frappe.set_user(TEST_LEARNER)
+			_refused(
+				lambda: cohort.members(COHORT_A),
+				"A learner read a cohort's membership list",
+				expect="reviewer action",
+			)
+		finally:
+			frappe.set_user(original_user)
+
+		rows = cohort.members(COHORT_A)
+		_assert(
+			[r.learner for r in rows] == [TEST_LEARNER],
+			f"The reviewer's membership list is wrong: {[r.learner for r in rows]}",
+		)
+		_assert(rows[0].joined_on, "The membership list carries no join date")
+	finally:
+		_clear_cohorts()
+
+
+def check_cohort_readiness_restricts_to_cohort():
+	"""`cohort=` narrows readiness to that cohort's members; without it, everyone with a state."""
+	from sparsh_los import certification
+
+	_make_learner(TEST_LEARNER)
+	_make_learner(OTHER_LEARNER)
+	_reset_competency()
+	_clear_cohorts()
+	try:
+		_new_evidence(ACTIVITY_1, "Pass", learner=TEST_LEARNER)
+		_new_evidence(ACTIVITY_1, "Pass", learner=OTHER_LEARNER)
+		_new_cohort(COHORT_A, [TEST_LEARNER], status="Active")
+		frappe.db.commit()
+
+		def named(report):
+			return {row["learner"] for bucket in report["buckets"].values() for row in bucket}
+
+		scoped = certification.cohort_readiness(COMPETENCY, cohort=COHORT_A)
+		_assert(scoped["cohort"] == COHORT_A, "The report does not say which cohort it describes")
+		_assert(TEST_LEARNER in named(scoped), "The cohort member is missing from the scoped report")
+		_assert(OTHER_LEARNER not in named(scoped), "A non-member appears in the cohort-scoped report")
+
+		everyone = certification.cohort_readiness(COMPETENCY)
+		_assert(
+			TEST_LEARNER in named(everyone) and OTHER_LEARNER in named(everyone),
+			f"The unscoped report is missing a learner with a state: {sorted(named(everyone))}",
+		)
+	finally:
+		_clear_cohorts()
+		_reset_competency()
+
+
+# ---------------------------------------------------- phase 1: reflection, urgency
+def _set_mode(activity_name, mode, critical_markers=None):
+	activity = frappe.get_doc("Sparsh Activity", activity_name)
+	original = (activity.evaluation_mode, activity.critical_markers)
+	activity.evaluation_mode = mode
+	if critical_markers is not None:
+		activity.critical_markers = critical_markers
+	activity.save(ignore_permissions=True)
+	frappe.db.commit()
+	return original
+
+
+def _restore_mode(activity_name, original):
+	activity = frappe.get_doc("Sparsh Activity", activity_name)
+	activity.evaluation_mode, activity.critical_markers = original
+	activity.save(ignore_permissions=True)
+	frappe.db.commit()
+
+
+def check_reflection_is_not_queued():
+	"""A reflection is stored for the learner and waits for nobody."""
+	from sparsh_los import review
+
+	_make_learner(TEST_LEARNER)
+	_reset_competency()
+	original = _set_mode(ACTIVITY_2, "Reflection")
+	try:
+		state_before = _state(TEST_LEARNER)
+		result = _submit(ACTIVITY_2, "zzv what I learned from this case", as_user=TEST_LEARNER)
+		frappe.db.commit()
+
+		_assert(result["outcome"] == "Not Evaluated", f"A reflection was scored {result['outcome']}")
+		_assert(
+			frappe.db.get_value("Sparsh Attempt", result["attempt"], "outcome") == "Not Evaluated",
+			"The stored reflection attempt is not Not Evaluated",
+		)
+		_assert("not scored" in result["message"].lower(), f"The message promised something else: {result['message']}")
+		_assert(
+			not frappe.db.exists("Sparsh Evidence", {"attempt": result["attempt"]}),
+			"A reflection produced Evidence",
+		)
+		_assert(_state(TEST_LEARNER) == state_before, "A reflection moved mastery")
+		waiting = {w["name"] for w in review.pending(limit=review.MAX_QUEUE)}
+		_assert(result["attempt"] not in waiting, "A reflection sits in the reviewer's queue")
+
+		# Positive control: the same activity in Human review mode is queued.
+		_set_mode(ACTIVITY_2, "Human review")
+		control = _submit(ACTIVITY_2, "zzv an answer for a person", as_user=TEST_LEARNER)
+		frappe.db.commit()
+		waiting = {w["name"] for w in review.pending(limit=review.MAX_QUEUE)}
+		_assert(
+			control["attempt"] in waiting,
+			"The Human review control is not queued, so the reflection's absence proves nothing",
+		)
+	finally:
+		_restore_mode(ACTIVITY_2, original)
+
+
+def check_reflection_cannot_become_evidence():
+	from sparsh_los import review
+
+	_make_learner(TEST_LEARNER)
+	_reset_competency()
+	original = _set_mode(ACTIVITY_2, "Reflection")
+	try:
+		result = _submit(ACTIVITY_2, "zzv a private reflection", as_user=TEST_LEARNER)
+		frappe.db.commit()
+		_raises(
+			lambda: review.record_evidence(result["attempt"], "Pass", assistance_level=0),
+			"A reviewer turned a reflection into Evidence",
+			expect="not turned into evidence",
+		)
+		_assert(
+			not frappe.db.exists("Sparsh Evidence", {"attempt": result["attempt"]}),
+			"Evidence exists for the reflection attempt",
+		)
+	finally:
+		_restore_mode(ACTIVITY_2, original)
+
+
+def check_critical_reflection_escalates_without_evidence():
+	"""A reflection matching a critical marker reaches a person at once, and writes no Evidence.
+
+	Under a Validated rule -- so the rule gate is not what stops the score -- the
+	reflection path must still come before the safety branch: critical Evidence is
+	permanent and a learner's own writing is not a demonstration.
+	"""
+	_make_learner(TEST_LEARNER)
+	_reset_competency()
+	_delete_all("Sparsh Escalation Question", {"learner": TEST_LEARNER})
+	rule = _new_rule(1, status="Validated")
+	competency = frappe.get_doc("Sparsh Competency", COMPETENCY)
+	competency.set("linked_rules", [])
+	competency.append("linked_rules", {"rule": rule.name})
+	competency.save(ignore_permissions=True)
+	original = _set_mode(ACTIVITY_2, "Reflection", critical_markers="stop the medicine")
+	try:
+		result = _submit(ACTIVITY_2, "I would stop the medicine", as_user=TEST_LEARNER)
+		frappe.db.commit()
+
+		_assert(result["outcome"] == "Not Evaluated", f"A critical reflection was scored {result['outcome']}")
+		_assert(result["critical_error"] == 0, "A critical reflection recorded a critical error on the attempt")
+		_assert(
+			not frappe.db.exists("Sparsh Evidence", {"attempt": result["attempt"]}),
+			"A critical reflection wrote Evidence",
+		)
+		_assert(result.get("escalation"), "A critical reflection raised no escalation")
+		question = frappe.get_doc("Sparsh Escalation Question", result["escalation"])
+		_assert(question.attempt == result["attempt"], "The escalation does not cite the attempt")
+		_assert(question.escalation_reason == "Safety critical", f"Reason is {question.escalation_reason}")
+		_assert(question.urgency == "Immediate", f"Urgency is {question.urgency}, not Immediate")
+		_assert(question.status == "Open", f"The escalation is {question.status}")
+	finally:
+		_restore_mode(ACTIVITY_2, original)
+		_reset_competency()
+
+
+def _raise_as(learner, text, **kwargs):
+	from sparsh_los import escalation
+
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(learner)
+		return escalation.raise_question(text, **kwargs)
+	finally:
+		frappe.set_user(original_user)
+
+
+def check_urgency_default_and_freeze():
+	from sparsh_los import escalation
+
+	_make_learner(TEST_LEARNER)
+	_delete_all("Sparsh Escalation Question", {"learner": TEST_LEARNER})
+	frappe.db.commit()
+
+	routine = _raise_as(TEST_LEARNER, "zzv a routine question", activity=ACTIVITY_1)
+	_assert(
+		frappe.db.get_value("Sparsh Escalation Question", routine, "urgency") == "Routine",
+		"A question raised without urgency is not Routine",
+	)
+	urgent = _raise_as(TEST_LEARNER, "zzv an urgent question", activity=ACTIVITY_1, urgency="Immediate")
+	_assert(
+		frappe.db.get_value("Sparsh Escalation Question", urgent, "urgency") == "Immediate",
+		"An explicit urgency was not stored",
+	)
+	_raises(
+		lambda: _raise_as(TEST_LEARNER, "zzv a junk question", activity=ACTIVITY_1, urgency="Whenever"),
+		"An unrecognised urgency was accepted",
+		expect="not a recognised urgency",
+	)
+
+	escalation.answer(urgent, "Refer to the clinician.", "Private answer")
+	frappe.db.commit()
+
+	def change_urgency():
+		doc = frappe.get_doc("Sparsh Escalation Question", urgent)
+		doc.urgency = "Routine"
+		doc.save(ignore_permissions=True)
+
+	_refused(change_urgency, "Urgency was changed on an answered question", expect="already been answered")
+	frappe.db.commit()
+
+
+def check_open_queue_surfaces_urgency():
+	from sparsh_los import escalation
+
+	_make_learner(TEST_LEARNER)
+	_delete_all("Sparsh Escalation Question", {"learner": TEST_LEARNER})
+	frappe.db.commit()
+
+	first = _raise_as(TEST_LEARNER, "zzv first, routine", activity=ACTIVITY_1)
+	second = _raise_as(TEST_LEARNER, "zzv second, immediate", activity=ACTIVITY_1, urgency="Immediate")
+	third = _raise_as(TEST_LEARNER, "zzv third, predates the column", activity=ACTIVITY_1)
+	frappe.db.set_value("Sparsh Escalation Question", third, "urgency", None)
+	frappe.db.commit()
+	_assert(
+		frappe.db.get_value("Sparsh Escalation Question", third, "urgency") is None,
+		"The fixture for a pre-column row did not end up NULL",
+	)
+
+	queue = escalation.open_queue()
+	by_name = {row["name"]: row for row in queue}
+	for name in (first, second, third):
+		_assert(name in by_name, f"{name} is missing from the open queue")
+		_assert("urgency" in by_name[name], "Queue rows carry no urgency")
+	_assert(by_name[first]["urgency"] == "Routine", f"first reads {by_name[first]['urgency']}")
+	_assert(by_name[second]["urgency"] == "Immediate", f"second reads {by_name[second]['urgency']}")
+	_assert(
+		by_name[third]["urgency"] == "Routine",
+		f"A NULL urgency reads as {by_name[third]['urgency']!r}, not Routine",
+	)
+	order = [row["name"] for row in queue]
+	_assert(
+		order.index(first) < order.index(second) < order.index(third),
+		"The queue is no longer ordered by creation",
+	)
+	frappe.db.commit()
+
+
+def check_escalation_event_logs_urgency():
+	from sparsh_los import escalation, events
+
+	_make_learner(TEST_LEARNER)
+	_delete_all("Sparsh Escalation Question", {"learner": TEST_LEARNER})
+	_delete_all("Sparsh Event", {"learner": TEST_LEARNER})
+	frappe.db.commit()
+
+	question = _raise_as(TEST_LEARNER, "zzv logged urgency", activity=ACTIVITY_1, urgency="Immediate")
+	frappe.db.commit()
+
+	def details():
+		return frappe.get_all(
+			"Sparsh Event",
+			filters={"event_type": events.ESCALATION_OPENED, "reference_name": question},
+			pluck="detail",
+			order_by="creation asc",
+		)
+
+	logged = details()
+	_assert(len(logged) == 1, f"{len(logged)} escalation_opened events for one question")
+	_assert(
+		"urgency=Immediate" in logged[0] and "reason=Unknown" in logged[0],
+		f"The event detail does not carry urgency and reason: {logged[0]!r}",
+	)
+
+	# The Select refuses a junk value at insert, so the log's own guard is reached by
+	# emitting for an in-memory document carrying one -- the way a widened field would.
+	doc = frappe.get_doc("Sparsh Escalation Question", question)
+	doc.urgency = "Whenever"
+	doc.escalation_reason = "Something else"
+	escalation._emit_opened(doc)
+	frappe.db.commit()
+	logged = details()
+	_assert(len(logged) == 2, "The second emit was not recorded")
+	_assert(
+		logged[1] == "reason=other urgency=other",
+		f"An unrecognised urgency was not logged as other: {logged[1]!r}",
+	)
+	_assert("Whenever" not in logged[1], "Caller text reached the event log")
+
+
+# ---------------------------------------------------- phase 1: pathways, page
+def check_pathway_status_is_respected():
+	"""Only an Active pathway hands out work."""
+	from sparsh_los import orchestrator
+
+	_reset_competency()
+	_delete_all("Sparsh Pathway", {"name": PATHWAY})
+	frappe.db.commit()
+
+	pathway = frappe.new_doc("Sparsh Pathway")
+	pathway.pathway_id = PATHWAY
+	pathway.title = "Verification pathway"
+	pathway.status = "Draft"
+	pathway.append(
+		"steps", {"step_order": 1, "activity": ACTIVITY_1, "competency": COMPETENCY, "is_mandatory": 1}
+	)
+	pathway.insert(ignore_permissions=True)
+	frappe.db.commit()
+
+	draft = orchestrator.next_in_pathway(PATHWAY, LEARNER)
+	_assert(draft.get("activity") is None, f"A Draft pathway handed out {draft.get('activity')}")
+	_assert("draft" in (draft.get("message") or "").lower(), f"The refusal does not say why: {draft}")
+
+	pathway.status = "Active"
+	pathway.save(ignore_permissions=True)
+	frappe.db.commit()
+	active = orchestrator.next_in_pathway(PATHWAY, LEARNER)
+	_assert(
+		active.get("activity") == ACTIVITY_1,
+		f"An Active pathway offered {active.get('activity')}, not its first step",
+	)
+
+	pathway.status = "Retired"
+	pathway.save(ignore_permissions=True)
+	frappe.db.commit()
+	retired = orchestrator.next_in_pathway(PATHWAY, LEARNER)
+	_assert(retired.get("activity") is None, f"A Retired pathway handed out {retired.get('activity')}")
+	_assert("retired" in (retired.get("message") or "").lower(), f"The refusal does not say why: {retired}")
+	frappe.db.commit()
+
+
+def check_pilot_pathway_is_seeded_draft():
+	"""The pilot pathway is the nine cases in order, mandatory, and Draft until a person activates it."""
+	from sparsh_los import seed
+
+	pre_existing = frappe.db.exists("Sparsh Pathway", seed.PILOT_PATHWAY)
+	try:
+		first = seed.load_pilot_pathway()
+		if not pre_existing:
+			_assert(first["created"] is True and first["steps"] == 9, f"First load reported {first}")
+
+		doc = frappe.get_doc("Sparsh Pathway", seed.PILOT_PATHWAY)
+		_assert(doc.status == "Draft", f"The pilot pathway was seeded {doc.status}, not Draft")
+		steps = sorted(doc.steps, key=lambda s: s.step_order)
+		activities = [frappe.db.get_value("Sparsh Activity", s.activity, "activity_id") for s in steps]
+		_assert(
+			activities == [f"SC-0{i}" for i in range(1, 10)],
+			f"The pilot steps are {activities}",
+		)
+		_assert([s.step_order for s in steps] == list(range(1, 10)), "step_order is not 1..9")
+		_assert(all(s.is_mandatory for s in steps), "A pilot step is optional")
+		_assert(
+			all(s.competency == frappe.db.get_value("Sparsh Activity", s.activity, "competency") for s in steps),
+			"A step's competency disagrees with its activity's",
+		)
+
+		second = seed.load_pilot_pathway()
+		_assert(second["created"] is False, f"A second load created again: {second}")
+		_assert(
+			frappe.db.count("Sparsh Pathway Step", {"parent": seed.PILOT_PATHWAY}) == 9,
+			"A second load changed the step count",
+		)
+		_assert(
+			frappe.db.get_value("Sparsh Pathway", seed.PILOT_PATHWAY, "status") == "Draft",
+			"A second load changed the status",
+		)
+	finally:
+		if not pre_existing:
+			_delete_all("Sparsh Pathway", {"name": seed.PILOT_PATHWAY})
+			frappe.db.commit()
+
+
+def check_practice_page_prefers_the_assigned_pathway():
+	"""An Active cohort's Active pathway decides the page; a learner in no cohort still gets work."""
+	from sparsh_los.www import practice
+
+	_make_learner(TEST_LEARNER)
+	_make_learner(OTHER_LEARNER)
+	_reset_competency()
+	_clear_cohorts()
+	_delete_all("Sparsh Pathway", {"name": PATHWAY})
+	if not frappe.db.exists("Sparsh Activity", COHORT_ACTIVITY):
+		doc = frappe.new_doc("Sparsh Activity")
+		doc.activity_id = COHORT_ACTIVITY
+		doc.title = "Cohort pathway step"
+		doc.competency = COMPETENCY_2
+		doc.activity_type = "Knowledge check"
+		doc.instruction = "Verification instruction."
+		doc.version = 1
+		doc.evaluation_mode = "Human review"
+		doc.insert(ignore_permissions=True)
+	frappe.db.commit()
+
+	pathway = frappe.new_doc("Sparsh Pathway")
+	pathway.pathway_id = PATHWAY
+	pathway.title = "Verification pathway"
+	pathway.status = "Active"
+	pathway.append(
+		"steps",
+		{"step_order": 1, "activity": COHORT_ACTIVITY, "competency": COMPETENCY_2, "is_mandatory": 1},
+	)
+	pathway.insert(ignore_permissions=True)
+	_new_cohort(COHORT_A, [TEST_LEARNER], status="Active", pathway=PATHWAY)
+	frappe.db.commit()
+
+	def render(user):
+		context = frappe._dict()
+		original_user = frappe.session.user
+		try:
+			frappe.set_user(user)
+			practice.get_context(context)
+		finally:
+			frappe.set_user(original_user)
+		return context
+
+	try:
+		assigned = render(TEST_LEARNER)
+		_assert(assigned.pathway == PATHWAY, f"The page did not follow the cohort's pathway: {assigned.pathway!r}")
+		_assert(
+			assigned.next_up and assigned.next_up.get("activity") == COHORT_ACTIVITY,
+			f"The cohort member was offered {assigned.next_up and assigned.next_up.get('activity')}, "
+			f"not the pathway's step {COHORT_ACTIVITY}",
+		)
+		_assert(assigned.next_up.get("instruction"), "The pathway step carries no instruction")
+
+		fallback = render(OTHER_LEARNER)
+		_assert(fallback.pathway is None, f"A learner in no cohort was put on {fallback.pathway}")
+		_assert(
+			fallback.next_up and fallback.next_up.get("activity"),
+			"A learner in no cohort was offered nothing to do",
+		)
+		_assert(
+			fallback.next_up.get("activity") != COHORT_ACTIVITY,
+			"The fallback offered the pathway step, so the two routes are indistinguishable here",
+		)
+	finally:
+		_clear_cohorts()
+		_delete_all("Sparsh Pathway", {"name": PATHWAY})
+		frappe.db.commit()
+
+
+def check_awaiting_a_person_excludes_reflections():
+	"""The summary's queue figure and the queue itself agree once a reflection exists."""
+	from sparsh_los import dashboard, review
+
+	_make_learner(TEST_LEARNER)
+	_reset_competency()
+	# Two activities, not one re-authored mid-check: an activity carrying attempts that
+	# are still waiting can no longer be turned into a Reflection at all, because doing
+	# so used to remove that waiting work from the queue and the count together with
+	# nobody seeing it. The control therefore lives on its own activity.
+	original_two = _set_mode(ACTIVITY_2, "Reflection")
+	original_one = _set_mode(ACTIVITY_1, "Human review")
+	try:
+		before = dashboard.programme_summary()["attempts_awaiting_a_person"]
+
+		reflection = _submit(ACTIVITY_2, "zzv a reflection", as_user=TEST_LEARNER)
+		control = _submit(ACTIVITY_1, "zzv work for a person", as_user=TEST_LEARNER)
+		frappe.db.commit()
+
+		waiting = {w["name"] for w in review.pending(limit=review.MAX_QUEUE)}
+		_assert(len(waiting) < review.MAX_QUEUE, "The queue is at its cap, so its length cannot be compared")
+		_assert(reflection["attempt"] not in waiting, "The reflection is queued")
+		_assert(control["attempt"] in waiting, "The control attempt is not queued, so the fixture proves nothing")
+
+		after = dashboard.programme_summary()["attempts_awaiting_a_person"]
+		_assert(
+			after == len(waiting),
+			f"The summary says {after} attempts await a person; the queue holds {len(waiting)}",
+		)
+		# One reflection and one real attempt were added; only the real one may count.
+		_assert(
+			after == before + 1,
+			f"Adding one reflection and one reviewable attempt moved the summary {before} -> {after}",
+		)
+	finally:
+		_restore_mode(ACTIVITY_2, original_two)
+		_restore_mode(ACTIVITY_1, original_one)
+
+
+def check_reflection_does_not_swallow_waiting_work():
+	"""An activity with attempts waiting cannot be re-authored into a Reflection.
+
+	Both the queue and the summary exclude reflections by the activity's *current*
+	mode, which is right for a new activity and wrong for one that already carries
+	unreviewed attempts: flipping the mode made every one of them leave the queue and
+	the count in the same instant, with no record that a learner was waiting on a
+	verdict.
+	"""
+	_make_learner(TEST_LEARNER)
+	_reset_competency()
+	original = _set_mode(ACTIVITY_2, "Human review")
+	try:
+		result = _submit(ACTIVITY_2, "zzv an answer somebody must judge", as_user=TEST_LEARNER)
+		frappe.db.commit()
+
+		# Not `_raises`: it brackets the call in a savepoint, and `_set_mode` commits on
+		# success. With the guard removed the commit destroys the savepoint and the
+		# rollback then fails with "SAVEPOINT does not exist" -- the check still goes
+		# red, but for a reason that says nothing about the guard. Refusal is asserted
+		# directly, and the stored mode is read back so a silent success is caught too.
+		try:
+			_set_mode(ACTIVITY_2, "Reflection")
+		except frappe.ValidationError as exc:
+			_assert(
+				"waiting for a reviewer" in str(exc).lower(),
+				f"Refused, but for another reason: {exc}",
+			)
+		else:
+			raise AssertionError(
+				"An activity carrying waiting attempts was re-authored into a Reflection"
+			)
+
+		_assert(
+			frappe.db.get_value("Sparsh Activity", ACTIVITY_2, "evaluation_mode") == "Human review",
+			"The refused re-authoring was stored anyway",
+		)
+
+		from sparsh_los import review
+
+		waiting = {w["name"] for w in review.pending(limit=review.MAX_QUEUE)}
+		_assert(
+			result["attempt"] in waiting,
+			"The refused re-authoring still removed the attempt from the queue",
+		)
+
+		# Once the queue is clear the change is allowed: the guard protects waiting
+		# work, it does not freeze the mode for ever.
+		evidence = _new_evidence(ACTIVITY_2, "Pass")
+		frappe.db.set_value("Sparsh Evidence", evidence.name, "attempt", result["attempt"])
+		frappe.db.commit()
+		_set_mode(ACTIVITY_2, "Reflection")
+		_assert(
+			frappe.db.get_value("Sparsh Activity", ACTIVITY_2, "evaluation_mode") == "Reflection",
+			"The mode change was still refused after the queue was cleared",
+		)
+	finally:
+		_restore_mode(ACTIVITY_2, original)
+
+
+# ------------------------------------------------------------ phase 1: source
+def check_translations_are_imported():
+	"""Every bare `_(...)` call sits in a module that imports `_` from frappe.
+
+	`ast.parse` accepts a module that calls a name it never binds; the NameError
+	arrives only when the guarded line runs, and a refusal becomes a 500. Walked as an
+	AST so a `_` inside a string or comment does not count and `frappe._(...)` is
+	recognised as the attribute call it is.
+	"""
+	import ast
+	import pathlib
+
+	root = pathlib.Path(frappe.get_app_path("sparsh_los"))
+	offenders = []
+	scanned = 0
+	bare_callers = 0
+	for path in root.rglob("*.py"):
+		# `._name.py` is a macOS AppleDouble sidecar the install tar carries into the
+		# container; it is metadata, not source, and not even UTF-8.
+		if "__pycache__" in path.parts or path.name.startswith("._"):
+			continue
+		scanned += 1
+		tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+		binds_underscore = False
+		for node in ast.walk(tree):
+			if isinstance(node, ast.ImportFrom) and any(a.asname == "_" or (a.name == "_" and not a.asname) for a in node.names):
+				binds_underscore = True
+			elif isinstance(node, ast.Import) and any(a.asname == "_" for a in node.names):
+				binds_underscore = True
+			elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "_":
+				binds_underscore = True
+			elif isinstance(node, ast.Assign) and any(
+				isinstance(t, ast.Name) and t.id == "_" for t in node.targets
+			):
+				binds_underscore = True
+
+		bare_calls = [
+			node.lineno
+			for node in ast.walk(tree)
+			if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_"
+		]
+		if bare_calls:
+			bare_callers += 1
+		if bare_calls and not binds_underscore:
+			offenders.append(f"{path.relative_to(root)}:{bare_calls[0]}")
+
+	_assert(scanned >= 40, f"The translation scan only saw {scanned} files; it is not scanning")
+	_assert(bare_callers >= 10, f"Only {bare_callers} modules call _(...); the scan is not finding calls")
+	_assert(
+		not offenders,
+		"Bare _(...) in a module that never imports _ from frappe -- a NameError the moment "
+		f"the guard fires: {', '.join(offenders)}",
+	)
+
+
 CHECKS = (
 	("partial_only_history_is_named_accurately", check_partial_only_history_is_named_accurately),
 	("queue_shows_work_that_is_actually_waiting", check_queue_shows_work_that_is_actually_waiting),
@@ -5516,8 +6450,48 @@ CHECKS = (
 	("awaiting_a_person_agrees_with_the_queue", check_awaiting_a_person_agrees_with_the_queue),
 	("learner_cannot_read_rules_or_competencies", check_learner_cannot_read_rules_or_competencies),
 	("practice_page_records_the_session", check_practice_page_records_the_session),
+	("cohort_permission_model", check_cohort_permission_model),
+	("cohort_member_indexes_exist", check_cohort_member_indexes_exist),
+	("cohort_joined_on_is_server_set", check_cohort_joined_on_is_server_set),
+	("cohort_refuses_duplicate_member", check_cohort_refuses_duplicate_member),
+	("one_active_cohort_per_learner", check_one_active_cohort_per_learner),
+	("active_key_is_enforced_below_validate", check_active_key_is_enforced_below_validate),
+	("active_key_survives_ordinary_edit", check_active_key_survives_ordinary_edit),
+	("pathway_for_refuses_ambiguity", check_pathway_for_refuses_ambiguity),
+	("cohort_members_is_a_reviewer_action", check_cohort_members_is_a_reviewer_action),
+	("cohort_readiness_restricts_to_cohort", check_cohort_readiness_restricts_to_cohort),
+	("reflection_is_not_queued", check_reflection_is_not_queued),
+	("reflection_cannot_become_evidence", check_reflection_cannot_become_evidence),
+	("critical_reflection_escalates_without_evidence", check_critical_reflection_escalates_without_evidence),
+	("urgency_default_and_freeze", check_urgency_default_and_freeze),
+	("open_queue_surfaces_urgency", check_open_queue_surfaces_urgency),
+	("escalation_event_logs_urgency", check_escalation_event_logs_urgency),
+	("pathway_status_is_respected", check_pathway_status_is_respected),
+	("pilot_pathway_is_seeded_draft", check_pilot_pathway_is_seeded_draft),
+	("practice_page_prefers_the_assigned_pathway", check_practice_page_prefers_the_assigned_pathway),
+	("awaiting_a_person_excludes_reflections", check_awaiting_a_person_excludes_reflections),
+	("reflection_does_not_swallow_waiting_work", check_reflection_does_not_swallow_waiting_work),
+	("translations_are_imported", check_translations_are_imported),
 	("cleanup", check_cleanup),
 )
+
+
+def run_one(name):
+	"""One check, with the fixtures it assumes. For proving a check fails when its fix is reverted.
+
+	`bench execute sparsh_los.verify.check_x` runs the function bare, against a bench
+	that `teardown()` has already emptied of the setup fixtures, so it fails for the
+	wrong reason. This gives it the same surroundings `run` does.
+	"""
+	results.clear()
+	frappe.flags.in_mastery_recompute = False
+	teardown()
+	setup()
+	try:
+		_check(name, dict(CHECKS)[name])
+	finally:
+		teardown()
+	print(f"RESULT passed={sum(1 for _, ok, _ in results if ok)} failed={sum(1 for _, ok, _ in results if not ok)}")
 
 
 def run():

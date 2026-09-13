@@ -29,6 +29,9 @@ class SparshEscalationQuestion(Document):
 		self.answered_at = None
 		self.disposition = None
 		self.raised_at = frappe.utils.now_datetime()
+		# Learner-side, so it is kept, not reset. Blank means Routine: a caller that
+		# predates the field must file exactly the question it filed before.
+		self.urgency = self.urgency or "Routine"
 
 		if is_restricted():
 			self.learner = frappe.session.user

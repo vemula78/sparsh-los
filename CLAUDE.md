@@ -66,7 +66,7 @@ schema work — run it after touching any DocType JSON.
 
 ## Architecture
 
-Eighteen modules over 16 top-level DocTypes and 7 child tables, all prefixed `Sparsh `.
+Nineteen modules over 17 top-level DocTypes and 8 child tables, all prefixed `Sparsh `.
 The acceptance harness is **82 checks**; raise `MIN_CHECKS` in `install_verify.sh` with it, or an
 empty `CHECKS` tuple reads as success.
 
@@ -142,8 +142,11 @@ proven otherwise.
   `frappe.get_attr("requests.get")`, or Frappe's own request helpers without an import line. Its
   first version banned each module in one of its two spellings and would have missed
   `import openai` entirely. `Activity.evaluation_mode` declares six evaluator types, but only
-  `Deterministic` is dispatched — every other mode returns `Not Evaluated` and waits for a person.
-  An unbuilt mode must never fall through to the string comparison.
+  `Deterministic` is dispatched. Every unbuilt mode returns `Not Evaluated` and waits for a
+  person; `Reflection` also returns `Not Evaluated` but waits for nobody — it is stored, kept out
+  of `review.pending`, and refused by `record_evidence`, because a reflection is the learner's own
+  writing and not work awaiting a verdict. An unbuilt mode must never fall through to the string
+  comparison, and a response matching a critical marker still escalates to a person in every mode.
 - **Content is versioned apart from the engine.** `Sparsh Learning Resource` carries its own
   version and supersession lineage, and a competency references many resources. Superseding
   content marks affected learners `Refresh Due`; it never rewrites prior evidence or

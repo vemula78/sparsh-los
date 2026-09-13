@@ -38,6 +38,17 @@ REASONS = (
 	"Unknown",
 )
 
+# How soon a person needs to look. Mirrored for the same reason as REASONS: the
+# value reaches the event log. Ordinary questions are Routine; a learner who is with a
+# caregiver and blocked on the answer says so. It changes what a reviewer sees, never
+# what any attempt, evidence, mastery state or certificate is worth.
+URGENCIES = (
+	"Routine",
+	"Time-sensitive",
+	"Immediate",
+)
+DEFAULT_URGENCY = "Routine"
+
 # Dispositions that say the programme, not the learner, needs to change.
 PROGRAMME_DISPOSITIONS = ("Source-of-truth update", "Curriculum change")
 
@@ -51,11 +62,12 @@ def _emit_opened(question):
 	# field type somebody may widen later: an unrecognised reason is recorded as
 	# "other" rather than passed through.
 	reason = question.escalation_reason if question.escalation_reason in REASONS else "other"
+	urgency = question.urgency if question.urgency in URGENCIES else "other"
 	events.emit(
 		events.ESCALATION_OPENED,
 		learner=question.learner,
 		activity=question.activity,
-		detail=f"reason={reason}",
+		detail=f"reason={reason} urgency={urgency}",
 		reference_doctype=question.doctype,
 		reference_name=question.name,
 	)
@@ -86,8 +98,15 @@ def _context(activity, attempt):
 
 
 @frappe.whitelist()
-def raise_question(question_text, activity=None, attempt=None, reason="Unknown"):
-	"""A learner asks for expert guidance. Context is packaged here, not by the caller."""
+def raise_question(question_text, activity=None, attempt=None, reason="Unknown", urgency=DEFAULT_URGENCY):
+	"""A learner asks for expert guidance. Context is packaged here, not by the caller.
+
+	`urgency` is the learner's to state: only they know whether a caregiver is waiting
+	on the answer. That is safe to accept because it buys nothing but a reviewer's
+	attention -- the queue stays oldest-first, and no outcome, evidence or certification
+	reads it. The Select would reject a stray value at insert; it is refused here so the
+	caller sees a named argument rejected rather than a field error.
+	"""
 	# This endpoint writes, and its response embeds Activity fields that a learner may
 	# not read directly — so it needs the same enrolment gate as every other own-record
 	# endpoint, not just the own-attempt check below.
@@ -95,6 +114,9 @@ def raise_question(question_text, activity=None, attempt=None, reason="Unknown")
 
 	if not (question_text or "").strip():
 		frappe.throw(_("A question cannot be empty"))
+
+	if urgency not in URGENCIES:
+		frappe.throw(_("{0} is not a recognised urgency").format(urgency))
 
 	throttle("Sparsh Escalation Question", limit=20)
 
@@ -123,6 +145,7 @@ def raise_question(question_text, activity=None, attempt=None, reason="Unknown")
 	question.activity = activity
 	question.attempt = attempt
 	question.escalation_reason = reason
+	question.urgency = urgency
 	question.question_text = question_text
 	question.status = "Open"
 	question.context_snapshot = _context(activity, attempt)
@@ -196,12 +219,17 @@ def open_queue(reviewer=None):
 	if reviewer:
 		filters["routed_to"] = reviewer
 
-	return frappe.get_all(
+	queue = frappe.get_all(
 		"Sparsh Escalation Question",
 		filters=filters,
-		fields=["name", "learner", "activity", "escalation_reason", "question_text", "raised_at", "status"],
+		fields=["name", "learner", "activity", "escalation_reason", "urgency", "question_text", "raised_at", "status"],
 		order_by="creation asc",
 	)
+	# A column's default is not retroactive: questions raised before `urgency` existed
+	# hold NULL, and a reviewer reading None beside Routine would treat them differently.
+	for row in queue:
+		row.urgency = row.urgency or DEFAULT_URGENCY
+	return queue
 
 
 def raise_for_critical_error(attempt, activity, learner):
@@ -215,6 +243,9 @@ def raise_for_critical_error(attempt, activity, learner):
 	question.activity = activity
 	question.attempt = attempt
 	question.escalation_reason = "Safety critical"
+	# Engine-set, not learner-set: a matched critical marker is the one escalation the
+	# programme has already said must not wait.
+	question.urgency = "Immediate"
 	question.question_text = (
 		"Automatic escalation: this response matched a declared critical error for the activity. "
 		"A reviewer should confirm whether the response was genuinely unsafe and, if it was not, "

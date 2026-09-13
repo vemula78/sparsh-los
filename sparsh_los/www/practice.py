@@ -42,12 +42,43 @@ def get_context(context):
 	)
 	candidates = seen + [c for c in sorted(set(available)) if c and c not in seen]
 
+	# An assigned pathway outranks "whatever this learner could usefully do next".
+	# Acceptance criterion 1 asks that a learner enter an *assigned* competency pathway,
+	# and until cohorts existed nothing connected a learner to one: this page asked the
+	# orchestrator for a suggestion per competency, which answers a different question.
+	#
+	# The fallback is kept deliberately. A learner in no cohort, or in a cohort whose
+	# pathway is still Draft, must still be able to practise -- the alternative is a
+	# learner who can see the page and do nothing on it, which is how this page behaved
+	# before it looked at Mastery States at all.
 	context.next_up = None
-	for competency in candidates:
-		suggestion = orchestrator.next_experience(competency)
-		if suggestion.get("activity"):
-			context.next_up = dict(suggestion, competency=competency)
-			break
+	context.pathway = None
+
+	from sparsh_los import cohort
+
+	# `pathway_for` refuses to choose when a learner somehow sits in two Active cohorts
+	# -- rightly, because picking one silently would put them through the wrong
+	# programme. But that is an administrator's misconfiguration, and on a page render
+	# an uncaught throw is a stack trace where the learner's work should be. The page
+	# says what is wrong and still offers the ordinary practice route.
+	try:
+		assigned = cohort.pathway_for(frappe.session.user)
+	except frappe.ValidationError as exc:
+		context.pathway_problem = str(exc)
+		assigned = None
+
+	if assigned:
+		step = orchestrator.next_in_pathway(assigned)
+		if step.get("activity"):
+			context.pathway = assigned
+			context.next_up = step
+
+	if not context.next_up:
+		for competency in candidates:
+			suggestion = orchestrator.next_experience(competency)
+			if suggestion.get("activity"):
+				context.next_up = dict(suggestion, competency=competency)
+				break
 
 	if context.next_up:
 		# Through the runner, not a direct read: `runner.start` is what emits

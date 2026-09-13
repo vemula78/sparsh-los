@@ -1390,3 +1390,90 @@ refused, 1 ALLOWED — the deliberate self-filed Attempt, whose outcome the engi
 Unchanged: the assistance race; rule-free automatic scoring as a programme decision; the
 programme-name scanner's blind spots; matrix and case-pack checks establishing volume not identity.
 Plus phases 1–7 of the plan, of which 4–7 are blocked on the programme owner's eleven answers.
+
+---
+
+## Phase 1 — cohorts, assigned pathways, reflections
+
+Built by three agents working in parallel on disjoint file sets, with a fourth writing the
+harness afterwards as sole owner of `verify.py`. The schema was fixed as a contract up front so
+the page-level work could be written against a module that did not exist yet.
+
+**82 → 111 checks.** `MIN_CHECKS` raised to match.
+
+### What was built
+
+| Item | Build-guide section | Note |
+|---|---|---|
+| `Sparsh Cohort` + `Sparsh Cohort Member`, `cohort.py` | §7 Cohort, §18 cohort progress | One Active cohort per learner, enforced by a nullable `active_key` and a unique index — not by a query |
+| `Pathway.status` is read | §23 c1 | It never was. A Draft pathway — half-assembled, steps possibly out of order — handed out work exactly like an approved one |
+| `SSP-PILOT`, the nine starter cases in SC-01..SC-09 order | §25 item 9 | Seeded **Draft**: since `next_in_pathway` now refuses a non-Active pathway, the programme owner activating it is the act that starts the pilot. A script should not start a pilot |
+| The practice page prefers an assigned pathway | §23 c1 | Falls back to the per-competency suggestion, deliberately: without it a learner in no cohort opens a page with nothing to do |
+| Reflection is stored and never queued | §13 | Kept out of `review.pending` *and* refused by `record_evidence` — closing the queue alone left the by-name endpoint able to turn a reflection into Evidence |
+| `urgency` on the escalation question | §7 | Learner-supplied. Nothing sorts on it and no outcome, mastery or certification logic reads it, so inflating it buys nothing |
+| `cohort_readiness(competency, cohort=…)` | §18 | Cohort-scoped readiness includes members with no Mastery State, who report Insufficient — a cohort figure that omits non-starters overstates the cohort |
+
+### The uniqueness decision, and the bug it avoided
+
+The cohort agent applied this log's own invariant — *a uniqueness rule a query enforces is not
+enforced* — and, reading the Learning Resource controller's history, avoided the bug that
+controller actually had: the key is derived from current status on **every** save, not on the
+status transition. Appending a member to an already-Active cohort is not a transition, and a
+transition-only setter would have left that row NULL and the index blind to it. Its check
+`active_key_survives_ordinary_edit` was proved by making the setter transition-only, and failed.
+
+Residual gap, stated rather than hidden: `frappe.db.set_value` on a cohort's status bypasses
+`validate` and so the keys. `pathway_for` therefore **refuses to choose** when it finds two Active
+memberships, naming both, rather than letting `order by` decide which programme a learner is on.
+The practice page catches that refusal and degrades to a message — on a page render an uncaught
+throw is a stack trace where the learner's work should be.
+
+### Three findings from the harness agent, all outside its own file
+
+1. **The install script shipped ~150 macOS AppleDouble sidecars into the container** — `._name`
+   binaries beside every source file, and onto the **remote** bench in this morning's deploy. Not
+   merely untidy: `check_no_module_imports_a_network_client` reads with `errors="ignore"`, so it
+   counted them as scanned files and its "did I scan enough?" floor was being met by junk. Fixed
+   with `COPYFILE_DISABLE=1` and two excludes. Container now holds zero.
+2. **Re-authoring an activity into Reflection silently emptied the queue of its waiting attempts.**
+   Both `review.pending` and the summary exclude by the activity's *current* mode — right for a new
+   activity, wrong for one already carrying unreviewed work, which vanished from the queue and the
+   count in the same instant with no record that a learner was waiting on a verdict. Now refused,
+   with the count of waiting attempts named. Refused rather than migrated: deciding what those
+   attempts were is a judgement about a learner's submissions, not one a save should make.
+3. `load_pilot_pathway` reported `steps: 0` on the idempotent second call. Fixed to report the
+   real count.
+
+### The guard caught one of the new checks, and the check was wrong twice
+
+Adding finding 2's guard immediately failed `awaiting_a_person_excludes_reflections`, which
+re-authored an activity into Reflection while an attempt waited — exactly the thing now forbidden.
+The guard was right; the fixture was rewritten to use a separate control activity.
+
+Then the check written for the guard itself failed **for the wrong reason**: `_raises` brackets its
+call in a savepoint, `_set_mode` commits on success, and with the guard reverted the commit
+destroyed the savepoint — so the rollback failed with `SAVEPOINT sparsh_verify does not exist`.
+The check went red while saying nothing about the guard. Refusal is now asserted directly and the
+stored mode read back, and the revert produces the right message: *"An activity carrying waiting
+attempts was re-authored into a Reflection"*. **A check that fails for the wrong reason is not a
+check**, and `_raises` cannot wrap anything that commits.
+
+### A new check for a defect I shipped twice in one day
+
+`translations_are_imported` walks every module's AST for a bare `_(...)` call where `_` is never
+imported from frappe. I shipped that twice today — in the refresher controller and in `seed.py`.
+It turns a refusal into a 500 `NameError` at the moment the guard fires, `ast.parse` accepts it,
+and inspection missed it both times. Proved by removing the import from `cohort.py`.
+
+### Acceptance check
+
+`./scripts/install_verify.sh`, full path including `migrate`: exit 0, `RESULT passed=111 failed=0`.
+Every new check proved by reverting its fix; failure messages recorded above and in the agents'
+reports.
+
+### Still open after Phase 1
+
+Phases 2–3 are ours: §18 analytics v1 and the §20 no-model-call share; Numeric validation and
+Rubric evaluators, which close acceptance criterion 4 without any model call. Phases 4–7 remain
+blocked on the programme owner's eleven answers. F7 (assistance recorded without assistance shown
+on a hint-less activity) is still open.

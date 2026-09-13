@@ -16,6 +16,7 @@ import frappe
 from frappe import _
 
 from sparsh_los.permissions import require_reviewer
+from sparsh_los.runner import NOT_SCORED_MODES
 
 REVIEWABLE_OUTCOMES = ("Pass", "Partial", "Fail")
 
@@ -47,6 +48,14 @@ def pending(competency=None, limit=50):
 	# `limit` attempts and then discard those with evidence or from another competency,
 	# so fifty old reviewed attempts returned an empty queue while unreviewed work sat
 	# behind them -- the queue starved silently rather than reporting truncation.
+	#
+	# A Reflection is stored, not judged: it shares the `Not Evaluated` outcome with
+	# work that genuinely waits on a person, so it is excluded here by the activity's
+	# mode rather than by outcome. Without this every reflection sat in the queue and,
+	# at pilot scale, buried the attempts that needed a verdict. The exclusion reads the
+	# activity's *current* mode -- the attempt does not record the mode it was made
+	# under -- so re-authoring an activity into or out of Reflection moves its old
+	# attempts with it.
 	waiting = frappe.db.sql(
 		"""
 		select a.name, a.learner, a.activity, a.response, a.hint_level_used, a.attempted_at,
@@ -57,11 +66,12 @@ def pending(competency=None, limit=50):
 		  and not exists (
 		      select 1 from `tabSparsh Evidence` e where e.attempt = a.name
 		  )
+		  and ifnull(act.evaluation_mode, '') not in %(not_scored)s
 		  and (%(competency)s is null or act.competency = %(competency)s)
 		order by a.creation asc
 		limit %(limit)s
 		""",
-		{"competency": competency or None, "limit": limit},
+		{"competency": competency or None, "limit": limit, "not_scored": NOT_SCORED_MODES},
 		as_dict=True,
 	)
 
@@ -89,6 +99,12 @@ def record_evidence(attempt, outcome, assistance_level=None, critical_error=0, c
 
 	competency = frappe.db.get_value("Sparsh Activity", doc.activity, "competency")
 	version = frappe.db.get_value("Sparsh Activity", doc.activity, "version")
+
+	# Keeping a Reflection out of `pending` is not enough: this endpoint takes an
+	# attempt by name, so a reviewer could still turn one into Evidence and move
+	# mastery on the strength of a learner's private reflection.
+	if (frappe.db.get_value("Sparsh Activity", doc.activity, "evaluation_mode") or "") in NOT_SCORED_MODES:
+		frappe.throw(_("A reflection is stored for the learner's record and is not turned into evidence"))
 
 	critical_error = int(critical_error or 0) or int(doc.critical_error or 0)
 	if assistance_level is None:

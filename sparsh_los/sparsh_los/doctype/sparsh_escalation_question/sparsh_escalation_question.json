@@ -11,6 +11,7 @@
   "attempt",
   "column_break_head",
   "escalation_reason",
+  "urgency",
   "status",
   "routed_to",
   "raised_at",
@@ -55,6 +56,16 @@
    "in_standard_filter": 1,
    "label": "Escalation Reason",
    "options": "Outside rule scope\nConflicting rules\nSafety critical\nLearner disagreement\nUnknown"
+  },
+  {
+   "default": "Routine",
+   "description": "How soon a person needs to look. Stated by the learner; it orders nothing and decides nothing.",
+   "fieldname": "urgency",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Urgency",
+   "options": "Routine\nTime-sensitive\nImmediate"
   },
   {
    "default": "Open",
@@ -123,7 +134,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-12 21:50:17.377309",
+ "modified": "2026-09-14 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Escalation Question",

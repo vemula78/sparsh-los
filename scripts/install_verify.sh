@@ -10,7 +10,7 @@ set -euo pipefail
 
 TARGET="${TARGET:-local}"
 SKIP_VERIFY="${SKIP_VERIFY:-0}"
-MIN_CHECKS="${MIN_CHECKS:-89}"
+MIN_CHECKS="${MIN_CHECKS:-111}"
 
 case "${TARGET}" in
 local)
@@ -49,10 +49,18 @@ echo "==> Target ${TARGET}: ${CONTAINER} site ${SITE}"
 
 echo "==> Streaming sparsh_los into ${CONTAINER}:${APP_DIR}"
 host_cmd "docker exec -u root ${CONTAINER} bash -lc 'rm -rf ${APP_DIR} && mkdir -p ${APP_DIR}'"
-tar -C "${REPO_DIR}" \
+# COPYFILE_DISABLE stops macOS bsdtar writing an AppleDouble `._name` sidecar beside
+# every file; the --exclude catches any that are already on disk. Without both, ~150
+# of them landed in the container -- 163-byte binaries that are not UTF-8 and sit next
+# to every source file. They are not merely untidy: the determinism scanner reads with
+# errors="ignore", so it counted them as scanned files and its "did I scan enough?"
+# floor was met by junk.
+COPYFILE_DISABLE=1 tar -C "${REPO_DIR}" \
 	--exclude='.git' \
 	--exclude='__pycache__' \
 	--exclude='*.pyc' \
+	--exclude='._*' \
+	--exclude='.DS_Store' \
 	-cf - . \
 	| host_cmd "docker exec -i -u root ${CONTAINER} tar -C ${APP_DIR} -xf -"
 

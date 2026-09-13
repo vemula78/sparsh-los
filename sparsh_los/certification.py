@@ -118,16 +118,29 @@ def readiness(competency, learner=None):
 
 
 @frappe.whitelist()
-def cohort_readiness(competency):
-	"""Who is ready, who is blocked, and who needs more evidence — with reasons."""
+def cohort_readiness(competency, cohort=None):
+	"""Who is ready, who is blocked, and who needs more evidence — with reasons.
+
+	Without `cohort`, everyone holding a Mastery State for the competency. With it,
+	that cohort's members -- all of them, including a member with no state yet, who
+	reports as Insufficient; a cohort progress figure that omits the learners who
+	have not started overstates the cohort.
+	"""
 	require_reviewer()
 
-	learners = {
-		row.learner
-		for row in frappe.get_all(
-			"Sparsh Mastery State", filters={"competency": competency}, fields=["learner"]
-		)
-	}
+	if cohort:
+		from sparsh_los.cohort import member_learners
+
+		if not frappe.db.exists("Sparsh Cohort", cohort):
+			frappe.throw(_("No such cohort"), frappe.DoesNotExistError)
+		learners = set(member_learners(cohort))
+	else:
+		learners = {
+			row.learner
+			for row in frappe.get_all(
+				"Sparsh Mastery State", filters={"competency": competency}, fields=["learner"]
+			)
+		}
 
 	buckets = {READY: [], BLOCKED: [], INSUFFICIENT: []}
 	for learner in sorted(learners):
@@ -136,7 +149,12 @@ def cohort_readiness(competency):
 			{"learner": learner, "state": row["state"], "reason": row["reason"]}
 		)
 
-	return {"competency": competency, "counts": {k: len(v) for k, v in buckets.items()}, "buckets": buckets}
+	return {
+		"competency": competency,
+		"cohort": cohort,
+		"counts": {k: len(v) for k, v in buckets.items()},
+		"buckets": buckets,
+	}
 
 
 @frappe.whitelist()

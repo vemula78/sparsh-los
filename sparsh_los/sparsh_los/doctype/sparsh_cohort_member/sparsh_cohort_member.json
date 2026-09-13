@@ -1,0 +1,51 @@
+{
+ "actions": [],
+ "creation": "2026-09-14 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "learner",
+  "joined_on",
+  "active_key"
+ ],
+ "fields": [
+  {
+   "fieldname": "learner",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Learner",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "fieldname": "joined_on",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Joined On",
+   "read_only": 1
+  },
+  {
+   "description": "Holds the learner while the parent cohort is Active, NULL otherwise; the database enforces one Active cohort per learner.",
+   "fieldname": "active_key",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Active Key",
+   "no_copy": 1,
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-09-14 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sparsh LOS",
+ "name": "Sparsh Cohort Member",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

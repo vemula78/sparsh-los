@@ -201,6 +201,73 @@ def load_case_pack():
 	return created, skipped
 
 
+PILOT_PATHWAY = "SSP-PILOT"
+
+
+@frappe.whitelist()
+def load_pilot_pathway():
+	"""Order the nine starter cases into one sequence a learner can be put through.
+
+	Until now nothing connected a learner to a Pathway: `practice` iterated competencies
+	and asked the orchestrator for something to do in each, which answers "what could
+	this person do next?" but not "what is this person being taken through?" -- and §23
+	acceptance criterion 1 asks for an *assigned* pathway.
+
+	The order is the case pack's own: SC-01 to SC-09 as the programme wrote them. The
+	engine has no basis for a different one, and inventing a pedagogical sequence is a
+	programme decision, not a seeding decision.
+
+	Created as **Draft**, deliberately. `next_in_pathway` refuses to hand out work from a
+	pathway that is not Active, so the programme owner activating it is the act that
+	starts the pilot. Seeding it Active would start the pilot by running a script.
+
+	Every step is mandatory: all nine cases are Human review, so none can be passed over
+	by the engine deciding the learner already demonstrated it.
+	"""
+	if frappe.db.exists("Sparsh Pathway", PILOT_PATHWAY):
+		# The real step count, not zero: a caller reading `steps` to confirm the pathway
+		# was built got "0 steps" from the idempotent path and could not tell that from
+		# an empty pathway.
+		return {
+			"pathway": PILOT_PATHWAY,
+			"created": False,
+			"steps": frappe.db.count("Sparsh Pathway Step", {"parent": PILOT_PATHWAY}),
+		}
+
+	cases = frappe.get_all(
+		"Sparsh Activity",
+		filters={"activity_id": ("like", "SC-%")},
+		fields=["name", "activity_id", "competency"],
+		order_by="activity_id asc",
+	)
+	if not cases:
+		frappe.throw(frappe._("Load the starter case pack before building the pilot pathway"))
+
+	pathway = frappe.new_doc("Sparsh Pathway")
+	pathway.pathway_id = PILOT_PATHWAY
+	pathway.title = "Starter case pack"
+	pathway.target_role = "Volunteer"
+	pathway.status = "Draft"
+	pathway.description = (
+		"The nine starter cases in the order the programme wrote them. Every case is "
+		"judged by a person: no rule behind them is validated."
+	)
+	for index, case in enumerate(cases, start=1):
+		pathway.append(
+			"steps",
+			{
+				"step_order": index,
+				"activity": case.name,
+				"competency": case.competency,
+				"is_mandatory": 1,
+			},
+		)
+	pathway.insert(ignore_permissions=True)
+	frappe.db.commit()
+
+	return {"pathway": pathway.name, "created": True, "steps": len(cases)}
+
+
 @frappe.whitelist()
 def case_pack_status():
 	"""What the case pack looks like in the system, and what it still needs."""
