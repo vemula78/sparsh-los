@@ -872,3 +872,71 @@ acceptance evidence comes from.
    requirements as they come into force" rather than asserting compliance. This is framing only:
    no code, no check and no engineering rule changed, and no identifiable data leaves the bench
    either way. Brief at v8.1.
+
+## 13-Sep-2026 — Audit 16: hostile-caller probes against the running instance
+
+Every audit so far read source. This one drives the installed app on the local dev bench as
+four accounts — two learners, a reviewer, and an enrolled-in-nothing user — and reports what
+the engine actually did. `scripts/hostile_probe.py`, 40 probes, fixtures under `ZZP-`, refuses
+to run against a site whose name ends `sssihms.org`.
+
+**39 refused, 1 allowed.** The 39 include: the answer key and hint ladder unreadable through
+`frappe.client.get_list` and through `get_doc` + `check_permission`; a prefix-oracle filter on
+`expected_response` refused; all six learner-scoped DocTypes returning 0 rows of another
+learner's data; every reviewer endpoint refused to a learner with a named reason; the
+unenrolled account shut out of all four endpoints tried; and a reviewer refused when inserting
+Mastery directly, deleting an attempt, writing an Event, **and when setting
+`frappe.flags.in_mastery_recompute` by hand first** — the flag is not a bypass from a caller.
+
+### Two corrections to the instrument, before the result meant anything
+
+The first run reported **11 allowed** and every one was my bug.
+
+- Eight were probes written with `frappe.get_all` and `frappe.get_doc`. `get_all` is
+  `get_list(ignore_permissions=True)` and `get_doc` runs no read check at all, so both return
+  rows regardless of the caller. They measure that a row exists, not that someone may read it.
+  Rewritten against `frappe.client.get_list` (the path a browser reaches), `frappe.get_list`
+  with `ignore_permissions=False`, and `check_permission("read")`. All then refused.
+- Six row-scope probes read backwards: the helper raised when rows leaked, so the probe's
+  "ALLOWED" meant "returned nothing", i.e. the scoping worked. Row scope does not raise — it
+  silently returns fewer rows — so an exception-shaped probe cannot test it. Replaced with
+  `scope_probe`, which reports the row count and calls anything above zero a leak.
+
+A probe that cannot fail is worth no more than a check that cannot fail. Both were caught by
+the same rule as the rest of this log: show the instrument failing before believing it passing.
+
+### F14 — a learner can author a row in the reviewer's queue. Major, high confidence.
+
+`Sparsh Learner` holds `create` on `Sparsh Attempt`, because `runner.submit` inserts as the
+learner. A learner can therefore insert an Attempt directly, and `review.pending()` shows it to
+a reviewer identically to a genuine one, with `response` text the learner chose.
+
+What the controller does defend, verified by reading the row back: a forged `outcome="Pass"` is
+overwritten to `Not Evaluated`, `retry_index` is renumbered, `attempted_at` is set server-side,
+and an attempt naming *another* learner is refused outright. So this is not self-grading.
+
+What it reaches, demonstrated end to end: reviewer approves the forged row →
+`review.record_evidence` writes Evidence with `assistance_level = attempt.hint_level_used` → the
+learner's Mastery State becomes `Demonstrated`. The reviewer is still the judge, so
+"nobody judges their own work" holds; what does not hold is that the artefact being judged was
+authored by the engine.
+
+**Not exploitable as assistance-laundering today, and this is why it must be re-tested later.**
+The hint ladder never advances on the current configuration: `_session_position` raises the
+level from `failures`, counted as outcomes not in `("Pass", "Not Evaluated")`, and with no rule
+Validated every outcome is `Not Evaluated`. So `hint_level_used` is 0 and `independent` is 1 on
+every attempt, genuine or forged, and a forged 0 laundered nothing. The moment one rule is
+Validated and one activity is auto-scored, genuine attempts start carrying a non-zero level and
+a learner-authored row claiming 0 becomes the cheapest way to have unaided competence recorded.
+
+Left unfixed deliberately: the fix is a schema and permissions decision (drop learner `create`
+and let only the runner insert, or mark provenance on the row), it lands in the same code the
+first validated rule will touch, and there is no audit budget left today to check it. Recorded
+here so it is the first thing re-tested when a rule goes Validated — the same trigger already
+named for the expensive external audit.
+
+Also noted from `runtime-facts.txt`: all 21 endpoints register
+`http=['GET','POST','PUT','DELETE']`; none declares `methods=["POST"]`. Frappe rolls back after
+a GET unless the code commits, and no request-reachable function here commits — the explicit
+commits are in `seed.load_matrix`, `seed.load_case_pack`, `install` and `verify`. Defence in
+depth, minor, high confidence.
