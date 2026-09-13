@@ -23,6 +23,13 @@ def get_context(context):
 	context.learner = frappe.session.user
 	context.view = dashboard.learner_view()
 
+	# Opening this page is the learner's session. Emitted after learner_view, whose
+	# require_enrolment has already refused anyone not on the programme, so an
+	# unenrolled account does not register as a session.
+	from sparsh_los import events
+
+	events.emit(events.SESSION_STARTED, learner=frappe.session.user)
+
 	# The next thing to do, for the first competency that has one.
 	from sparsh_los import orchestrator
 
@@ -43,12 +50,20 @@ def get_context(context):
 			break
 
 	if context.next_up:
-		activity = frappe.db.get_value(
-			"Sparsh Activity",
-			context.next_up["activity"],
-			["title", "instruction"],
-			as_dict=True,
+		# Through the runner, not a direct read: `runner.start` is what emits
+		# activity_started, and reading title/instruction here meant the event fired
+		# only from the harness and the frequency-of-use metric read zero in real use.
+		# Its only write is that event, which never raises, so a page render is safe.
+		from sparsh_los import runner
+
+		opened = runner.start(context.next_up["activity"])
+		# Only what the page shows. `start` also returns `hint_level` and `retry_index`
+		# as literal zeros -- they are placeholders for a session it has just opened,
+		# not this learner's position on the ladder, and copying them into the page
+		# context would hand the next template author a number that looks authoritative
+		# and is not.
+		context.next_up.update(
+			{"title": opened["title"], "instruction": opened["instruction"]}
 		)
-		context.next_up.update(activity or {})
 
 	return context

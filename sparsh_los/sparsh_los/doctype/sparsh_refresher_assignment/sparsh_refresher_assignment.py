@@ -2,6 +2,7 @@
 # For license information, please see license.txt
 
 import frappe
+from frappe import _
 from frappe.model.document import Document
 
 
@@ -10,8 +11,44 @@ class SparshRefresherAssignment(Document):
 		self.assigned_on = frappe.utils.now_datetime()
 
 	def validate(self):
+		self._nobody_closes_their_own_refresher()
+
 		if self.status == "Completed" and not self.completed_on:
 			self.completed_on = frappe.utils.now_datetime()
+
+	def _nobody_closes_their_own_refresher(self):
+		"""Closing your own refresher releases your own suspended certificate.
+
+		This was the one input to a derived state with no self-guard on it. A refresher
+		holds the competency at Refresh Due and suspends the certificate that depended
+		on it; `on_update` recomputes on the open/closed edge. A user holding both the
+		learner and the reviewer role -- reviewer carries `write` here -- could open
+		their own assignment in Desk, set it to Completed, and have the engine restore
+		their certification on their own say-so.
+
+		The engine's own closing path is `refresher.close_satisfied`, which writes with
+		`db.set_value` and never reaches `validate`, so it is unaffected: a refresher
+		still closes by itself when the learner produces an independent pass.
+		"""
+		if frappe.flags.in_mastery_recompute:
+			# The engine closed it from fresh evidence, not the learner.
+			return
+
+		if not self.learner or self.learner != frappe.session.user:
+			return
+
+		before = self.get_doc_before_save()
+		if before and before.status == self.status:
+			# Nothing about the open/closed state is changing; an unrelated edit by the
+			# learner is not what this guards.
+			return
+
+		frappe.throw(
+			_("You cannot close a refresher assigned to you; it closes when your work "
+			  "shows the competency is current again"),
+			frappe.PermissionError,
+		)
+
 
 	def on_update(self):
 		"""An open refresher holds the competency at Refresh Due; closing it releases.
@@ -62,6 +99,18 @@ class SparshRefresherAssignment(Document):
 		certificate Suspended, until some unrelated evidence event happened to
 		recompute. Every other input to a derived state here has a symmetric guard.
 		"""
+		# Deleting it releases the hold exactly as completing it would, so it carries
+		# the same self-guard. Placed here rather than in a second `on_trash`, which
+		# would have silently replaced this one.
+		if (
+			self.learner
+			and self.learner == frappe.session.user
+			and not (frappe.flags.in_sparsh_maintenance or frappe.flags.in_uninstall)
+		):
+			frappe.throw(
+				_("You cannot delete a refresher assigned to you"), frappe.PermissionError
+			)
+
 		if self.status != "Assigned":
 			return
 

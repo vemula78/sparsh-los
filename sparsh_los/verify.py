@@ -35,6 +35,7 @@ RULE_ID = PREFIX + "RULE"
 TEST_LEARNER = "zzv-learner@example.invalid"
 DUAL_LEARNER = "zzv-dual@example.invalid"
 OTHER_LEARNER = "zzv-other@example.invalid"
+SUMMARY_LEARNER = "zzv-summary@example.invalid"
 
 PII_PATTERN = re.compile(r"patient|mrn|uhid|dob|aadhaar|phone|address", re.IGNORECASE)
 DOMAIN_STRING_PATTERN = re.compile(r"sparsh|sai", re.IGNORECASE)
@@ -214,6 +215,7 @@ def teardown():
 		TEST_LEARNER,
 		OTHER_LEARNER,
 		DUAL_LEARNER,
+		SUMMARY_LEARNER,
 		"zzv-fresh@example.invalid",
 		"zzv-stranger@example.invalid",
 		PREFIX + "pathway@example.invalid",
@@ -863,6 +865,7 @@ def check_dashboards():
 	)
 
 	view = dashboard.supervisor_view(competency=COMPETENCY)
+	pending_before = view["pending_escalations"]
 	# Naming the fixture, not counting heads: `learners >= 1` is true on this site
 	# whether or not this check's own learner reached the view.
 	_assert(
@@ -880,6 +883,52 @@ def check_dashboards():
 	_assert(
 		heatmap["rows"].get(LEARNER, {}).get(COMPETENCY) in ("Demonstrated", "Mastered"),
 		"The heatmap cell does not carry the mastery state",
+	)
+
+	# The other three answers, each on a named fixture. `critical_errors`,
+	# `pending_escalations` and `programme_signals` were returned and never read.
+	_assert(
+		not any(r["learner"] == LEARNER and r["activity"] == ACTIVITY_2 for r in view["critical_errors"]),
+		"The fixture already appears among the critical errors, so nothing below discriminates",
+	)
+	from sparsh_los import escalation
+
+	_make_learner(TEST_LEARNER)
+	frappe.db.commit()
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+		question = escalation.raise_question(
+			"Which section of the manual covers this?", activity=ACTIVITY_1, reason="Unknown"
+		)
+	finally:
+		frappe.set_user(original_user)
+	_new_evidence(ACTIVITY_2, "Fail", critical_error=1)
+	frappe.db.commit()
+
+	view = dashboard.supervisor_view(competency=COMPETENCY)
+	_assert(
+		any(r["learner"] == LEARNER and r["activity"] == ACTIVITY_2 for r in view["critical_errors"]),
+		"A critical error on the fixture learner is absent from critical_errors",
+	)
+	_assert(
+		view["pending_escalations"] - pending_before == 1,
+		f"An open question did not move pending_escalations: {pending_before} -> {view['pending_escalations']}",
+	)
+	_assert(
+		not any(q["name"] == question for q in view["programme_signals"]),
+		"An unanswered question is already a programme signal",
+	)
+
+	escalation.answer(question, "Section three. The material needs a worked example.", "Curriculum change")
+	frappe.db.commit()
+	view = dashboard.supervisor_view(competency=COMPETENCY)
+	signal = next((q for q in view["programme_signals"] if q["name"] == question), None)
+	_assert(signal, "A question answered with a programme-level disposition is not a programme signal")
+	_assert(signal["disposition"] == "Curriculum change", f"The signal carries {signal['disposition']!r}")
+	_assert(
+		view["pending_escalations"] == pending_before,
+		f"An answered question still counts as pending: {view['pending_escalations']} vs {pending_before}",
 	)
 	frappe.db.commit()
 
@@ -1207,12 +1256,36 @@ def check_refresher_time_based():
 		f"An aged demonstration derived {derive_state(LEARNER, COMPETENCY)}",
 	)
 
-	assigned = refresher.evaluate_time_based()
-	_assert(assigned, "No refresher was assigned for an aged demonstration")
+	# `evaluate_time_based` returns every assignment it made site-wide, so a truthy
+	# result says only that somebody, somewhere, was assigned. The fixture is named.
+	def fixture_assignments(names):
+		return [
+			n
+			for n in names
+			if frappe.db.get_value(
+				"Sparsh Refresher Assignment", n, ["learner", "competency"], as_dict=True
+			) == {"learner": LEARNER, "competency": COMPETENCY}
+		]
 
-	# Idempotent: a second run does not pile up duplicates.
+	assigned = refresher.evaluate_time_based()
+	ours = fixture_assignments(assigned)
+	_assert(
+		len(ours) == 1,
+		f"An aged demonstration did not assign the fixture learner exactly one refresher: "
+		f"{len(ours)} of {len(assigned)} assignment(s) were theirs",
+	)
+	_assert(
+		frappe.db.get_value("Sparsh Refresher Assignment", ours[0], "trigger_reason")
+		== refresher.TIME_ELAPSED,
+		"The refresher does not say it was time that triggered it",
+	)
+
+	# Idempotent: a second run does not pile up duplicates for this learner.
 	again = refresher.evaluate_time_based()
-	_assert(not again, "A second run duplicated the refresher assignment")
+	_assert(
+		not fixture_assignments(again),
+		f"A second run duplicated the fixture learner's refresher: {fixture_assignments(again)}",
+	)
 
 	frappe.db.set_value("Sparsh Competency", COMPETENCY, "refresh_interval_days", 0)
 	frappe.db.commit()
@@ -1296,36 +1369,89 @@ def check_refresher_on_rule_change():
 
 
 def check_matrix_loads_as_draft():
-	"""The programme matrix is loaded as Draft and nothing arrives pre-validated."""
+	"""The loader creates rules as Draft and leaves existing ones alone.
+
+	Asserted on what the loader *did*, not on the seed data's current status: the first
+	version asserted `Validated == 0` across the matrix, which goes red on any site where
+	the programme owner has validated one rule -- the state the platform exists to reach.
+	The status classification is then exercised by moving one matrix rule through the
+	states and back, so it is the engine's reading that is tested and not the seed's.
+	"""
 	from sparsh_los import seed
 
-	created, skipped = seed.load_matrix()
-	_assert(created or skipped, "The matrix loader produced nothing")
+	matrix_ids = [row["rule_id"] for row in seed._rows()]
+	_assert(len(matrix_ids) == 17, f"The matrix source holds {len(matrix_ids)} rules, expected 17")
 
-	status = seed.matrix_status()
-	_assert(status["total"] >= 17, f"Only {status['total']} matrix rules are present")
+	before = {
+		r.name: r.status
+		for r in frappe.get_all(
+			"Sparsh Source of Truth Rule", filters={"rule_id": ("in", matrix_ids)}, fields=["name", "status"]
+		)
+	}
+	created, skipped = seed.load_matrix()
 	_assert(
-		status["by_status"].get("Validated", 0) == 0,
-		"A matrix rule arrived already Validated",
+		sorted(created and [frappe.db.get_value("Sparsh Source of Truth Rule", n, "rule_id") for n in created] or [])
+		+ sorted(skipped) == sorted(matrix_ids),
+		f"The loader did not account for every matrix rule: created={created} skipped={skipped}",
 	)
-	_assert(
-		status["unvalidated_safety_critical"],
-		"No safety-critical rule is flagged as awaiting validation",
-	)
-	_assert(
-		not status["ready_to_automate"],
-		f"Rules are marked ready to automate before validation: {status['ready_to_automate']}",
-	)
+	for name in created:
+		_assert(
+			frappe.db.get_value("Sparsh Source of Truth Rule", name, "status") == "Draft",
+			f"The loader created {name} as something other than Draft",
+		)
+	for name, status in before.items():
+		_assert(
+			frappe.db.get_value("Sparsh Source of Truth Rule", name, "status") == status,
+			f"The loader changed the status of an existing rule {name}",
+		)
 
 	# Re-running must not duplicate.
-	before = frappe.db.count("Sparsh Source of Truth Rule")
-	seed.load_matrix()
+	count_before = frappe.db.count("Sparsh Source of Truth Rule")
+	again_created, _ = seed.load_matrix()
+	_assert(not again_created, f"Re-running the matrix loader created rules: {again_created}")
 	_assert(
-		frappe.db.count("Sparsh Source of Truth Rule") == before,
+		frappe.db.count("Sparsh Source of Truth Rule") == count_before,
 		"Re-running the matrix loader duplicated rules",
 	)
-	frappe.db.commit()
 
+	# The classification, on one safety-critical matrix rule moved through the states.
+	probe = frappe.get_all(
+		"Sparsh Source of Truth Rule",
+		filters={"rule_id": ("in", matrix_ids), "criticality": "Safety-critical", "status": ("!=", "Superseded")},
+		fields=["name", "rule_id", "status", "automation_status"],
+		order_by="rule_id asc, version desc",
+		limit=1,
+	)
+	_assert(probe, "The matrix holds no safety-critical rule to classify")
+	probe = probe[0]
+	try:
+		frappe.db.set_value("Sparsh Source of Truth Rule", probe.name, "status", "Draft", update_modified=False)
+		status = seed.matrix_status()
+		_assert(
+			probe.rule_id in status["unvalidated_safety_critical"],
+			f"A Draft safety-critical rule is not reported as awaiting validation: {status['unvalidated_safety_critical']}",
+		)
+		_assert(
+			probe.rule_id not in status["ready_to_automate"],
+			"A Draft rule is reported ready to automate",
+		)
+		_assert(status["by_status"].get("Draft", 0) >= 1, "A Draft rule is missing from the status tally")
+
+		frappe.db.set_value("Sparsh Source of Truth Rule", probe.name, "status", "Validated", update_modified=False)
+		status = seed.matrix_status()
+		_assert(
+			probe.rule_id not in status["unvalidated_safety_critical"],
+			"A Validated rule is still reported as awaiting validation",
+		)
+		_assert(
+			(probe.rule_id in status["ready_to_automate"])
+			== (probe.automation_status == "Safe as fixed logic"),
+			f"Ready-to-automate disagrees with the rule's automation status "
+			f"({probe.automation_status!r}): {status['ready_to_automate']}",
+		)
+	finally:
+		frappe.db.set_value("Sparsh Source of Truth Rule", probe.name, "status", probe.status, update_modified=False)
+		frappe.db.commit()
 
 def check_clearance_must_be_backed_by_review():
 	"""The cleared flag is worthless unless a real approved review stands behind it."""
@@ -1886,18 +2012,23 @@ def check_review_queue_page():
 
 
 def check_case_pack_loads_for_review_only():
-	"""The programme's cases load, and not one of them can auto-score anybody."""
+	"""The loader creates cases in Human review, and the status report reads the mode.
+
+	Asserted on what the loader created and on a delta, not on the seed's current state:
+	the first version required every loaded case to be awaiting review, which goes red
+	the day the programme owner validates a rule and gives one case an answer.
+	"""
 	from sparsh_los import seed
 
 	created, skipped = seed.load_case_pack()
-	status = seed.case_pack_status()
-
-	_assert(status["loaded"] >= 9, f"Only {status['loaded']} cases loaded")
-	_assert(
-		status["loaded"] == status["awaiting_human_review"],
-		f"Cases are set to auto-score: {status['auto_scored']}",
-	)
-	_assert(not status["auto_scored"], f"These cases would score without a person: {status['auto_scored']}")
+	for name in created:
+		row = frappe.db.get_value(
+			"Sparsh Activity", name, ["evaluation_mode", "expected_response"], as_dict=True
+		)
+		_assert(
+			row.evaluation_mode == "Human review" and not row.expected_response,
+			f"The loader created {name} able to score itself: {row}",
+		)
 
 	# The competencies the cases belong to exist.
 	for competency_id in ("SSP-RISK", "SSP-PLEDGE", "SSP-SCOPE"):
@@ -1908,52 +2039,121 @@ def check_case_pack_loads_for_review_only():
 
 	# Re-running does not duplicate.
 	before = frappe.db.count("Sparsh Activity", {"activity_id": ("like", "SC-%")})
-	seed.load_case_pack()
+	again_created, _ = seed.load_case_pack()
+	_assert(not again_created, f"Re-running the case pack loader created activities: {again_created}")
 	_assert(
 		frappe.db.count("Sparsh Activity", {"activity_id": ("like", "SC-%")}) == before,
 		"Re-running the case pack loader duplicated activities",
 	)
-	frappe.db.commit()
 
+	# The report reads the mode: one case moved to Deterministic and back must appear
+	# in `auto_scored` and leave `awaiting_human_review`, whatever the rest are set to.
+	probe = frappe.get_all(
+		"Sparsh Activity",
+		filters={"activity_id": ("like", "SC-%"), "evaluation_mode": "Human review"},
+		fields=["name"],
+		order_by="name asc",
+		limit=1,
+	)
+	_assert(probe, "No case is in Human review, so the report's reading cannot be tested")
+	probe = probe[0].name
+	base = seed.case_pack_status()
+	_assert(probe not in base["auto_scored"], "A Human-review case is reported as auto-scored")
+	try:
+		frappe.db.set_value("Sparsh Activity", probe, "evaluation_mode", "Deterministic", update_modified=False)
+		flipped = seed.case_pack_status()
+		_assert(
+			probe in flipped["auto_scored"],
+			f"A Deterministic case is not reported as auto-scored: {flipped['auto_scored']}",
+		)
+		_assert(
+			flipped["awaiting_human_review"] == base["awaiting_human_review"] - 1,
+			f"Moving one case out of Human review changed awaiting_human_review "
+			f"{base['awaiting_human_review']} -> {flipped['awaiting_human_review']}",
+		)
+		_assert(flipped["loaded"] == base["loaded"], "Changing a mode changed the loaded count")
+	finally:
+		frappe.db.set_value("Sparsh Activity", probe, "evaluation_mode", "Human review", update_modified=False)
+		frappe.db.commit()
 
 def check_programme_readiness_is_honest():
-	"""The readiness report tells the programme owner the truth."""
+	"""The readiness report tells the programme owner the truth.
+
+	Built on the harness's own rule and activity, so it reads the engine's judgement
+	and not the seed's current position: the first version asserted that nothing in the
+	matrix was ready to automate, which is exactly the assertion that goes red on a
+	pilot-configured site.
+	"""
 	from sparsh_los import seed
 
-	seed.load_matrix()
-	seed.load_case_pack()
-	report = seed.programme_readiness()
+	_reset_competency()
+	draft = _new_rule(1, status="Draft")
+	competency = frappe.get_doc("Sparsh Competency", COMPETENCY)
+	competency.append("linked_rules", {"rule": draft.name})
+	competency.save(ignore_permissions=True)
 
-	_assert(report["rules_total"] >= 17, f"Only {report['rules_total']} rules are present")
-	_assert(
-		not report["rules_ready_to_automate"],
-		f"Rules are reported ready to automate before validation: {report['rules_ready_to_automate']}",
-	)
-	_assert(
-		report["unvalidated_safety_critical"],
-		"No safety-critical rule is reported as awaiting validation",
-	)
-	_assert(report["blocking"], "The report claims nothing is blocking the pilot")
-	_assert(
-		any("safety-critical" in line for line in report["blocking"]),
-		f"Unvalidated safety rules are not named as blocking: {report['blocking']}",
-	)
-
-	# It is a reviewer view.
-	_make_learner(TEST_LEARNER)
+	activity = frappe.get_doc("Sparsh Activity", ACTIVITY_1)
+	original_mode, original_expected = activity.evaluation_mode, activity.expected_response
+	activity.evaluation_mode = "Deterministic"
+	activity.expected_response = "level two"
+	activity.save(ignore_permissions=True)
 	frappe.db.commit()
-	original_user = frappe.session.user
+
 	try:
-		frappe.set_user(TEST_LEARNER)
-		try:
-			seed.programme_readiness()
-			raise AssertionError("A learner could read the programme readiness report")
-		except frappe.PermissionError:
-			pass
-	finally:
-		frappe.set_user(original_user)
-	frappe.db.commit()
+		report = seed.programme_readiness()
+		_assert(
+			ACTIVITY_1 in report["auto_scoring_against_unvalidated_rules"],
+			f"A Deterministic activity under a Draft rule is not reported: "
+			f"{report['auto_scoring_against_unvalidated_rules']}",
+		)
+		_assert(
+			report["can_pilot_with_human_review"] is False,
+			"The report called the pilot human-review-safe while an activity would score "
+			"itself against a Draft rule",
+		)
+		_assert(
+			COMPETENCY not in report["competencies_without_rules"],
+			"A competency with a rule linked is reported as having none",
+		)
+		_assert(
+			COMPETENCY_2 in report["competencies_without_rules"],
+			f"A competency with no rule linked is not reported: {report['competencies_without_rules']}",
+		)
+		_assert(
+			any("no rule linked" in line for line in report["blocking"]),
+			f"Competencies without rules are not named as blocking: {report['blocking']}",
+		)
 
+		# Validating the rule is what releases the activity, and nothing else changed.
+		frappe.db.set_value("Sparsh Source of Truth Rule", draft.name, "status", "Validated")
+		frappe.db.commit()
+		released = seed.programme_readiness()
+		_assert(
+			ACTIVITY_1 not in released["auto_scoring_against_unvalidated_rules"],
+			"An activity under a Validated rule is still reported as auto-scoring against an "
+			"unvalidated one",
+		)
+
+		# It is a reviewer view.
+		_make_learner(TEST_LEARNER)
+		frappe.db.commit()
+		original_user = frappe.session.user
+		try:
+			frappe.set_user(TEST_LEARNER)
+			try:
+				seed.programme_readiness()
+				raise AssertionError("A learner could read the programme readiness report")
+			except frappe.PermissionError:
+				pass
+		finally:
+			frappe.set_user(original_user)
+	finally:
+		activity.reload()
+		activity.evaluation_mode = original_mode
+		activity.expected_response = original_expected
+		activity.save(ignore_permissions=True)
+		_reset_competency()
+		frappe.db.commit()
 
 def check_activity_cannot_change_competency():
 	"""An activity with evidence against it stays where it is."""
@@ -3333,7 +3533,11 @@ def check_certificate_shows_its_working():
 
 
 def check_supervisor_sees_why_someone_is_stuck():
-	"""'Who is stuck' is only useful with 'and why'."""
+	"""'Who is stuck' is only useful with 'and why'.
+
+	Built from Evidence, so this covers the evidence-derived reasons only. The learner
+	with attempts and no Evidence at all is `repeated_failures_reach_the_supervisor_from_attempts`.
+	"""
 	from sparsh_los import dashboard
 
 	_reset_competency()
@@ -3356,7 +3560,14 @@ def check_supervisor_sees_why_someone_is_stuck():
 
 
 def check_programme_summary_counts_from_evidence():
-	"""The summary is counted at read time, so it cannot drift from the evidence."""
+	"""The summary is counted at read time, so it cannot drift from the evidence.
+
+	Every figure is asserted as a delta against a baseline taken on the same bench:
+	`>= 1` is satisfied by whatever another check left behind, and for years only
+	`certification_ready` was asserted at all -- `enrolled`, `active_in_period`,
+	`require_remediation`, `certified` and `attempts_awaiting_a_person` could each have
+	read zero for ever without a check going red.
+	"""
 	from sparsh_los import dashboard
 
 	_reset_competency()
@@ -3366,55 +3577,124 @@ def check_programme_summary_counts_from_evidence():
 	# filed one Pass -- not enough to demonstrate anybody -- and asserted
 	# `certification_ready >= 1`, which that other learner already satisfied.
 	_make_learner(TEST_LEARNER)
+	_delete_all("Sparsh Certification Record", {"learner": TEST_LEARNER})
 	_delete_all("Sparsh Evidence", {"learner": TEST_LEARNER})
 	_delete_mastery({"learner": TEST_LEARNER})
+	# A second fresh account for the two figures that count people rather than states:
+	# it must not exist yet, or `enrolled` cannot move.
+	_delete_all("Sparsh Attempt", {"learner": SUMMARY_LEARNER})
+	if frappe.db.exists("User", SUMMARY_LEARNER):
+		frappe.delete_doc("User", SUMMARY_LEARNER, force=True, ignore_permissions=True)
 	frappe.db.commit()
 
-	ready_before = dashboard.programme_summary()["certification_ready"]
-	_new_evidence(ACTIVITY_1, "Pass", assistance_level=0, learner=TEST_LEARNER)
-	_new_evidence(ACTIVITY_2, "Pass", assistance_level=0, learner=TEST_LEARNER)
+	activity = frappe.get_doc("Sparsh Activity", ACTIVITY_1)
+	original_mode = activity.evaluation_mode
+	# Human review, so the attempt below is `Not Evaluated` with no Evidence -- the one
+	# shape that counts as awaiting a person.
+	activity.evaluation_mode = "Human review"
+	activity.save(ignore_permissions=True)
 	frappe.db.commit()
-	_assert(
-		frappe.db.get_value(
-			"Sparsh Mastery State", {"learner": TEST_LEARNER, "competency": COMPETENCY}, "state"
-		) in (DEMONSTRATED, MASTERED),
-		"The fixture learner was not demonstrated, so the ready count cannot be tested",
-	)
 
-	summary = dashboard.programme_summary()
-	_assert(
-		summary["certification_ready"] - ready_before == 1,
-		f"The demonstrated learner did not move the ready count: "
-		f"{ready_before} -> {summary['certification_ready']}",
-	)
-	_assert("most_common_gap" in summary, "The summary names no most-common gap")
-	_assert(summary["period_days"] == 30, "The default period is not 30 days")
-
-	# A competency short of demonstration shows up as a gap.
-	# No activity: the provenance rule applies to unaided passes, not to a partial.
-	_new_evidence(None, "Partial", competency=COMPETENCY_2, assistance_level=1)
-	frappe.db.commit()
-	summary = dashboard.programme_summary()
-	_assert(
-		COMPETENCY_2 in summary["gaps"],
-		f"A competency short of demonstration is not a gap: {summary['gaps']}",
-	)
-
-	# It is a supervisor view.
-	_make_learner(TEST_LEARNER)
-	frappe.db.commit()
-	original_user = frappe.session.user
 	try:
-		frappe.set_user(TEST_LEARNER)
-		try:
-			dashboard.programme_summary()
-			raise AssertionError("A learner read the programme summary")
-		except frappe.PermissionError:
-			pass
-	finally:
-		frappe.set_user(original_user)
-	frappe.db.commit()
+		base = dashboard.programme_summary()
 
+		_make_learner(SUMMARY_LEARNER)
+		frappe.db.commit()
+		after_enrol = dashboard.programme_summary()
+		_assert(
+			after_enrol["enrolled"] - base["enrolled"] == 1,
+			f"A new learner account did not move enrolled: {base['enrolled']} -> {after_enrol['enrolled']}",
+		)
+		_assert(
+			after_enrol["active_in_period"] == base["active_in_period"],
+			"A learner who has attempted nothing was counted as active",
+		)
+
+		attempt = _submit(ACTIVITY_1, "zzv summary attempt", as_user=SUMMARY_LEARNER)
+		frappe.db.commit()
+		_assert(attempt["outcome"] == "Not Evaluated", f"The fixture attempt scored {attempt['outcome']}")
+		after_attempt = dashboard.programme_summary()
+		_assert(
+			after_attempt["active_in_period"] - base["active_in_period"] == 1,
+			f"One attempt in the period did not move active_in_period: "
+			f"{base['active_in_period']} -> {after_attempt['active_in_period']}",
+		)
+		_assert(
+			after_attempt["attempts_awaiting_a_person"] - base["attempts_awaiting_a_person"] == 1,
+			f"An unevaluated attempt did not move attempts_awaiting_a_person: "
+			f"{base['attempts_awaiting_a_person']} -> {after_attempt['attempts_awaiting_a_person']}",
+		)
+
+		_new_evidence(ACTIVITY_1, "Pass", assistance_level=0, learner=TEST_LEARNER)
+		_new_evidence(ACTIVITY_2, "Pass", assistance_level=0, learner=TEST_LEARNER)
+		frappe.db.commit()
+		_assert(
+			frappe.db.get_value(
+				"Sparsh Mastery State", {"learner": TEST_LEARNER, "competency": COMPETENCY}, "state"
+			) in (DEMONSTRATED, MASTERED),
+			"The fixture learner was not demonstrated, so the ready count cannot be tested",
+		)
+
+		summary = dashboard.programme_summary()
+		_assert(
+			summary["certification_ready"] - base["certification_ready"] == 1,
+			f"The demonstrated learner did not move the ready count: "
+			f"{base['certification_ready']} -> {summary['certification_ready']}",
+		)
+		_assert("most_common_gap" in summary, "The summary names no most-common gap")
+		_assert(summary["period_days"] == 30, "The default period is not 30 days")
+
+		# Practising on a second competency: one more learner needing remediation.
+		# No activity: the provenance rule applies to unaided passes, not to an assisted one.
+		_new_evidence(None, "Pass", competency=COMPETENCY_2, assistance_level=1, learner=TEST_LEARNER)
+		frappe.db.commit()
+		_assert(
+			frappe.db.get_value(
+				"Sparsh Mastery State", {"learner": TEST_LEARNER, "competency": COMPETENCY_2}, "state"
+			) == "Practising",
+			"The fixture learner is not Practising, so remediation cannot be tested",
+		)
+		summary = dashboard.programme_summary()
+		_assert(
+			summary["require_remediation"] - base["require_remediation"] == 1,
+			f"A Practising learner did not move require_remediation: "
+			f"{base['require_remediation']} -> {summary['require_remediation']}",
+		)
+		_assert(
+			COMPETENCY_2 in summary["gaps"],
+			f"A competency short of demonstration is not a gap: {summary['gaps']}",
+		)
+
+		certificate = frappe.new_doc("Sparsh Certification Record")
+		certificate.learner = TEST_LEARNER
+		certificate.competency = COMPETENCY
+		certificate.certification_status = "Full"
+		certificate.insert(ignore_permissions=True)
+		certificate.submit()
+		frappe.db.commit()
+		summary = dashboard.programme_summary()
+		_assert(
+			summary["certified"] - base["certified"] == 1,
+			f"An active certification did not move certified: {base['certified']} -> {summary['certified']}",
+		)
+
+		# It is a supervisor view.
+		original_user = frappe.session.user
+		try:
+			frappe.set_user(TEST_LEARNER)
+			try:
+				dashboard.programme_summary()
+				raise AssertionError("A learner read the programme summary")
+			except frappe.PermissionError:
+				pass
+		finally:
+			frappe.set_user(original_user)
+	finally:
+		activity.reload()
+		activity.evaluation_mode = original_mode
+		activity.save(ignore_permissions=True)
+		_delete_all("Sparsh Attempt", {"learner": SUMMARY_LEARNER})
+		frappe.db.commit()
 
 def check_new_learner_can_begin():
 	"""Somebody with no evidence at all must have a way to start."""
@@ -4571,22 +4851,89 @@ def check_existing_current_resources_are_keyed():
 	of the same resource. The constraint read as enforced while enforcing nothing for
 	precisely the rows that were there first.
 
-	The patch backfills them. This asserts the site it runs on has no Current resource
-	left unkeyed, which is the state the patch is responsible for producing -- and it
-	fails on a bench where the patch has not run.
+	The patch backfills them. The first version of this check only asserted the table
+	held no unkeyed Current row, which is vacuously true on a bench whose teardown leaves
+	the table empty -- deleting the patch failed nothing. So the patch is now run against
+	rows built to need it: one unkeyed Current resource, which it must key, and two
+	Current versions of one resource, which it must leave unkeyed and report.
 	"""
-	unkeyed = frappe.db.sql(
-		"""select name, resource_id from `tabSparsh Learning Resource`
-		   where status = 'Current' and (current_key is null or current_key = '')""",
-		as_dict=True,
-	)
-	_assert(
-		not unkeyed,
-		f"{len(unkeyed)} Current resource(s) carry no current_key, so the unique index "
-		f"does not constrain them: {[r.resource_id for r in unkeyed][:5]}",
-	)
+	import contextlib
+	import io
 
-	# A keyed row must be keyed to itself, or the index constrains the wrong thing.
+	from sparsh_los.patches.v1_0 import backfill_resource_current_keys as patch
+
+	single = PREFIX + "KEYED"
+	contested = PREFIX + "CONTESTED"
+	_delete_all("Sparsh Learning Resource", {"resource_id": ("in", [single, contested])})
+	frappe.db.commit()
+
+	def resource(resource_id, version, status):
+		doc = frappe.new_doc("Sparsh Learning Resource")
+		doc.resource_id = resource_id
+		doc.version = version
+		doc.title = "Backfill fixture"
+		doc.resource_type = "Manual section"
+		doc.status = status
+		doc.insert(ignore_permissions=True)
+		return doc.name
+
+	def key_of(name):
+		return frappe.db.get_value("Sparsh Learning Resource", name, "current_key")
+
+	try:
+		# A Current row that predates the column: made by nulling what the controller
+		# set, which is exactly the state the patch exists for.
+		lone = resource(single, 1, "Current")
+		frappe.db.sql(
+			"update `tabSparsh Learning Resource` set current_key = null where name = %s", lone
+		)
+		frappe.db.commit()
+		_assert(key_of(lone) is None, "The fixture row still carries a key, so the patch has nothing to do")
+
+		# Two Current versions of one resource. The controller refuses the second on save,
+		# so the duplicate is written the way the pre-index data actually arrived: by SQL.
+		first = resource(contested, 1, "Current")
+		second = resource(contested, 2, "Draft")
+		frappe.db.sql(
+			"""update `tabSparsh Learning Resource`
+			   set current_key = null, status = 'Current' where name in (%s, %s)""",
+			(first, second),
+		)
+		frappe.db.commit()
+
+		report = io.StringIO()
+		with contextlib.redirect_stdout(report):
+			patch.execute()
+		report = report.getvalue()
+
+		_assert(
+			key_of(lone) == single,
+			f"The patch left the lone Current resource unkeyed: current_key={key_of(lone)!r}",
+		)
+		_assert(
+			key_of(first) is None and key_of(second) is None,
+			f"The patch picked a winner between two Current versions: "
+			f"{key_of(first)!r}, {key_of(second)!r}",
+		)
+		_assert(
+			f"contested: {contested}" in report and first in report and second in report,
+			f"The patch did not report the contested resource and both its rows: {report!r}",
+		)
+
+		# And it is idempotent: a second run has nothing to claim and changes nothing.
+		with contextlib.redirect_stdout(io.StringIO()):
+			patch.execute()
+		_assert(key_of(lone) == single, "A second run of the patch disturbed a claimed key")
+		_assert(
+			key_of(first) is None and key_of(second) is None,
+			"A second run of the patch keyed a contested row",
+		)
+	finally:
+		_delete_all("Sparsh Learning Resource", {"resource_id": ("in", [single, contested])})
+		frappe.db.commit()
+
+	# What remains on the site after the fixtures are gone must be consistent too: a
+	# keyed row keyed to itself, and no key held by a row that is not Current.
 	mismatched = frappe.db.sql(
 		"""select name, resource_id, current_key from `tabSparsh Learning Resource`
 		   where current_key is not null and current_key != '' and current_key != resource_id""",
@@ -4596,8 +4943,6 @@ def check_existing_current_resources_are_keyed():
 		not mismatched,
 		f"{len(mismatched)} resource(s) hold a key that is not their resource_id",
 	)
-
-	# And a row that is not Current must not be holding one.
 	stale = frappe.db.sql(
 		"""select name from `tabSparsh Learning Resource`
 		   where status != 'Current' and current_key is not null and current_key != ''""",
@@ -4606,6 +4951,477 @@ def check_existing_current_resources_are_keyed():
 	_assert(
 		not stale,
 		f"{len(stale)} superseded or draft resource(s) still hold the Current key",
+	)
+
+def check_critical_marker_without_rule_blocks_the_pilot():
+	"""A critical marker is a permanent block, so it needs a rule behind it too.
+
+	`programme_readiness` looked only at Deterministic activities for the rule gap, so a
+	Human-review case carrying `critical_markers` on a competency with no rule linked was
+	never named -- and the pilot was called human-review-safe while an irreversible
+	safety block could be imposed on the authority of a rule nobody had validated.
+	"""
+	from sparsh_los import seed
+
+	_delete_all("Sparsh Activity", {"activity_id": OTHER_ACTIVITY})
+	borrowed = not frappe.db.exists("Sparsh Competency", OTHER_COMPETENCY)
+	if borrowed:
+		competency = frappe.new_doc("Sparsh Competency")
+		competency.competency_id = OTHER_COMPETENCY
+		competency.competency_name = "Verification Competency"
+		competency.domain = DOMAIN
+		competency.insert(ignore_permissions=True)
+	frappe.db.commit()
+	_assert(
+		not frappe.get_all("Sparsh Competency Rule Link", filters={"parent": OTHER_COMPETENCY}, limit=1),
+		"The fixture competency has a rule linked, so this proves nothing",
+	)
+
+	activity = frappe.new_doc("Sparsh Activity")
+	activity.activity_id = OTHER_ACTIVITY
+	activity.title = "Verification Activity"
+	activity.competency = OTHER_COMPETENCY
+	activity.activity_type = "Short case"
+	activity.instruction = "Verification instruction."
+	activity.version = 1
+	# Human review, deliberately: the mode the Deterministic-only loop never saw.
+	activity.evaluation_mode = "Human review"
+	activity.critical_markers = "zzv unsafe marker"
+	activity.insert(ignore_permissions=True)
+	frappe.db.commit()
+
+	# Ambient blockers are muted exactly as `no_rule_auto_scoring_blocks_the_pilot`
+	# mutes them, so the verdict below can be attributed to this fixture and nothing else.
+	muted, stand_ins = [], []
+	baseline = seed.programme_readiness()
+	for name in baseline["auto_scoring_with_no_rule_linked"]:
+		activity_id = frappe.db.get_value("Sparsh Activity", name, "activity_id") or ""
+		_assert(
+			activity_id.startswith(PREFIX),
+			f"{name} auto-scores with no rule linked, so the verdict is False regardless "
+			"and this check cannot discriminate",
+		)
+		muted.append(name)
+		frappe.db.set_value("Sparsh Activity", name, "evaluation_mode", "Human review")
+	# The harness's own activities carry markers from `runner_loop` and link no rule,
+	# so they are in this list too; cleared for the duration and restored in the finally.
+	unmarked = {}
+	for name in baseline["critical_markers_with_no_rule_linked"]:
+		if name == activity.name:
+			continue
+		activity_id = frappe.db.get_value("Sparsh Activity", name, "activity_id") or ""
+		_assert(
+			activity_id.startswith(PREFIX),
+			f"{name} already carries a critical marker with no rule linked, so the verdict "
+			"is False regardless and this check cannot discriminate",
+		)
+		unmarked[name] = frappe.db.get_value("Sparsh Activity", name, "critical_markers")
+		frappe.db.set_value("Sparsh Activity", name, "critical_markers", None)
+	for competency_id in baseline["competencies_without_activities"]:
+		_assert(
+			competency_id.startswith(PREFIX),
+			f"{competency_id} has no activity, so the verdict is False regardless",
+		)
+		stand_in = frappe.new_doc("Sparsh Activity")
+		stand_in.activity_id = PREFIX + "STANDIN-" + competency_id
+		stand_in.title = "Verification Activity"
+		stand_in.competency = competency_id
+		stand_in.activity_type = "Knowledge check"
+		stand_in.instruction = "Verification instruction."
+		stand_in.version = 1
+		stand_in.evaluation_mode = "Human review"
+		stand_in.insert(ignore_permissions=True)
+		stand_ins.append(stand_in.activity_id)
+	frappe.db.commit()
+
+	try:
+		readiness = seed.programme_readiness()
+		_assert(
+			activity.name in readiness["critical_markers_with_no_rule_linked"],
+			"A Human-review activity with critical markers and no rule was not reported: "
+			f"{readiness['critical_markers_with_no_rule_linked']}",
+		)
+		_assert(
+			readiness["can_pilot_with_human_review"] is False,
+			"Readiness called the pilot human-review-safe while an activity could impose a "
+			"critical block under no validated rule",
+		)
+
+		# The marker has to be shown to be the cause: with it cleared, and nothing else
+		# changed, the verdict must turn.
+		frappe.db.set_value("Sparsh Activity", activity.name, "critical_markers", None)
+		frappe.db.commit()
+		without = seed.programme_readiness()
+		_assert(
+			activity.name not in without["critical_markers_with_no_rule_linked"],
+			"An activity with no critical marker was still reported as carrying one",
+		)
+		_assert(
+			without["can_pilot_with_human_review"],
+			"The pilot is blocked by something other than the fixture, so this check "
+			f"cannot discriminate: gaps={without['competencies_without_activities']} "
+			f"unvalidated={without['auto_scoring_against_unvalidated_rules']} "
+			f"no_rule={without['auto_scoring_with_no_rule_linked']} "
+			f"critical={without['critical_markers_with_no_rule_linked']}",
+		)
+	finally:
+		for name in muted:
+			frappe.db.set_value("Sparsh Activity", name, "evaluation_mode", "Deterministic")
+		for name, markers in unmarked.items():
+			frappe.db.set_value("Sparsh Activity", name, "critical_markers", markers)
+		_delete_all("Sparsh Activity", {"activity_id": OTHER_ACTIVITY})
+		for activity_id in stand_ins:
+			_delete_all("Sparsh Activity", {"activity_id": activity_id})
+		if borrowed:
+			_delete_all("Sparsh Competency", {"competency_id": OTHER_COMPETENCY})
+		frappe.db.commit()
+
+
+def check_nobody_closes_their_own_refresher():
+	"""A refresher is closed by fresh work, never by the person it was assigned to.
+
+	A learner who also holds the reviewer role carries write on the assignment, so they
+	could set their own row to Completed -- or delete it -- and have the engine restore
+	their suspended certificate on their own say-so. The engine's own path,
+	`refresher.close_satisfied`, writes with `db.set_value` and must keep working.
+	"""
+	from sparsh_los import refresher
+
+	dual = DUAL_LEARNER
+	user = _make_learner(dual)
+	if "Sparsh Reviewer" not in [r.role for r in user.roles]:
+		user.append("roles", {"role": "Sparsh Reviewer"})
+		user.save(ignore_permissions=True)
+	_reset_competency()
+	_delete_all("Sparsh Refresher Assignment", {"learner": dual})
+	frappe.db.commit()
+
+	assignment = refresher.assign(dual, COMPETENCY, refresher.PERFORMANCE_GAP, "verification")
+	_assert(assignment, "The fixture refresher was not assigned")
+	frappe.db.commit()
+
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(dual)
+
+		def close_own():
+			doc = frappe.get_doc("Sparsh Refresher Assignment", assignment)
+			doc.status = "Completed"
+			doc.save()
+
+		_refused(
+			close_own,
+			"A learner-reviewer closed their own refresher",
+			expect="cannot close a refresher assigned to you",
+		)
+
+		# `ignore_permissions=True`, deliberately: the DocPerm layer refuses an ordinary
+		# delete from this role before `on_trash` runs, with no message, so the plain path
+		# would pass on the framework and never reach the guard under test. The guard is
+		# for the paths that skip DocPerm -- a System Manager who is also the learner,
+		# or engine code deleting with permissions ignored.
+		_refused(
+			lambda: frappe.delete_doc(
+				"Sparsh Refresher Assignment", assignment, ignore_permissions=True
+			),
+			"A learner-reviewer deleted their own refresher",
+			expect="cannot delete a refresher assigned to you",
+		)
+	finally:
+		frappe.set_user(original_user)
+
+	_assert(
+		frappe.db.get_value("Sparsh Refresher Assignment", assignment, "status") == "Assigned",
+		"The refused closure went through anyway",
+	)
+
+	# The guard must not reach the engine: an independent pass filed after the
+	# assignment closes it through `close_satisfied`, inside `recompute_mastery`.
+	_new_evidence(ACTIVITY_1, "Pass", learner=dual)
+	frappe.db.commit()
+	_assert(
+		frappe.db.get_value("Sparsh Refresher Assignment", assignment, "status") == "Completed",
+		"Fresh evidence no longer closes a refresher: the self-closure guard broke the engine",
+	)
+
+	_delete_all("Sparsh Refresher Assignment", {"learner": dual})
+	frappe.db.commit()
+
+
+def check_repeated_failures_reach_the_supervisor_from_attempts():
+	"""A learner who has never passed has no Evidence, and must still be seen.
+
+	Every earlier stuck check inserted Evidence directly. The runner writes Evidence on a
+	pass or a critical error and on nothing else, so a learner who answers wrongly three
+	times produces three Attempts, no Evidence and no Mastery State row -- and was the one
+	learner the supervisor view could not show. Built through `runner.submit` so the real
+	failure path is what is exercised.
+	"""
+	from sparsh_los import dashboard
+
+	_reset_competency()
+	_make_learner(TEST_LEARNER)
+	_delete_all("Sparsh Attempt", {"learner": TEST_LEARNER})
+	_delete_all("Sparsh Evidence", {"learner": TEST_LEARNER, "competency": COMPETENCY})
+	_delete_mastery({"learner": TEST_LEARNER, "competency": COMPETENCY})
+	frappe.db.commit()
+
+	activity = frappe.get_doc("Sparsh Activity", ACTIVITY_1)
+	original_mode, original_expected = activity.evaluation_mode, activity.expected_response
+	activity.evaluation_mode = "Deterministic"
+	activity.expected_response = "level two"
+	activity.save(ignore_permissions=True)
+	frappe.db.commit()
+
+	def stuck_row():
+		view = dashboard.supervisor_view(competency=COMPETENCY)
+		return next((r for r in view["stuck"] if r["learner"] == TEST_LEARNER), None)
+
+	try:
+		for _ in range(dashboard.FAILING_ATTEMPTS_BEFORE_STUCK - 1):
+			result = _submit(ACTIVITY_1, "zzv wrong answer", as_user=TEST_LEARNER)
+			_assert(result["outcome"] == "Fail", f"A wrong answer scored {result['outcome']}")
+			_assert("evidence" not in result, "A failed attempt produced evidence")
+		frappe.db.commit()
+		_assert(
+			stuck_row() is None,
+			"A learner short of the failure threshold was already shown as stuck",
+		)
+
+		result = _submit(ACTIVITY_1, "zzv wrong answer", as_user=TEST_LEARNER)
+		_assert(result["outcome"] == "Fail", f"A wrong answer scored {result['outcome']}")
+		frappe.db.commit()
+
+		# The fixture has to be what it claims: attempts only.
+		_assert(
+			not frappe.db.exists("Sparsh Evidence", {"learner": TEST_LEARNER, "competency": COMPETENCY}),
+			"The failing learner has Evidence, so this is not the attempt-only path",
+		)
+		_assert(
+			not frappe.db.exists("Sparsh Mastery State", {"learner": TEST_LEARNER, "competency": COMPETENCY}),
+			"The failing learner has a Mastery State row, so this is not the attempt-only path",
+		)
+
+		row = stuck_row()
+		_assert(
+			row,
+			f"A learner with {dashboard.FAILING_ATTEMPTS_BEFORE_STUCK} failing attempts and "
+			"no evidence is absent from the stuck list",
+		)
+		_assert(
+			row["reason"] == "Repeated failures",
+			f"The reason was {row['reason']!r}, expected 'Repeated failures'",
+		)
+		_assert(
+			row["failures"] == dashboard.FAILING_ATTEMPTS_BEFORE_STUCK,
+			f"{row['failures']} failures counted, expected {dashboard.FAILING_ATTEMPTS_BEFORE_STUCK}",
+		)
+	finally:
+		activity.reload()
+		activity.evaluation_mode = original_mode
+		activity.expected_response = original_expected
+		activity.save(ignore_permissions=True)
+		_delete_all("Sparsh Attempt", {"learner": TEST_LEARNER})
+		frappe.db.commit()
+
+
+def check_review_verdict_lands_on_the_evidence():
+	"""A rejection the engine never sees is not a rejection.
+
+	Four modules exclude evidence whose `human_review_status` is Rejected, and until the
+	review controller wrote that value nothing in the engine ever did: a reviewer could
+	reject a pass and watch it keep counting. Asserted as a delta on the derived state.
+	"""
+	_reset_competency()
+	evidence = _new_evidence(ACTIVITY_1, "Pass")
+	frappe.db.commit()
+	_assert(_state() == DEMONSTRATED, f"The fixture pass gave {_state()}, expected Demonstrated")
+	_assert(
+		frappe.db.get_value("Sparsh Evidence", evidence.name, "human_review_status") != "Rejected",
+		"The fixture evidence is already rejected, so the delta cannot be measured",
+	)
+
+	review = frappe.new_doc("Sparsh Human Review")
+	review.evidence = evidence.name
+	review.review_status = "Rejected"
+	review.reviewer_comments = "Verification rejection."
+	review.insert(ignore_permissions=True)
+	review.submit()
+	frappe.db.commit()
+
+	_assert(
+		frappe.db.get_value("Sparsh Evidence", evidence.name, "human_review_status") == "Rejected",
+		"A submitted rejection did not reach the evidence it examined",
+	)
+	_assert(
+		_state() not in (DEMONSTRATED, MASTERED),
+		f"The rejected pass still counts: the state stayed at {_state()}",
+	)
+	frappe.db.commit()
+
+
+def check_awaiting_a_person_agrees_with_the_queue():
+	"""The summary's 'awaiting a person' figure describes the reviewer's queue.
+
+	An attempt is immutable, so a reviewed one keeps `Not Evaluated` for ever; counting
+	that outcome grew without bound and never agreed with the queue it claimed to
+	describe. Both figures are taken from the same bench at the same moment, and the
+	summary is also asserted to fall by exactly the one attempt that was reviewed.
+	"""
+	from sparsh_los import dashboard, review
+
+	_reset_competency()
+	_make_learner(TEST_LEARNER)
+	_delete_all("Sparsh Attempt", {"learner": TEST_LEARNER})
+	frappe.db.commit()
+
+	activity = frappe.get_doc("Sparsh Activity", ACTIVITY_2)
+	original_mode = activity.evaluation_mode
+	activity.evaluation_mode = "Human review"
+	activity.save(ignore_permissions=True)
+	frappe.db.commit()
+
+	try:
+		first = _submit(ACTIVITY_2, "zzv first answer for a person", as_user=TEST_LEARNER)
+		second = _submit(ACTIVITY_2, "zzv second answer for a person", as_user=TEST_LEARNER)
+		frappe.db.commit()
+		for result in (first, second):
+			_assert(result["outcome"] == "Not Evaluated", f"A reviewed activity scored {result['outcome']}")
+
+		waiting = {w["name"] for w in review.pending(limit=review.MAX_QUEUE)}
+		_assert(
+			first["attempt"] in waiting and second["attempt"] in waiting,
+			"The fixture attempts are not both in the queue, so the comparison is meaningless",
+		)
+		_assert(
+			len(waiting) < review.MAX_QUEUE,
+			"The queue is at its cap, so its length cannot be compared to a count",
+		)
+		before = dashboard.programme_summary()["attempts_awaiting_a_person"]
+		_assert(
+			before == len(waiting),
+			f"The summary says {before} attempts await a person; the queue holds {len(waiting)}",
+		)
+
+		review.record_evidence(first["attempt"], "Pass", assistance_level=0)
+		frappe.db.commit()
+
+		waiting_after = {w["name"] for w in review.pending(limit=review.MAX_QUEUE)}
+		_assert(first["attempt"] not in waiting_after, "A reviewed attempt is still queued")
+		_assert(second["attempt"] in waiting_after, "The unreviewed attempt left the queue")
+		after = dashboard.programme_summary()["attempts_awaiting_a_person"]
+		_assert(
+			after == before - 1,
+			f"Reviewing one attempt moved the summary from {before} to {after}, expected {before - 1}",
+		)
+		_assert(
+			after == len(waiting_after),
+			f"The summary says {after} attempts await a person; the queue holds {len(waiting_after)}",
+		)
+	finally:
+		activity.reload()
+		activity.evaluation_mode = original_mode
+		activity.save(ignore_permissions=True)
+		frappe.db.commit()
+
+
+def check_learner_cannot_read_rules_or_competencies():
+	"""The rule inventory and the competency's observable behaviours are not for learners.
+
+	All the matrix rules are unvalidated Drafts, and `observable_behaviours` becomes an
+	answer key the moment Rubric scoring exists. Asserted through paths that apply
+	permissions -- `frappe.has_permission` and `frappe.client.get_list` -- because
+	`frappe.get_all` and `frappe.get_doc` check nothing and once produced eleven false
+	ALLOWED results. The learner's read on `Sparsh Learning Resource` is deliberately
+	kept: it is their only route to the material they are meant to study, and it is
+	asserted to still work so this check cannot be read as "less access is always better".
+	"""
+	_make_learner(TEST_LEARNER)
+	resource_id = PREFIX + "READABLE"
+	_delete_all("Sparsh Learning Resource", {"resource_id": resource_id})
+	resource = frappe.new_doc("Sparsh Learning Resource")
+	resource.resource_id = resource_id
+	resource.version = 1
+	resource.title = "Material a learner may read"
+	resource.resource_type = "Manual section"
+	resource.status = "Current"
+	resource.insert(ignore_permissions=True)
+	frappe.db.commit()
+
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+		for doctype in ("Sparsh Source of Truth Rule", "Sparsh Competency"):
+			_assert(
+				not frappe.has_permission(doctype, "read", user=TEST_LEARNER),
+				f"A learner holds read on {doctype}",
+			)
+			_refused(
+				lambda: frappe.client.get_list(doctype, fields=["name"], limit_page_length=1),
+				f"A learner could list {doctype} rows",
+				expect="insufficient permission",
+			)
+
+		_assert(
+			frappe.has_permission("Sparsh Learning Resource", "read", user=TEST_LEARNER),
+			"A learner lost read on Sparsh Learning Resource, their only route to the material",
+		)
+		visible = frappe.client.get_list(
+			"Sparsh Learning Resource", filters={"resource_id": resource_id}, fields=["name"]
+		)
+		_assert(
+			any(r["name"] == resource.name for r in visible),
+			"A learner cannot see a Current learning resource",
+		)
+	finally:
+		frappe.set_user(original_user)
+		_delete_all("Sparsh Learning Resource", {"resource_id": resource_id})
+		frappe.db.commit()
+
+
+def check_practice_page_records_the_session():
+	"""Opening the page is the session, and offering an activity is starting it.
+
+	`activity_started` used to fire only from the harness: the page read title and
+	instruction straight off the Activity, so the frequency-of-use metric read zero in
+	real use. `events_are_recorded_and_hold_no_content` drives `runner.start` itself and
+	would pass with the page reverted, so this goes through `practice.get_context`.
+	"""
+	from sparsh_los import events
+	from sparsh_los.www import practice
+
+	_reset_competency()
+	_new_evidence(ACTIVITY_1, "Pass")
+	frappe.db.commit()
+
+	started_at = frappe.utils.now_datetime()
+	context = frappe._dict()
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(LEARNER)
+		practice.get_context(context)
+	finally:
+		frappe.set_user(original_user)
+	frappe.db.commit()
+
+	_assert(context.next_up and context.next_up.get("activity"), "The page offered nothing, so no activity could start")
+	offered = context.next_up["activity"]
+	_assert(context.next_up.get("title"), "next_up carries no title")
+	_assert(context.next_up.get("instruction"), "next_up carries no instruction")
+
+	rows = frappe.get_all(
+		"Sparsh Event",
+		filters={"learner": LEARNER, "creation": (">=", started_at)},
+		fields=["event_type", "activity"],
+	)
+	_assert(
+		any(r.event_type == events.SESSION_STARTED for r in rows),
+		f"Rendering the practice page recorded no {events.SESSION_STARTED}; saw {sorted({r.event_type for r in rows})}",
+	)
+	_assert(
+		any(r.event_type == events.ACTIVITY_STARTED and r.activity == offered for r in rows),
+		f"Offering {offered} on the practice page recorded no {events.ACTIVITY_STARTED} for it; "
+		f"saw {sorted({r.event_type for r in rows})}",
 	)
 
 
@@ -4692,6 +5508,14 @@ CHECKS = (
 	("current_resource_material_cannot_change_in_place",
 	 check_current_resource_material_cannot_change_in_place),
 	("existing_current_resources_are_keyed", check_existing_current_resources_are_keyed),
+	("critical_marker_without_rule_blocks_the_pilot", check_critical_marker_without_rule_blocks_the_pilot),
+	("nobody_closes_their_own_refresher", check_nobody_closes_their_own_refresher),
+	("repeated_failures_reach_the_supervisor_from_attempts",
+	 check_repeated_failures_reach_the_supervisor_from_attempts),
+	("review_verdict_lands_on_the_evidence", check_review_verdict_lands_on_the_evidence),
+	("awaiting_a_person_agrees_with_the_queue", check_awaiting_a_person_agrees_with_the_queue),
+	("learner_cannot_read_rules_or_competencies", check_learner_cannot_read_rules_or_competencies),
+	("practice_page_records_the_session", check_practice_page_records_the_session),
 	("cleanup", check_cleanup),
 )
 

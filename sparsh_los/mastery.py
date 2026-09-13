@@ -76,7 +76,13 @@ def _independent_passes(rows):
 
 
 def has_blocking_critical_error(learner, competency) -> bool:
-	"""True when a critical error stands unanswered by a later independent pass."""
+	"""True while any uncleared critical error stands on this competency.
+
+	The wording here used to read "unanswered by a later independent pass", which
+	describes the opposite of what the body does and of what the programme requires: a
+	later pass never clears a safety error. Only a submitted, approved
+	`Sparsh Human Review` carrying `clears_critical_error` does.
+	"""
 	rows = _submitted_evidence(learner, competency)
 
 	# A safety error is cleared by a reviewer deciding it is cleared, never by the

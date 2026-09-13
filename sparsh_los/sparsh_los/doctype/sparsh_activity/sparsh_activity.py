@@ -5,12 +5,26 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 
+from sparsh_los.permissions import reject_identifiers
+
 MAX_HINTS = 4
 
 
 class SparshActivity(Document):
 	def validate(self):
 		self._competency_is_settled()
+
+		# Every field an author writes prose into. Scenarios are de-identified by
+		# policy, but the guard only ran on learner responses, so a case built from a
+		# real caregiver's record went into the content pack unchecked.
+		reject_identifiers(
+			self.title,
+			self.instruction,
+			self.expected_evidence,
+			self.expected_response,
+			self.hints,
+			self.critical_markers,
+		)
 
 		# The ladder is one hint per line, weakest first: line 1 is hint level 1.
 		# It was a child table until a child table proved to be separately queryable

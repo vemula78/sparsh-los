@@ -19,6 +19,11 @@ from sparsh_los.permissions import is_restricted, require_enrolment, require_rev
 
 CERTIFIABLE = (DEMONSTRATED, MASTERED)
 
+# A learner with no Evidence at all has no Mastery State row, so the evidence-side
+# threshold above (three pieces of evidence) can never catch them. Three failing
+# attempts is the same intent applied to the only record they have produced.
+FAILING_ATTEMPTS_BEFORE_STUCK = 3
+
 
 @frappe.whitelist()
 def learner_view(learner=None):
@@ -136,6 +141,64 @@ def supervisor_view(competency=None):
 				 partial_results=partials)
 		)
 
+	# A learner who has never passed is the one a supervisor most needs to see, and
+	# until now they were the one learner who could not appear here at all. The runner
+	# writes Evidence on a pass or a critical error and on nothing else, so somebody who
+	# answers wrongly six times produces six Attempts, no Evidence, and no Mastery State
+	# row -- so they were absent from `states`, and this loop never considered them.
+	# "Repeated failures" above was unreachable from the runner path for the same
+	# reason: a Fail only becomes Evidence when a reviewer records one.
+	seen = {(row["learner"], row["competency"]) for row in stuck}
+	seen.update((row.learner, row.competency) for row in states if row.state in CERTIFIABLE)
+
+	attempt_filters = {"outcome": ("not in", ("Pass", "Not Evaluated"))}
+	failing = frappe.get_all(
+		"Sparsh Attempt",
+		filters=attempt_filters,
+		fields=["learner", "activity", "attempted_at"],
+		order_by="creation asc",
+	)
+	# The attempt carries the activity, not the competency, so the mapping is read once
+	# rather than per row.
+	activity_competency = {
+		row.name: row.competency
+		for row in frappe.get_all("Sparsh Activity", fields=["name", "competency"])
+	}
+
+	failing_by_pair = {}
+	for row in failing:
+		pair_competency = activity_competency.get(row.activity)
+		if not pair_competency:
+			continue
+		if competency and pair_competency != competency:
+			continue
+		pair = (row.learner, pair_competency)
+		entry = failing_by_pair.setdefault(pair, {"count": 0, "last": None})
+		entry["count"] += 1
+		entry["last"] = row.attempted_at or entry["last"]
+
+	for (learner, pair_competency), entry in sorted(failing_by_pair.items()):
+		if (learner, pair_competency) in seen:
+			# Already reported above, with a reason drawn from their evidence.
+			continue
+		if entry["count"] < FAILING_ATTEMPTS_BEFORE_STUCK:
+			continue
+
+		stuck.append(
+			{
+				"learner": learner,
+				"competency": pair_competency,
+				"state": None,
+				"last_demonstrated": None,
+				"evidence_count": 0,
+				"reason": "Repeated failures",
+				"assisted_passes": 0,
+				"failures": entry["count"],
+				"partial_results": 0,
+				"last_attempt": entry["last"],
+			}
+		)
+
 	# Where critical safety errors are occurring.
 	critical = frappe.get_all(
 		"Sparsh Evidence",
@@ -232,7 +295,17 @@ def programme_summary(days=30):
 		elif row.state == PRACTISING:
 			remediation.add(row.learner)
 
-	awaiting_person = frappe.db.count("Sparsh Attempt", {"outcome": "Not Evaluated"})
+	# The same predicate the reviewer's queue uses. Counting every `Not Evaluated`
+	# attempt instead counted the reviewed ones for ever: an attempt is immutable, so a
+	# reviewed one keeps that outcome and the figure only ever grew, never agreeing with
+	# the queue it claimed to describe.
+	awaiting_person = frappe.db.sql(
+		"""
+		select count(*) from `tabSparsh Attempt` a
+		where a.outcome = 'Not Evaluated'
+		  and not exists (select 1 from `tabSparsh Evidence` e where e.attempt = a.name)
+		"""
+	)[0][0]
 	open_questions = frappe.db.count(
 		"Sparsh Escalation Question", {"status": ("in", ("Open", "Routed to Human"))}
 	)

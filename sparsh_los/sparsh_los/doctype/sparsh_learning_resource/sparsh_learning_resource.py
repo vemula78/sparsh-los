@@ -5,9 +5,14 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 
+from sparsh_los.permissions import reject_identifiers
+
 
 class SparshLearningResource(Document):
 	def validate(self):
+		# Editorial prose an author writes; the only free text on this DocType.
+		reject_identifiers(self.title, self.source, self.notes)
+
 		if self.supersedes == self.name:
 			frappe.throw(_("A resource cannot supersede itself"))
 

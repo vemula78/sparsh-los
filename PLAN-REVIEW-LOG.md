@@ -1297,3 +1297,96 @@ Current rows of the same resource, it claimed neither and named both.
 
 Unchanged: the assistance race; rule-free automatic scoring; the programme-name scanner's blind
 spots; matrix and case-pack checks establishing volume rather than identity.
+
+---
+
+## Audit 21 — round 6, independent (Fable 5.1), against `f3ae955`/`0af4b65` — and Phase 0
+
+The first review commissioned as *audit plus plan* rather than audit alone. It confirmed all six
+gaps I had identified against the build guide, said I had understated one, and then found the
+class of defect the previous twenty rounds had not looked for: **guarantees that hold on the save
+path and nowhere else, and code paths the harness only ever reaches through a fixture.**
+
+18 code findings, 7 harness findings. I verified seven of them against the code myself before
+changing anything; the rest were verified by the agents that fixed them.
+
+### The three that mattered
+
+| # | Finding | Disposition |
+|---|---|---|
+| F1 | A critical marker on a competency with **no rule linked** produces uncancellable Evidence — a permanent block imposed under a rule nobody validated. The rule gate passes because `_rule_is_validated` returns True when nothing is linked, and `programme_readiness` filtered on `evaluation_mode: Deterministic` so it never looked at the Human-review activities the case pack actually ships. The Starter Case Pack asks for exactly this configuration on SC-06 | **Confirmed, fixed.** Readiness now scans every activity regardless of mode, reports `critical_markers_with_no_rule_linked`, and folds it into the verdict. The log's earlier "rule-free automatic scoring" entry covered the *scoring* half of this hole only |
+| F2 | A dual-role user could close their own refresher assignment and release their own suspended certificate — the one input to a derived state with no self-guard | **Confirmed, fixed.** Guard on `validate` and `on_trash`; `close_satisfied` writes with `db.set_value` and is unaffected, so a refresher still closes on a genuine independent pass |
+| F3 | A learner who never passes is invisible to "who is stuck". The runner writes Evidence only on a pass or a critical error, so six wrong answers produce six Attempts, no Evidence, no Mastery State row — and the stuck loop iterates Mastery States. "Repeated failures" was unreachable from the runner path entirely | **Confirmed, fixed.** Stuck-ness now derives from Attempts as well |
+
+### The rest
+
+| # | Finding | Disposition |
+|---|---|---|
+| F4 | `"Rejected"` had no producer. Four modules filter rejected evidence out of what a learner is credited with; nothing in the engine ever wrote the value. A reviewer could reject evidence and watch it keep counting | **Confirmed, fixed.** A submitted review writes its verdict onto the evidence and recomputes |
+| — | `attempts_awaiting_a_person` counted every `Not Evaluated` attempt for all time. Attempts are immutable, so reviewed ones keep that outcome: the figure only grew and never agreed with the queue it described | **Confirmed, fixed.** Uses the queue's own predicate |
+| F5 | `submit`'s docstring claims the ladder reveals the answer at the top. `_hint_for` only ever returns authored hints | **Confirmed. Docstring corrected, §14 shortfall recorded, not silently invented** — what to reveal, and whether revealing ends the attempt, is a programme decision |
+| F6 | `has_blocking_critical_error`'s docstring stated the opposite of the invariant | **Confirmed, corrected** |
+| F9 | The identifier guard covered learner text and stopped there — not reviewer comments, not author-written instructions, scenarios or resource notes, which is where a real caregiver detail is most likely to be pasted | **Confirmed, fixed** across four DocTypes, answer-key fields included |
+| F10 | `Sparsh Learner` held read on all 17 unvalidated Draft clinical rules, and on Competency whose `observable_behaviours` becomes an answer key under Rubric | **Confirmed, fixed.** Learning Resource read deliberately **kept**: no endpoint surfaces resources to a learner, so it is their only route to the material, and nothing in it is an answer key |
+| F11 | `activity_started` fired only from the harness — the page read title/instruction directly. `session_started` was emitted nowhere at all | **Confirmed, fixed.** The page goes through `runner.start` |
+| F7, F8, F12–F18 | Assistance recorded without assistance shown; refresher never targets the weak area; pathways not assigned; Scenario unread; missing §7 objects; §17 steps 5–6 | **Deferred to phases 1–5 of the plan**, not defects in what exists |
+
+### Harness — six checks that would have passed after a regression
+
+All six claims correct. `check_programme_summary_counts_from_evidence` asserted four keys and left
+five unasserted, one of which was the wrong figure. Both stuck checks built their fixture by
+inserting Evidence directly, which is precisely why F3 survived 82 green checks. `check_refresher_time_based` asserted a floor. Three checks — `matrix_loads_as_draft`,
+`case_pack_loads_for_review_only`, `programme_readiness_is_honest` — asserted on the **seed**
+rather than the engine, so the harness would have gone red on any site where the programme owner
+had validated a single rule. They now build their own fixtures and survive a pilot-configured site.
+
+**And one of mine.** `check_existing_current_resources_are_keyed`, written yesterday in round 5,
+was **vacuously true**: the teardown leaves the table empty, so deleting the backfill patch failed
+nothing. I proved that patch by hand against a seeded row and recorded it as such — the check
+itself discriminated nothing. It now seeds a legacy row, nulls the key in SQL, runs the patch, and
+asserts both the single-row and the contested-duplicate outcomes.
+
+### A defect in my own fix, caught by the check written for it
+
+Both guards in the refresher controller called `_()` in a module that never imported it. A
+dual-role user hitting the guard would have received a 500, not a refusal. It was invisible to
+inspection and to `ast.parse`; it surfaced only because the check was written and run against it —
+`refused by another layer: NameError: name '_' is not defined`. This is the twenty-first round and
+the sixth in which a fix of mine did not hold on first attempt.
+
+### Revert proofs
+
+Every new check was proved by reverting its fix. Selected failures:
+
+| Reverted | Failure |
+|---|---|
+| The `critical_without_rule` loop | `A Human-review activity with critical markers and no rule was not reported: []` |
+| `and not critical_without_rule` from the verdict | `Readiness called the pilot human-review-safe while an activity could impose a critical block under no validated rule` |
+| The refresher self-guard | `A learner-reviewer closed their own refresher` |
+| The attempt-derived stuck block | `A learner with 3 failing attempts and no evidence is absent from the stuck list` |
+| The review-verdict block | `A submitted rejection did not reach the evidence it examined` |
+| `db.count` restored for the awaiting figure | `Reviewing one attempt moved the summary from 2 to 2, expected 1` |
+| Learner read DocPerms reinserted | `A learner holds read on Sparsh Source of Truth Rule` |
+| The direct `db.get_value` restored in practice.py | `Offering ZZV-ACT2 on the practice page recorded no activity_started for it; saw ['session_started']` |
+| The backfill patch made a no-op | `The patch left the lone Current resource unkeyed: current_key=None` |
+
+### Acceptance check
+
+`./scripts/install_verify.sh`, full path including `migrate`: exit 0, `RESULT passed=89 failed=0`.
+`MIN_CHECKS` raised 82 → 89. Hostile probe re-run after the DocPerm changes: 40 probes, 39
+refused, 1 ALLOWED — the deliberate self-filed Attempt, whose outcome the engine resets.
+
+### Residual risk
+
+- The learner-read check asserts through a permission-applying path, but **`Sparsh Learning
+  Resource` read was kept deliberately** — if a future change puts an answer key on that DocType,
+  nothing will catch it.
+- `runner.start` on a page render emits one `activity_started` per render, so a browser refresh
+  double-counts. Judged correct — re-opening a task is a start — but it is a definition, not a fact.
+- F7 (assistance recorded without assistance shown, on a hint-less activity) remains open.
+
+### Still open
+
+Unchanged: the assistance race; rule-free automatic scoring as a programme decision; the
+programme-name scanner's blind spots; matrix and case-pack checks establishing volume not identity.
+Plus phases 1–7 of the plan, of which 4–7 are blocked on the programme owner's eleven answers.

@@ -258,8 +258,15 @@ def submit(activity, response):
 	"""Record one response, evaluate it, and return the minimum help required.
 
 	A pass produces Evidence, which recomputes mastery. A failure returns the next
-	rung of the hint ladder and invites a retry; the answer is revealed only at the
-	top of the ladder.
+	rung of the hint ladder and invites a retry.
+
+	The ladder stops at the strongest hint the activity stores. It does **not** reveal
+	`expected_response` at the top, though this docstring claimed it did: `_hint_for`
+	only ever returns authored hints. Section 14 of the build guide asks for the
+	preferred answer after repeated difficulty, so the engine is short of the
+	specification here -- and with hints present `can_retry` stays True for ever at the
+	top rung. Recorded rather than fixed silently: what to show, and whether showing it
+	should end the attempt, is a programme decision.
 	"""
 	# Enrolment first, exactly as `start` does it. Looking the activity up ahead of the
 	# gate let an unenrolled account tell a real activity name from a fabricated one by

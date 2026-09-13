@@ -262,6 +262,25 @@ def programme_readiness():
 		):
 			no_rule_but_scoring.append(row.name)
 
+	# Scoring is not the only judgement the engine makes without being asked twice.
+	# A critical marker produces Evidence that cannot be cancelled -- a permanent block
+	# -- and the marker branch sits *after* the rule gate, which `_rule_is_validated`
+	# passes when the competency links no rule at all. So a Human-review activity, which
+	# this loop never looked at because it filters on Deterministic, still imposes an
+	# irreversible block on the authority of a rule nobody validated. The case pack asks
+	# for exactly this configuration: a critical-error flag on a case awaiting review.
+	critical_without_rule = []
+	for row in frappe.get_all(
+		"Sparsh Activity", fields=["name", "competency", "critical_markers"]
+	):
+		if not (row.critical_markers or "").strip():
+			continue
+		if frappe.get_all(
+			"Sparsh Competency Rule Link", filters={"parent": row.competency}, limit=1
+		):
+			continue
+		critical_without_rule.append(row.name)
+
 	competencies = frappe.get_all(
 		"Sparsh Competency", fields=["name", "competency_name"], order_by="name asc"
 	)
@@ -308,11 +327,20 @@ def programme_readiness():
 		# Draft rule -- `_rule_is_validated` returns True when nothing is linked. Naming
 		# it below while still reporting the pilot human-review-safe let the same report
 		# assert both things at once.
+		# And a permanent safety block imposed under no rule is at least as serious as
+		# an auto-scored pass, so it weighs on the verdict too rather than only being
+		# listed underneath it.
 		"can_pilot_with_human_review": (
-			(not without_activities) and not auto_scoring_unvalidated and not no_rule_but_scoring
+			(not without_activities)
+			and not auto_scoring_unvalidated
+			and not no_rule_but_scoring
+			and not critical_without_rule
 		),
 		"auto_scoring_against_unvalidated_rules": auto_scoring_unvalidated,
 		# Reported, not blocking: an activity with no rule linked is the deliberate
 		# hole in the gate. The programme owner should see which activities sit in it.
 		"auto_scoring_with_no_rule_linked": no_rule_but_scoring,
+		# Whatever their evaluation mode: the block does not depend on the engine being
+		# able to grade the rest of the answer.
+		"critical_markers_with_no_rule_linked": critical_without_rule,
 	}

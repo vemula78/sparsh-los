@@ -4,10 +4,17 @@
 import frappe
 from frappe.model.document import Document
 
+from sparsh_los.permissions import reject_identifiers
+
 
 class SparshHumanReview(Document):
 
 	def validate(self):
+		# The guard covered what learners typed and nothing a reviewer wrote. A
+		# reviewer explaining a verdict is the most likely person to paste a real
+		# caregiver's detail into a stored field, and a review is never deleted.
+		reject_identifiers(self.reviewer_comments)
+
 		# Provenance is copied from the evidence, never taken on trust: a review could
 		# otherwise name one learner while clearing another's record.
 		if self.evidence:
@@ -43,6 +50,26 @@ class SparshHumanReview(Document):
 			reference_doctype=self.doctype,
 			reference_name=self.name,
 		)
+
+		# A review's verdict has to land on the evidence it examined, or "Rejected" and
+		# "Needs More Evidence" are decisions the engine never sees. Four modules --
+		# mastery, certification, orchestrator and the supervisor view -- exclude
+		# rejected evidence from what a learner is credited with, and until now nothing
+		# in the engine ever wrote that value: the only writer set "Approved". A
+		# reviewer could reject a piece of evidence and watch it keep counting.
+		if self.evidence and self.review_status in ("Approved", "Rejected"):
+			evidence_doc = frappe.get_doc("Sparsh Evidence", self.evidence)
+			if evidence_doc.learner != self.learner:
+				frappe.throw(
+					frappe._("That evidence belongs to a different learner"),
+					frappe.ValidationError,
+				)
+			if evidence_doc.human_review_status != self.review_status:
+				evidence_doc.db_set("human_review_status", self.review_status)
+
+				from sparsh_los.mastery import recompute_mastery
+
+				recompute_mastery(evidence_doc.learner, evidence_doc.competency)
 
 		if not (self.clears_critical_error and self.evidence):
 			return

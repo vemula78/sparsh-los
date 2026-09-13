@@ -6,6 +6,7 @@ from frappe import _
 from frappe.model.document import Document
 
 from sparsh_los.mastery import recompute_mastery
+from sparsh_los.permissions import reject_identifiers
 
 
 class SparshEvidence(Document):
@@ -16,6 +17,10 @@ class SparshEvidence(Document):
 		if self.critical_error and self.outcome == "Pass":
 			frappe.throw(_("Evidence carrying a critical error cannot record a passing outcome"))
 
+		# Written by a reviewer, from their own free text -- the guard covered the
+		# learner's response and stopped there, so the summary of a reviewer's comments
+		# was the one narrative field on this record nobody checked.
+		reject_identifiers(self.ai_feedback_summary)
 		self._no_self_evidence()
 		self._validate_clearance()
 		# Reconciliation first: it can inherit the activity from the attempt, and the
