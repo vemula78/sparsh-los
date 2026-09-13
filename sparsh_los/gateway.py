@@ -82,6 +82,11 @@ def record(
 
 	# The free-text surface, checked before it is stored. Cheap, and it is the app's
 	# established control for exactly this accident.
+	# Two known false positives, both unlikely with current naming and neither worth
+	# loosening the guard for: a model id spelled `ps4096...` or `ws2024...` matches the
+	# MRN pattern, and one containing an @ with a dotted suffix matches the email
+	# pattern. The rejection message will say "patient identifier", which would be
+	# confusing; that is the trade.
 	# Every caller-supplied free-text field on the row. The previous version said
 	# exactly that and left out `cost_currency`, which is the same Data column on the
 	# same exportable row. Counting them is the only way this comment stays true.

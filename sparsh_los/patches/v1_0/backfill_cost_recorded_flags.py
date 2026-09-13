@@ -32,7 +32,7 @@ def execute():
 			f"""
 			update `tabSparsh Model Interaction`
 			set `{flag}` = 1
-			where `{field}` > 0 and `{flag}` = 0
+			where `{field}` != 0 and `{flag}` = 0
 			"""
 		)
 

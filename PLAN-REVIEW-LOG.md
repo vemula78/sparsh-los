@@ -732,3 +732,25 @@ activity-less attempts and fails safe), O2, O4, V6.
 ### Acceptance
 
 `sparsh_los.verify.run` — **67 passed, 0 failed**.
+
+### Audit 14 deferred items — closed
+
+P3/P4: the backfill's `> 0` skipped a negative stored cost, which the same commit had made
+legal by dropping `non_negative` from `actual_cost` so a credit could be reconciled. Now `!= 0`,
+and the field carries a description saying why it permits a negative — the reason previously
+lived only in this log, where nobody editing the schema would find it.
+
+O1: the blank-activity comment claimed a blank filter "could sweep in unrelated rows". It
+matches only that learner's own activity-less attempts, and raises the recorded assistance
+rather than lowering it — safe in direction. The guard is still right; the comment now says
+what actually happens.
+
+G1: the identifier guard's two false positives on model-shaped strings (`ps4096...`,
+`ws2024...`, or an id containing an `@` with a dotted suffix) are recorded in `gateway.py`
+rather than left for someone to rediscover as a confusing "patient identifier" rejection.
+
+### Full regression
+
+`./scripts/uninstall.sh` then `./scripts/install_verify.sh` — clean install from nothing:
+**67 passed, 0 failed**. This is the test that actually exercises schema sync, `on_doctype_update`
+index creation and the install path, rather than re-running against an already-migrated site.

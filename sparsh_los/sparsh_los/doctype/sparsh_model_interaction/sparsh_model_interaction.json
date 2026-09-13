@@ -154,6 +154,7 @@
    "precision": "6"
   },
   {
+   "description": "What the provider billed. May be negative: a credit or refund is a legitimate reconciliation, which is why this field carries no non-negative constraint while the estimate does.",
    "fieldname": "actual_cost",
    "fieldtype": "Float",
    "label": "Actual Cost",
@@ -223,7 +224,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-13 21:00:00.000000",
+ "modified": "2026-09-13 22:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Model Interaction",

@@ -40,10 +40,11 @@ class SparshAttempt(Document):
 		# outcome=Pass at hint level 0. A second reviewer turning that into Evidence
 		# made it an unaided pass. Roles do not matter here; the subject does.
 		if not self.activity:
-			# `_session_position` below queries on this. A blank one is answered by
-			# Frappe's NULL-filter semantics rather than by an empty match, which
-			# could sweep in unrelated rows and inflate the assistance count. The
-			# field is `reqd`, but this runs before mandatory validation.
+			# An attempt that names no activity is not a record of anything. The
+			# field is `reqd`, but that fires after this, and `_session_position`
+			# below queries on it -- a blank one matches this learner's own
+			# activity-less attempts rather than nothing, which raises the recorded
+			# assistance. That direction is safe; the record still makes no sense.
 			frappe.throw(_("An attempt must name the activity it is about"))
 
 		if not self.learner:
