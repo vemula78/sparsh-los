@@ -36,4 +36,6 @@ def execute():
 			"""
 		)
 
-	frappe.db.commit()
+	# No commit here: patch_handler commits after each patch, and committing inside one
+	# lands before the Patch Log row is written -- so an interrupt in that window
+	# re-runs the patch. Harmless while it stays idempotent, and needless either way.

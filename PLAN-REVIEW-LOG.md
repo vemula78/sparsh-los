@@ -658,3 +658,77 @@ continuation, an import after a semicolon.
 ### Acceptance
 
 `sparsh_los.verify.run` — **67 passed, 0 failed**. Two fixes proved by reverting them.
+
+## Audit 14 — 13-Sep-2026 — against `6880294`
+
+Asked to hunt a sixth instance of the banned-comment class. Found two, both in the comments
+written the same day to close audit 13's findings about the same class.
+
+### N2/N3 — the allow-list did not sidestep the NULL question, it inverted it
+
+Audit 13's F10 replaced `("!=", "Rejected")` with an allow-list, on the reasoning that a
+negation against NULL is version-dependent. Audit 14 read Frappe's `db_query` and showed it is
+not version-dependent at all, and that the swap went the wrong way: `!=` renders as
+`ifnull(col, '') != value`, which **keeps** a NULL row exactly as the Python sites in
+`mastery.py` and `certification.py` do, while a bare `in (...)` **drops** it. The change took
+two of the four "identical" filters out of step, under a comment claiming it kept them in step.
+
+The allow-list was also the more brittle shape: a status added to the Select later would be
+silently excluded, so the orchestrator would stop retiring an activity while mastery kept
+counting it — a learner Demonstrated and offered the same activity for ever.
+
+**Reverted to `!=`.** The original line was right; the original *comment* was the defect. The
+new comment states what Frappe actually renders and why the allow-list was worse.
+
+### N1 — "every free-text field on the row" was one field short
+
+`reject_identifiers(notes, prompt_template, prompt_version, model_version, provider, model_id)`
+omitted `cost_currency`, the same `Data` column on the same exportable row. The comment above
+it said "Every free-text field on the row, not a subset" — written to close F7, which was
+itself about checking a subset. Fixed.
+
+### D1–D3 — the dependency parser was green for the wrong reason
+
+F1's fix parsed `pyproject.toml` by hand. It **counted a commented-out dependency**: the check
+passed by reading `# "frappe~=16.0.0"`. It returned *nothing* for an ordinary extras spec
+(`celery[redis]>=5`, where the non-greedy match stopped at the first `]`), and could not see
+`[project.optional-dependencies]` or a poetry table. Three false negatives on the control
+`CLAUDE.md` calls the one that actually holds.
+
+Replaced with `tomllib` — available (the container runs Python 3.14), so the docstring's
+justification for hand-rolling was also wrong. Verified against all four shapes; the real file
+now correctly reports `[]` rather than counting a comment.
+
+### V1–V3 — three fixes from the previous commit shipped untested
+
+| # | Finding | Disposition |
+|---|---|---|
+| V1 | `estimated_cost_recorded` — the entire point of commit `f77444c`'s second half — had no fixture passing `estimated_cost=0.0`. Reverting that bucket to truthiness passed every assertion. The exact defect F2 was raised for, recurring on the sibling field one commit later | **Fixed.** Proved: reverting gives `A deliberate estimate of zero was counted as no cost recorded` |
+| V2 | The mixed-currency rework was never exercised, and a single non-INR row in the window would have made the existing assertions raise `TypeError` on `None` rather than fail cleanly | **Fixed** — a USD fixture, and the report's shape asserted |
+| V3 | `reconcile()` was new, uncalled and unchecked, and its whole safety argument rests on `track_changes` being on **in the database** — a JSON edit that fails to sync being this repo's documented top time-waster | **Fixed** — asserts `track_changes` from the meta, the `None` refusal, the write, and that the note is appended rather than overwritten |
+
+### Also fixed
+
+G2 — a blank `cost_currency` was dropped from the currency set while its amount stayed in the
+total, so an unlabelled row was summed into a figure reported as INR. Blank now counts as its
+own currency. P2 — the patch's own `frappe.db.commit()` lands before its Patch Log row, so an
+interrupt in that window re-runs it; removed.
+
+### P1 — a correction to audit 13's record
+
+Audit 13 logged the backfill as "confirmed in the Patch Log on the site". `installer.install_app`
+marks every patch complete at install time, so **a Patch Log row is consistent with the patch
+never having executed** — and on this site, which is installed rather than migrated across the
+commit, it did not run. That is the correct outcome (no rows to backfill), but the log entry
+claimed more than it established.
+
+### Deferred
+
+P3/P4 (`> 0` skips a negative stored cost; `non_negative` dropped from `actual_cost` with the
+reason only in this log), G1 (identifier guard rejects `ps4096`-shaped model ids), G3, O1 (the
+blank-activity comment overstates the blast radius — the filter matches only that learner's own
+activity-less attempts and fails safe), O2, O4, V6.
+
+### Acceptance
+
+`sparsh_los.verify.run` — **67 passed, 0 failed**.

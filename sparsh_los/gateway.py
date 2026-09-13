@@ -82,10 +82,12 @@ def record(
 
 	# The free-text surface, checked before it is stored. Cheap, and it is the app's
 	# established control for exactly this accident.
-	# Every free-text field on the row, not a subset. `provider` and `model_id` are
-	# `reqd`, so a hurried caller always fills them, and they are the two shown in the
-	# list view of a table two roles can export.
-	reject_identifiers(notes, prompt_template, prompt_version, model_version, provider, model_id)
+	# Every caller-supplied free-text field on the row. The previous version said
+	# exactly that and left out `cost_currency`, which is the same Data column on the
+	# same exportable row. Counting them is the only way this comment stays true.
+	reject_identifiers(
+		notes, prompt_template, prompt_version, model_version, provider, model_id, cost_currency
+	)
 
 	previous = frappe.flags.in_sparsh_gateway
 	frappe.flags.in_sparsh_gateway = True
@@ -223,7 +225,10 @@ def spend(days=30):
 
 	# One currency per report or no total at all. Summing across currencies produces a
 	# number that looks like money and is not, which matters more here than elsewhere.
-	currencies = {r.cost_currency for r in rows if r.cost_currency}
+	# A blank currency counts as another currency, not as "the same as the rest". It
+	# used to be dropped from the set while its amount stayed in the total, so one
+	# unlabelled row was summed into a figure reported as INR.
+	currencies = {r.cost_currency or "unspecified" for r in rows}
 	# Mixed currencies suppress the totals, not the report. Returning a different shape
 	# meant every other figure -- including the count of calls made with no
 	# de-identification assertion, the number worth escalating -- vanished exactly when

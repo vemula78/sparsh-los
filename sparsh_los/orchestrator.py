@@ -59,12 +59,6 @@ def _activities_for(competency):
 	)
 
 
-# Every review status except Rejected. Written as an allow-list because a negation
-# against a NULL column is answered differently by different Frappe versions, and this
-# question must not depend on that.
-REVIEW_STATUSES_THAT_COUNT = ("Not Required", "Pending", "Approved")
-
-
 def _passed_activities(learner, competency):
 	"""Activities the learner has passed at least once.
 
@@ -87,11 +81,14 @@ def _passed_activities(learner, competency):
 				"competency": competency,
 				"outcome": "Pass",
 				"critical_error": 0,
-				# An allow-list, so the answer does not depend on how this Frappe
-				# version renders a negation against NULL. The previous comment here
-				# asserted a specific SQL semantic that nothing in the repo verifies,
-				# and the spelling it argued for may well invert the intent.
-				"human_review_status": ("in", REVIEW_STATUSES_THAT_COUNT),
+				# `!=`, matching the Python filters in mastery.py and certification.py.
+				# This was briefly an allow-list of the three statuses that count, on
+				# the theory that a negation against NULL was version-dependent. It is
+				# not: Frappe renders `!=` as `ifnull(col, '') != value`, which keeps a
+				# NULL row exactly as the Python sites do, while a bare `in (...)` drops
+				# it. The allow-list inverted the semantics it was meant to protect, and
+				# would silently stop counting any status added to the Select later.
+				"human_review_status": ("!=", "Rejected"),
 				"docstatus": 1,
 			},
 			fields=["activity"],
@@ -264,7 +261,7 @@ def next_in_pathway(pathway, learner=None):
 					"outcome": "Pass",
 					"critical_error": 0,
 					"assistance_level": 0,
-					"human_review_status": ("in", REVIEW_STATUSES_THAT_COUNT),
+					"human_review_status": ("!=", "Rejected"),
 					"docstatus": 1,
 				},
 			)

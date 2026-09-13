@@ -2324,6 +2324,56 @@ def check_model_ledger_records_cost_and_makes_no_call():
 		f"A billed zero was added to the estimated total: {after['total_estimated']}",
 	)
 
+	# A deliberate estimate of 0.0 is not "no estimate". This is the sibling of the
+	# billed-zero case, and it shipped with no fixture at all -- reverting the estimate
+	# bucket to truthiness passed every assertion in the harness.
+	est_zero = gateway.record(
+		provider="zzv-test", model_id="zzv-model-1", purpose="Other",
+		estimated_cost=0.0, deidentified=1,
+	)
+	frappe.db.commit()
+	est_doc = frappe.get_doc("Sparsh Model Interaction", est_zero)
+	_assert(est_doc.estimated_cost_recorded == 1, "A zero estimate was not recorded as an estimate")
+	with_zero_estimate = gateway.spend(days=1)
+	_assert(
+		with_zero_estimate["interactions_with_no_cost_recorded"]
+		== after["interactions_with_no_cost_recorded"],
+		"A deliberate estimate of zero was counted as no cost recorded",
+	)
+
+	# V2 — the mixed-currency path had no fixture either, and a single non-INR row in
+	# the window would have made the assertions above raise TypeError on None.
+	gateway.record(
+		provider="zzv-test", model_id="zzv-model-1", purpose="Other",
+		estimated_cost=5.0, cost_currency="USD", deidentified=1,
+	)
+	frappe.db.commit()
+	mixed = gateway.spend(days=1)
+	_assert(mixed["mixed_currency"], "A ledger spanning two currencies was not reported as mixed")
+	_assert(mixed["total_cost"] is None, f"A mixed-currency total was still reported: {mixed['total_cost']}")
+	for key in ("interactions", "without_deidentification_assertion", "by_model", "errors"):
+		_assert(key in mixed, f"The mixed-currency report dropped {key}, which callers read")
+
+	# V3 — reconcile() was new, uncalled and unchecked, and its safety argument rests
+	# on track_changes actually being on in the database rather than only in the JSON.
+	_assert(
+		frappe.get_meta("Sparsh Model Interaction").track_changes,
+		"track_changes is off, so an amendment leaves no trail and reconcile() is unsafe",
+	)
+	_raises(
+		lambda: gateway.reconcile(est_zero, actual_cost=None),
+		"reconcile accepted no cost at all",
+		expect="billed",
+	)
+	gateway.reconcile(est_zero, actual_cost=3.25, notes="billed in arrears")
+	reconciled = frappe.get_doc("Sparsh Model Interaction", est_zero)
+	_assert(reconciled.actual_cost == 3.25, f"reconcile did not write the cost: {reconciled.actual_cost}")
+	_assert(reconciled.actual_cost_recorded == 1, "reconcile did not mark the cost recorded")
+	_assert(
+		"billed in arrears" in (reconciled.notes or ""),
+		f"reconcile lost the note: {reconciled.notes!r}",
+	)
+
 	# Both directions of the de-identification count. Asserting only ">= 1" let a full
 	# inversion of the flag pass, which the earlier "== 0" would have caught.
 	fixtures = frappe.get_all(
@@ -2331,8 +2381,11 @@ def check_model_ledger_records_cost_and_makes_no_call():
 		filters={"provider": "zzv-test"},
 		fields=["deidentified"],
 	)
+	# Count first, so a fixture added later fails with its own cause rather than with a
+	# message about de-identification.
+	_assert(len(fixtures) == 6, f"{len(fixtures)} fixtures exist, expected 6")
 	asserted = len([f for f in fixtures if f.deidentified])
-	_assert(asserted == 3, f"{asserted} of the fixtures recorded an assertion, expected 3")
+	_assert(asserted == 5, f"{asserted} of the fixtures recorded an assertion, expected 5")
 	_assert(
 		len(fixtures) - asserted == 1,
 		f"{len(fixtures) - asserted} fixtures recorded no assertion, expected 1",
@@ -2365,23 +2418,34 @@ def check_model_ledger_records_cost_and_makes_no_call():
 	frappe.db.commit()
 
 
-def _declared_dependencies(text):
-	"""Package names from a pyproject `dependencies` list, without a TOML parser.
+def _declared_dependencies(path):
+	"""Every dependency pyproject declares, across all the places it can declare one.
 
-	tomllib would be the right tool, but this has to run on whatever Python the
-	container has and the shape here is fixed and simple.
+	Parsed with `tomllib`, not a regex. The hand-rolled version counted a *commented
+	out* dependency — the check was green because it read `# "frappe~=16.0.0"` — and
+	returned nothing at all for an ordinary extras spec like `celery[redis]>=5`,
+	because its non-greedy match stopped at the first `]`. It also could not see
+	`[project.optional-dependencies]` or a poetry table. A dependency in any of those
+	is a dependency.
 	"""
+	import tomllib
+
+	data = tomllib.loads(path.read_text(encoding="utf-8"))
+	raw = list(data.get("project", {}).get("dependencies", []) or [])
+	for group in (data.get("project", {}).get("optional-dependencies", {}) or {}).values():
+		raw.extend(group or [])
+
+	poetry = data.get("tool", {}).get("poetry", {})
+	for key in ("dependencies", "dev-dependencies"):
+		raw.extend((poetry.get(key, {}) or {}).keys())
+
 	import re as _re
 
-	block = _re.search(r"^dependencies\s*=\s*\[(.*?)\]", text, _re.MULTILINE | _re.DOTALL)
-	if not block:
-		return []
-
 	names = []
-	for raw in _re.findall(r"[\"']([^\"']+)[\"']", block.group(1)):
-		# Strip any version specifier: "frappe>=15" -> "frappe".
-		names.append(_re.split(r"[<>=!~\[ ]", raw.strip())[0].lower())
-	return sorted(n for n in names if n)
+	for entry in raw:
+		# "frappe[all] >= 15" / "frappe @ git+https://..." -> "frappe"
+		names.append(_re.split(r"[<>=!~\[@ ;]", str(entry).strip())[0].lower())
+	return sorted(n for n in names if n and n != "python")
 
 
 def check_no_module_imports_a_network_client():
@@ -2452,7 +2516,7 @@ def check_no_module_imports_a_network_client():
 	# tested, under a docstring saying it was scanned because it is what holds.
 	pyproject = root / "pyproject.toml"
 	_assert(pyproject.exists(), "pyproject.toml was not found, so the real control is unchecked")
-	declared = _declared_dependencies(pyproject.read_text(encoding="utf-8"))
+	declared = _declared_dependencies(pyproject)
 	_assert(
 		declared == [] or declared == ["frappe"],
 		f"pyproject.toml declares third-party dependencies: {declared}. "
