@@ -114,14 +114,27 @@ def supervisor_view(competency=None):
 		judged = [e for e in evidence if e.human_review_status != REJECTED]
 		assisted = sum(1 for e in judged if e.outcome == "Pass" and (e.assistance_level or 0) > 0)
 		failures = sum(1 for e in judged if e.outcome == "Fail")
-		reason = (
-			"Passing only with help"
-			if assisted and not failures
-			else "Repeated failures"
-			if failures and not assisted
-			else "Mixed results without an unaided pass"
+		partials = sum(1 for e in judged if e.outcome == "Partial")
+
+		# "Mixed results" was the catch-all, and it caught histories that are not mixed
+		# at all: three Partials produced assisted=0, failures=0 and a supervisor told
+		# there were mixed results when there was one consistent pattern. A reason a
+		# supervisor cannot act on is worse than no reason.
+		if assisted and not failures and not partials:
+			reason = "Passing only with help"
+		elif failures and not assisted and not partials:
+			reason = "Repeated failures"
+		elif partials and not assisted and not failures:
+			reason = "Partial completions only"
+		elif not (assisted or failures or partials):
+			reason = "No unaided pass yet on a second activity"
+		else:
+			reason = "Mixed results without an unaided pass"
+
+		stuck.append(
+			dict(row, reason=reason, assisted_passes=assisted, failures=failures,
+				 partial_results=partials)
 		)
-		stuck.append(dict(row, reason=reason, assisted_passes=assisted, failures=failures))
 
 	# Where critical safety errors are occurring.
 	critical = frappe.get_all(

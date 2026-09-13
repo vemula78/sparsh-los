@@ -1105,3 +1105,42 @@ on a delta, never on a floor.
 
 Harness at 77. Remaining from audit 17: the assistance race, which needs a lock on
 (learner, activity) and is a schema decision for the programme, not a patch.
+
+## 13-Sep-2026 — Audit 18 follow-up: the five harness weaknesses, closed
+
+Harness at **80 checks**, green twice and from a clean uninstall-then-install.
+
+- **The answer-key check tested the wrong line of defence.** It obtained the Activity and
+  applied field-level stripping, so a regression granting learners permlevel-0 document access
+  while keeping the answer fields at permlevel 1 would have passed — despite the stated
+  invariant being that a learner cannot read Activity *at all*. It now asserts the document
+  read, the list, and a prefix-oracle filter on `expected_response` are each refused, and keeps
+  the stripping assertions behind them.
+- **`_refused` now sits beside `_raises`.** `frappe.PermissionError` is not a
+  `ValidationError` subclass on this version, so a permission refusal reached `_raises` as an
+  unexpected exception and failed the check meant to be satisfied by it. Splitting the two keeps
+  both precise: a validation refusal where a permission refusal belongs is now reported as the
+  wrong layer rather than accepted.
+- **The evaluator-mode count was a floor.** `len(must_not_score) >= 4` let a declared mode
+  disappear from the Select without failing. It is now exactly the declared total minus the
+  dispatched modes, with a separate assertion that six evaluator types are declared — the number
+  the architecture claims.
+- **The programme-name scanner matched lines, not strings.** It required the name and `_("` or
+  `frappe.throw` on the same physical line, so a single-quoted string, a name on the second line
+  of a multiline message, or a message built into a variable and thrown later all passed. It
+  walks the syntax tree now and skips docstrings. Proved by planting a violation in all three
+  missed forms at once: it was caught, quoted back with its file and line.
+- **"Mixed results without an unaided pass" was a catch-all that described patterns that were
+  not there.** Three Partial results produced `assisted=0`, `failures=0` and that reason. A
+  supervisor acts on the reason, so `dashboard.supervisor_view` now counts Partials, names
+  "Partial completions only", and distinguishes the case where there is nothing to describe.
+
+Two of these were found only because the audit read the checks rather than the code. That is
+now three rounds running where the most valuable findings were about the harness, not the app.
+
+Still open and unchanged: the assistance race, which needs a lock on (learner, activity) and is
+a schema decision for the programme; rule-free automatic scoring, where `_rule_is_validated`
+permits a Deterministic activity whose competency links no rule — readiness blocks the pilot on
+it, the execution path is unchanged, and closing it properly means deciding whether a
+cross-domain competency may ever auto-score without a rule; and the matrix and case-pack counts,
+which establish volume rather than identity.

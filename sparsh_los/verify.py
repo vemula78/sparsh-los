@@ -16,6 +16,7 @@ import sys
 import traceback
 
 import frappe
+import frappe.client
 
 from sparsh_los.mastery import DEMONSTRATED, MASTERED, STATE_ORDER, derive_state
 
@@ -84,6 +85,32 @@ def _raises(fn, message, expect=None):
 	frappe.db.rollback(save_point="sparsh_verify")
 	raise AssertionError(message)
 
+
+
+def _refused(fn, message, expect=None):
+	"""Assert fn is refused by the permission layer specifically.
+
+	`_raises` admits only `frappe.ValidationError`, and `frappe.PermissionError` is not
+	one of its subclasses on this version -- so a permission refusal reached `_raises`
+	as an unexpected exception and failed the check it was meant to satisfy. Splitting
+	them keeps both precise: a validation refusal here would be the wrong layer and is
+	reported as such.
+	"""
+	frappe.db.savepoint("sparsh_refused")
+	try:
+		fn()
+	except frappe.PermissionError as exc:
+		frappe.db.rollback(save_point="sparsh_refused")
+		if expect and expect.lower() not in str(exc).lower():
+			raise AssertionError(f"{message} (refused, but for another reason: {exc})") from None
+		return
+	except Exception as exc:  # noqa: BLE001
+		frappe.db.rollback(save_point="sparsh_refused")
+		raise AssertionError(
+			f"{message} (refused by another layer: {type(exc).__name__}: {exc})"
+		) from None
+	frappe.db.rollback(save_point="sparsh_refused")
+	raise AssertionError(message)
 
 # --------------------------------------------------------------------- fixtures
 def _delete_mastery(filters):
@@ -1376,6 +1403,35 @@ def check_learner_cannot_read_answer_key():
 	original_user = frappe.session.user
 	try:
 		frappe.set_user(TEST_LEARNER)
+
+		# Field stripping is the second line, not the guarantee. The stated invariant is
+		# that a learner cannot read Activity at all, and testing only the stripping
+		# would pass a regression that granted permlevel-0 document access while keeping
+		# the answer fields at permlevel 1.
+		_refused(
+			lambda: frappe.get_doc("Sparsh Activity", ACTIVITY_1).check_permission("read"),
+			"A learner could read the Activity document",
+		)
+		_refused(
+			lambda: frappe.client.get_list(
+				"Sparsh Activity", filters={"name": ACTIVITY_1}, fields=["name"], limit_page_length=1
+			),
+			"A learner could list Activity rows",
+			expect="insufficient permission",
+		)
+		# A filter on a hidden field is a prefix oracle even when the field is stripped
+		# from the result, so the list path has to be closed, not just the field.
+		_refused(
+			lambda: frappe.client.get_list(
+				"Sparsh Activity",
+				filters={"expected_response": ("like", "level%")},
+				fields=["name"],
+				limit_page_length=1,
+			),
+			"A learner could filter Activity on the answer key",
+			expect="insufficient permission",
+		)
+
 		doc = frappe.get_doc("Sparsh Activity", ACTIVITY_1)
 		# This is what the REST and desk layers do before handing a document to a user.
 		doc.apply_fieldlevel_read_permissions()
@@ -2797,7 +2853,18 @@ def check_unbuilt_evaluator_modes_fall_to_a_person():
 	# change that most needs testing.
 	declared = frappe.get_meta("Sparsh Activity").get_field("evaluation_mode").options.split("\n")
 	must_not_score = [m.strip() for m in declared if m.strip() and m.strip() not in runner.AUTO_SCORED_MODES]
-	_assert(len(must_not_score) >= 4, f"Only {must_not_score} modes to check; the Select looks wrong")
+	# A floor of four let a declared mode disappear from the Select without failing --
+	# the architecture claims six evaluator types and dispatches one, so the count of
+	# modes that must not score is exactly the declared total minus the dispatched ones.
+	expected = len([m for m in declared if m.strip()]) - len(runner.AUTO_SCORED_MODES)
+	_assert(
+		len(must_not_score) == expected,
+		f"{len(must_not_score)} modes must not score but {expected} were expected: {must_not_score}",
+	)
+	_assert(
+		len([m for m in declared if m.strip()]) == 6,
+		f"The Select declares {len([m for m in declared if m.strip()])} evaluator types, not six: {declared}",
+	)
 
 	try:
 		# An exact match against the answer key, so anything that scored at all
@@ -3988,15 +4055,22 @@ def check_no_programme_name_in_messages():
 	"""The engine is domain-agnostic, and a message is as user-facing as a label.
 
 	`check_no_domain_strings` reads DocType names and field metadata. The invariant also
-	covers validations, and nothing looked at the Python strings a user actually reads.
-	The DocType prefix `Sparsh ` is the deliberate exception -- it is the app namespace,
-	not the programme -- so what is banned here is the programme's own name.
+	covers validations, and nothing looked at the strings a user actually reads. The
+	DocType prefix `Sparsh ` is the deliberate exception -- it is the app namespace, not
+	the programme -- so what is banned here is the programme's own name.
+
+	The first version matched a line containing both the name and `_("` or
+	`frappe.throw`, which saw only double-quoted single-line calls: a single-quoted
+	string, a name on the second line of a multiline message, or a message built into a
+	variable and thrown later all passed. It walks the syntax tree now, so the quoting
+	style and the line breaks stop mattering.
 	"""
+	import ast as _ast
 	import os
 	import re
 
 	root = os.path.dirname(os.path.abspath(__file__))
-	programme = re.compile(r"sai\s+sparsh", re.IGNORECASE)
+	programme = re.compile(r"sai[\s_-]*sparsh", re.IGNORECASE)
 	offenders = []
 	for dirpath, _dirs, filenames in os.walk(root):
 		for filename in filenames:
@@ -4005,23 +4079,37 @@ def check_no_programme_name_in_messages():
 			path = os.path.join(dirpath, filename)
 			try:
 				with open(path, encoding="utf-8") as handle:
-					lines = handle.readlines()
-			except (UnicodeDecodeError, OSError):
-				# A stray non-UTF-8 byte in the tree is not this check's business, and
+					tree = _ast.parse(handle.read())
+			except (UnicodeDecodeError, OSError, SyntaxError):
+				# A stray byte or an unparseable file is not this check's business, and
 				# failing on it would report a scan error as a domain-string violation.
 				continue
-			for number, line in enumerate(lines, 1):
-				stripped = line.strip()
-				# Comments and docstrings explain the project to the next reader and are
-				# not shipped to a user; only quoted message text is in scope.
-				if stripped.startswith("#"):
+
+			# Docstrings explain the project to the next reader and ship to nobody.
+			docstrings = set()
+			for node in _ast.walk(tree):
+				if isinstance(node, (_ast.Module, _ast.ClassDef, _ast.FunctionDef,
+									 _ast.AsyncFunctionDef)):
+					body = getattr(node, "body", None)
+					if (
+						body
+						and isinstance(body[0], _ast.Expr)
+						and isinstance(body[0].value, _ast.Constant)
+						and isinstance(body[0].value.value, str)
+					):
+						docstrings.add(id(body[0].value))
+
+			for node in _ast.walk(tree):
+				if not (isinstance(node, _ast.Constant) and isinstance(node.value, str)):
 					continue
-				if programme.search(line) and ('_("' in line or "frappe.throw" in line):
-					offenders.append(f"{os.path.relpath(path, root)}:{number}")
+				if id(node) in docstrings:
+					continue
+				if programme.search(node.value):
+					offenders.append(
+						f"{os.path.relpath(path, root)}:{node.lineno}: {node.value[:60]!r}"
+					)
 
-	_assert(not offenders, f"The programme name appears in user-facing text: {offenders}")
-
-
+	_assert(not offenders, f"The programme name appears in a string: {offenders}")
 
 def check_queue_shows_work_that_is_actually_waiting():
 	"""The limit must apply to eligible rows, not to rows then thrown away.
@@ -4101,7 +4189,49 @@ def check_ledger_with_no_price_reports_unknown_not_zero():
 		frappe.db.commit()
 
 
+
+def check_partial_only_history_is_named_accurately():
+	"""A supervisor acts on the reason, so the reason has to be true.
+
+	"Mixed results without an unaided pass" was the catch-all, and it caught histories
+	that are not mixed: three Partials gave a supervisor a description of a pattern that
+	was not there. A reason nobody can act on is worse than no reason.
+	"""
+	from sparsh_los import dashboard
+
+	_reset_competency()
+	for _ in range(3):
+		_new_evidence(ACTIVITY_1, "Partial", assistance_level=1)
+	frappe.db.commit()
+
+	rows = [r for r in dashboard.supervisor_view(COMPETENCY)["stuck"] if r["learner"] == LEARNER]
+	if not rows:
+		# Partial results may not hold a learner in Practising at all; that is a
+		# different design question, and this check says so rather than passing silently.
+		raise AssertionError(
+			f"A learner with three Partial results is not in the stuck list; state is {_state()}"
+		)
+
+	for row in rows:
+		_assert(
+			row["partial_results"] == 3,
+			f"The Partial results were not counted: {row.get('partial_results')}",
+		)
+		_assert(
+			row["reason"] != "Mixed results without an unaided pass",
+			"A history of only Partial results was described as mixed",
+		)
+		_assert(
+			row["reason"] == "Partial completions only",
+			f"A Partial-only history was described as: {row['reason']}",
+		)
+
+	_reset_competency()
+	frappe.db.commit()
+
+
 CHECKS = (
+	("partial_only_history_is_named_accurately", check_partial_only_history_is_named_accurately),
 	("queue_shows_work_that_is_actually_waiting", check_queue_shows_work_that_is_actually_waiting),
 	("ledger_with_no_price_reports_unknown_not_zero", check_ledger_with_no_price_reports_unknown_not_zero),
 	("queue_limit_is_bounded", check_queue_limit_is_bounded),
