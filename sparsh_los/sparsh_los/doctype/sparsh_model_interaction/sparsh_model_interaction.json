@@ -25,6 +25,7 @@
   "column_break_cost",
   "cost_currency",
   "estimated_cost",
+  "estimated_cost_recorded",
   "actual_cost",
   "actual_cost_recorded",
   "section_break_runtime",
@@ -156,7 +157,6 @@
    "fieldname": "actual_cost",
    "fieldtype": "Float",
    "label": "Actual Cost",
-   "non_negative": 1,
    "precision": "6"
   },
   {
@@ -212,11 +212,18 @@
    "fieldname": "actual_cost_recorded",
    "fieldtype": "Check",
    "label": "Actual Cost Recorded"
+  },
+  {
+   "default": "0",
+   "description": "Whether an estimate was supplied. A Float reads 0.0 when unset, so the number cannot say whether nil means estimated-nil or nothing-supplied.",
+   "fieldname": "estimated_cost_recorded",
+   "fieldtype": "Check",
+   "label": "Estimated Cost Recorded"
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-13 20:00:00.000000",
+ "modified": "2026-09-13 21:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Model Interaction",
@@ -256,5 +263,5 @@
  "sort_field": "occurred_at",
  "sort_order": "DESC",
  "states": [],
- "track_changes": 0
+ "track_changes": 1
 }

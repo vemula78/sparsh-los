@@ -618,3 +618,41 @@ volume), S8, V7, V9, O2, O3, O5.
 ### Acceptance
 
 `sparsh_los.verify.run` — **67 passed, 0 failed**. `MIN_CHECKS` 67.
+
+## Audit 13 — 13-Sep-2026 — against `19c8e74`
+
+Asked explicitly to hunt for a fifth instance of the banned-comment class, four having been
+found in four consecutive rounds. It found one, and it was in the docstring written to disclaim
+exactly that overclaiming.
+
+### F1 — the fifth instance
+
+`check_no_module_imports_a_network_client` said the real control is `pyproject.toml` declaring
+no third-party dependency, *"which is why that file is scanned too"*. The file was scanned with
+an **import regex**, which can never match `dependencies = ["openai"]`. It was opened, read, and
+nothing about it was tested — while `CLAUDE.md`, the commit message and audit 12's own write-up
+all repeated the claim.
+
+Fixed: the dependency list is parsed and asserted. Proved by adding `openai>=1.0` to
+`pyproject.toml` — `FAIL ... pyproject.toml declares third-party dependencies: ['frappe',
+'openai']`. The docstring now also names what the regex cannot see: a comma list, a line
+continuation, an import after a semicolon.
+
+### The rest
+
+| # | Finding | Disposition |
+|---|---|---|
+| F2 | The genuine-zero cost — the entire reason for the `actual_cost_recorded` flag — was created *after* the `spend()` call and never asserted through the report. With every other assertion a `>=` bound, reverting `cost()` to truthiness passed everything | **Fixed.** A second `spend()` asserts the billed zero moved neither total. Proved: reverting gives `A billed zero changed the actual total from 2.0 to 11.0` |
+| F3 | The estimate was still classified by truthiness — S1 fixed on one side only, so a deliberate estimate of 0.0 read as "nothing known" | **Fixed** — `estimated_cost_recorded`, the same treatment |
+| F5 | The mixed-currency early return had five keys where the normal path has eighteen, so every other figure — including the de-identification count, "the number worth escalating" — vanished exactly when the ledger was messiest, and callers got a KeyError | **Fixed** — the totals are suppressed, the report is not |
+| F6 | `reconcile()`: "the only field an amendment may touch" touches two and enforces neither; and its stated justification (a better audit trail than delete-and-reinsert) was inverted by `track_changes: 0` on the same DocType | **Fixed** — `track_changes: 1`, so an amendment actually leaves a trail; notes appended rather than overwritten; `None` cost refused; `non_negative` dropped so a credit can be reconciled. The comment now says narrow-by-convention, not narrow-by-enforcement |
+| F10 | The `("not in", ...)` comment asserted a specific SQL NULL semantic that nothing in the repo verifies — and the spelling it argued for may invert the intent | **Fixed differently.** Replaced with an explicit allow-list of the three statuses that count, so the answer cannot depend on how a Frappe version renders a negation against NULL. The comment says that instead of asserting SQL behaviour |
+| F11 | `without_deidentification_assertion` was *weakened*: the old `== 0` tested both directions, the new `>= 1` only one, so a full inversion of the flag passed | **Fixed** — exact counts both ways |
+| F12 | `is_restricted`'s public docstring still said "a learner and nothing more" — the precise reading `_is_restricted` was changed to reject, and that `sparsh_attempt.py` warns future readers against. A sixth instance, pre-existing | **Fixed** |
+| F1b | `scanned >= 20` against a tree of 68 files | **Fixed** — 50 |
+| F4 | No migration for `actual_cost_recorded`: pre-existing rows silently reclassify | **Deferred** — no rows exist, nothing calls a model. Must be a patch before any provider is wired |
+| F7, F8, F9, F13 | `provider`/`model_id` unchecked free text; `attempted_at` overwritten on the self-filed path; `_session_position` with a blank activity; JSON reformat inflating the diff | **Deferred**, recorded |
+
+### Acceptance
+
+`sparsh_los.verify.run` — **67 passed, 0 failed**. Two fixes proved by reverting them.

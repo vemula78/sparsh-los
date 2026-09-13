@@ -61,7 +61,12 @@ def require_reviewer():
 
 
 def is_restricted(user=None):
-	"""Public wrapper: True when the session belongs to a learner and nothing more."""
+	"""Public wrapper for `_is_restricted`: True unless the user is a reviewer.
+
+	Not "is this a learner and nothing more" — that was the old, wrong reading, and it
+	is the one `_is_restricted` below was changed to reject. Saying it here again would
+	send the next reader back to the bug.
+	"""
 	return _is_restricted(user or frappe.session.user)
 
 

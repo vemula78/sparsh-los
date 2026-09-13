@@ -102,7 +102,8 @@ def record(
 		doc.prompt_version = prompt_version
 		doc.input_tokens = input_tokens
 		doc.output_tokens = output_tokens
-		doc.estimated_cost = estimated_cost
+		doc.estimated_cost = estimated_cost or 0
+		doc.estimated_cost_recorded = 1 if estimated_cost is not None else 0
 		doc.actual_cost = actual_cost or 0
 		doc.actual_cost_recorded = 1 if actual_cost is not None else 0
 		doc.cost_currency = cost_currency
@@ -126,9 +127,15 @@ def reconcile(interaction, actual_cost, notes=None):
 	correct a row was to insert a second one, which double-counts, or to delete and
 	reinsert, which is a worse audit trail than an amendment.
 
-	Deliberately narrow: this is the only field an amendment may touch. Everything else
-	about an interaction is what happened, and stays as recorded.
+	Narrow by convention, not by enforcement: `validate` gates on the flag alone, so any
+	code holding it can rewrite any field. What makes an amendment safe here is
+	`track_changes` on the DocType — without it an amendment leaves no prior value, no
+	who and no when, which would be a worse trail than the delete-and-reinsert this
+	exists to replace.
 	"""
+	if actual_cost is None:
+		frappe.throw(_("Reconciling requires the cost the provider billed"))
+
 	reject_identifiers(notes)
 
 	previous = frappe.flags.in_sparsh_gateway
@@ -138,7 +145,9 @@ def reconcile(interaction, actual_cost, notes=None):
 		doc.actual_cost = actual_cost
 		doc.actual_cost_recorded = 1
 		if notes:
-			doc.notes = notes
+			# Appended, not replaced: overwriting destroys the only free-text record of
+			# what the original call was.
+			doc.notes = f"{doc.notes}\n{notes}" if doc.notes else notes
 		doc.save(ignore_permissions=True)
 		return doc.name
 	finally:
@@ -174,6 +183,7 @@ def spend(days=30):
 			"estimated_cost",
 			"actual_cost",
 			"actual_cost_recorded",
+			"estimated_cost_recorded",
 			"outcome_status",
 			"fallback_used",
 			"deidentified",
@@ -186,11 +196,19 @@ def spend(days=30):
 		# value alone cannot distinguish "the provider billed nil" from "nobody has
 		# told us yet". Truthiness discarded the genuine zero; `is not None` never
 		# fires at all.
-		return row.actual_cost if row.actual_cost_recorded else (row.estimated_cost or 0)
+		if row.actual_cost_recorded:
+			return row.actual_cost
+		return row.estimated_cost if row.estimated_cost_recorded else 0
 
 	actual_rows = [r for r in rows if r.actual_cost_recorded]
-	estimated_rows = [r for r in rows if not r.actual_cost_recorded and r.estimated_cost]
-	unknown_rows = [r for r in rows if not r.actual_cost_recorded and not r.estimated_cost]
+	# Same flag treatment for the estimate. Fixing the actual and leaving the estimate
+	# on truthiness meant a deliberate estimate of 0.0 was reported as "nothing known".
+	estimated_rows = [
+		r for r in rows if not r.actual_cost_recorded and r.estimated_cost_recorded
+	]
+	unknown_rows = [
+		r for r in rows if not r.actual_cost_recorded and not r.estimated_cost_recorded
+	]
 
 	# Cost per learner divides only what was attributed to a learner. Dividing the whole
 	# total by the learners who happened to appear inflated it without bound, and read
@@ -203,28 +221,31 @@ def spend(days=30):
 	# One currency per report or no total at all. Summing across currencies produces a
 	# number that looks like money and is not, which matters more here than elsewhere.
 	currencies = {r.cost_currency for r in rows if r.cost_currency}
-	if len(currencies) > 1:
-		return {
-			"period_days": days,
-			"interactions": len(rows),
-			"total_cost": None,
-			"currencies": sorted(currencies),
-			"message": "Interactions span more than one currency; totals are not comparable.",
-		}
+	# Mixed currencies suppress the totals, not the report. Returning a different shape
+	# meant every other figure -- including the count of calls made with no
+	# de-identification assertion, the number worth escalating -- vanished exactly when
+	# the ledger was messiest, and any caller reading them got a KeyError.
+	mixed_currency = len(currencies) > 1
 	return {
 		"period_days": days,
 		"interactions": len(rows),
-		"currency": currencies.pop() if currencies else None,
-		"total_cost": round(total, 6),
+		"currency": None if mixed_currency else (sorted(currencies)[0] if currencies else None),
+		"currencies": sorted(currencies),
+		"mixed_currency": mixed_currency,
+		"total_cost": None if mixed_currency else round(total, 6),
 		# Three states, not one flag: what the provider billed, what is only estimated,
 		# and what is not known at all. A ledger with no cost fields used to report
 		# total_cost 0.0, which a reader takes as "cheap" rather than "unknown".
-		"total_actual": round(sum(cost(r) for r in actual_rows), 6),
-		"total_estimated": round(sum(cost(r) for r in estimated_rows), 6),
+		"total_actual": None if mixed_currency else round(sum(cost(r) for r in actual_rows), 6),
+		"total_estimated": None
+		if mixed_currency
+		else round(sum(cost(r) for r in estimated_rows), 6),
 		"interactions_with_no_cost_recorded": len(unknown_rows),
 		"cost_is_partly_estimated": bool(estimated_rows),
 		"learners": len(learners),
-		"cost_per_learner": round(learner_total / len(learners), 6) if learners else None,
+		"cost_per_learner": None
+		if (mixed_currency or not learners)
+		else round(learner_total / len(learners), 6),
 		"interactions_with_no_learner": len(rows) - len(learner_rows),
 		"input_tokens": sum(r.input_tokens or 0 for r in rows),
 		"output_tokens": sum(r.output_tokens or 0 for r in rows),

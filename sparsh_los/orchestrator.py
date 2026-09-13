@@ -59,6 +59,12 @@ def _activities_for(competency):
 	)
 
 
+# Every review status except Rejected. Written as an allow-list because a negation
+# against a NULL column is answered differently by different Frappe versions, and this
+# question must not depend on that.
+REVIEW_STATUSES_THAT_COUNT = ("Not Required", "Pending", "Approved")
+
+
 def _passed_activities(learner, competency):
 	"""Activities the learner has passed at least once.
 
@@ -81,11 +87,11 @@ def _passed_activities(learner, competency):
 				"competency": competency,
 				"outcome": "Pass",
 				"critical_error": 0,
-				# `not in` rather than `!=`: in SQL, `status != 'Rejected'` is NULL for
-				# a NULL status and the row is dropped, while the Python filters in
-				# mastery.py keep it. The field carries a default so NULL is currently
-				# unreachable, but four sites written to be identical should be.
-				"human_review_status": ("not in", ("Rejected",)),
+				# An allow-list, so the answer does not depend on how this Frappe
+				# version renders a negation against NULL. The previous comment here
+				# asserted a specific SQL semantic that nothing in the repo verifies,
+				# and the spelling it argued for may well invert the intent.
+				"human_review_status": ("in", REVIEW_STATUSES_THAT_COUNT),
 				"docstatus": 1,
 			},
 			fields=["activity"],
@@ -258,7 +264,7 @@ def next_in_pathway(pathway, learner=None):
 					"outcome": "Pass",
 					"critical_error": 0,
 					"assistance_level": 0,
-					"human_review_status": ("not in", ("Rejected",)),
+					"human_review_status": ("in", REVIEW_STATUSES_THAT_COUNT),
 					"docstatus": 1,
 				},
 			)

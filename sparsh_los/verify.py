@@ -2227,8 +2227,6 @@ def check_model_ledger_records_cost_and_makes_no_call():
 	The second assertion is the one that must never weaken: no module in this app may
 	import a network client or a provider SDK.
 	"""
-	import pathlib
-
 	from sparsh_los import gateway
 
 	_delete_all("Sparsh Model Interaction", {"provider": "zzv-test"})
@@ -2307,9 +2305,38 @@ def check_model_ledger_records_cost_and_makes_no_call():
 		actual_cost=0.0, estimated_cost=9.0, deidentified=1,
 	)
 	frappe.db.commit()
-    
+
 	zero_doc = frappe.get_doc("Sparsh Model Interaction", zero)
 	_assert(zero_doc.actual_cost == 0.0, "A zero actual cost was not stored")
+
+	# Through spend(), not just off the document. Reading the field back proves the
+	# insert; only the report proves cost() honours it -- and with every other
+	# assertion a >= lower bound, reverting cost() to truthiness would substitute this
+	# row's 9.0 estimate and nothing above would notice.
+	after = gateway.spend(days=1)
+	_assert(
+		after["total_actual"] == report["total_actual"],
+		f"A billed zero changed the actual total from {report['total_actual']} "
+		f"to {after['total_actual']}; it was treated as an estimate",
+	)
+	_assert(
+		after["total_estimated"] == report["total_estimated"],
+		f"A billed zero was added to the estimated total: {after['total_estimated']}",
+	)
+
+	# Both directions of the de-identification count. Asserting only ">= 1" let a full
+	# inversion of the flag pass, which the earlier "== 0" would have caught.
+	fixtures = frappe.get_all(
+		"Sparsh Model Interaction",
+		filters={"provider": "zzv-test"},
+		fields=["deidentified"],
+	)
+	asserted = len([f for f in fixtures if f.deidentified])
+	_assert(asserted == 3, f"{asserted} of the fixtures recorded an assertion, expected 3")
+	_assert(
+		len(fixtures) - asserted == 1,
+		f"{len(fixtures) - asserted} fixtures recorded no assertion, expected 1",
+	)
 
 	# And the privacy control runs on what this module can see.
 	_raises(
@@ -2336,6 +2363,25 @@ def check_model_ledger_records_cost_and_makes_no_call():
 
 	_delete_all("Sparsh Model Interaction", {"provider": "zzv-test"})
 	frappe.db.commit()
+
+
+def _declared_dependencies(text):
+	"""Package names from a pyproject `dependencies` list, without a TOML parser.
+
+	tomllib would be the right tool, but this has to run on whatever Python the
+	container has and the shape here is fixed and simple.
+	"""
+	import re as _re
+
+	block = _re.search(r"^dependencies\s*=\s*\[(.*?)\]", text, _re.MULTILINE | _re.DOTALL)
+	if not block:
+		return []
+
+	names = []
+	for raw in _re.findall(r"[\"']([^\"']+)[\"']", block.group(1)):
+		# Strip any version specifier: "frappe>=15" -> "frappe".
+		names.append(_re.split(r"[<>=!~\[ ]", raw.strip())[0].lower())
+	return sorted(n for n in names if n)
 
 
 def check_no_module_imports_a_network_client():
@@ -2396,10 +2442,22 @@ def check_no_module_imports_a_network_client():
 				f"{path.name} calls frappe.{helper}; the engine must make no call",
 			)
 
-	_assert(scanned >= 20, f"The determinism scan only saw {scanned} files; it is not scanning")
+	# A floor that means something: the tree has far more than twenty files, so a floor
+	# of twenty detected only total collapse of the glob.
+	_assert(scanned >= 50, f"The determinism scan only saw {scanned} files; it is not scanning")
+
+	# And the control the docstring calls the real one, actually checked. Applying the
+	# import regex to a TOML file -- which the first version did -- can never match
+	# `dependencies = ["openai"]`: the file was opened, read, and nothing about it was
+	# tested, under a docstring saying it was scanned because it is what holds.
 	pyproject = root / "pyproject.toml"
 	_assert(pyproject.exists(), "pyproject.toml was not found, so the real control is unchecked")
-	frappe.db.commit()
+	declared = _declared_dependencies(pyproject.read_text(encoding="utf-8"))
+	_assert(
+		declared == [] or declared == ["frappe"],
+		f"pyproject.toml declares third-party dependencies: {declared}. "
+		"The engine is stdlib plus frappe, and that list is what actually keeps it deterministic.",
+	)
 
 
 def check_answered_refresher_is_not_reassigned():
