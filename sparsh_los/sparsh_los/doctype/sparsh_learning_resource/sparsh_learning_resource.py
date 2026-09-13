@@ -42,7 +42,15 @@ class SparshLearningResource(Document):
 				)
 
 		if self.status != "Current":
+			# Only a Current version occupies the key; NULLs do not collide, so every
+			# superseded and draft version is free to exist alongside.
+			self.current_key = None
 			return
+
+		# The key is claimed in `on_update`, after the predecessor has released it --
+		# claiming it here would collide with the version this one is replacing, which
+		# is still Current until validation passes.
+		self.current_key = None
 
 		# The predecessor is still Current while this one is being saved -- `on_update`
 		# demotes it only after validation passes -- so the version being superseded is
@@ -61,6 +69,8 @@ class SparshLearningResource(Document):
 				_("{0} is already the current version of {1}").format(clash[0], self.resource_id)
 			)
 
+
+
 	def on_update(self):
 		"""Becoming Current retires the predecessor and makes its readers stale.
 
@@ -70,11 +80,33 @@ class SparshLearningResource(Document):
 		"""
 		before = self.get_doc_before_save()
 		became_current = self.status == "Current" and (not before or before.status != "Current")
-		if not became_current or not self.supersedes:
+		if not became_current:
 			return
 
-		frappe.db.set_value("Sparsh Learning Resource", self.supersedes, "status", "Superseded")
+		if not self.supersedes:
+			# A first version has no predecessor to demote, but it still holds the key.
+			self.db_set("current_key", self.resource_id)
+			return
+
+		# The predecessor releases the key as it is demoted, and this version claims it
+		# immediately after. Two successors racing the same predecessor both reach this
+		# point, and the second one's claim is rejected by the unique index -- which is
+		# the only place that guarantee can be enforced, because the check in `validate`
+		# reads a state both transactions still see as free.
+		frappe.db.set_value(
+			"Sparsh Learning Resource",
+			self.supersedes,
+			{"status": "Superseded", "current_key": None},
+		)
+		self.db_set("current_key", self.resource_id)
 
 		from sparsh_los.refresher import on_resource_superseded
 
 		on_resource_superseded(self.supersedes)
+
+
+def on_doctype_update():
+	# One Current version per resource_id, enforced where it cannot be raced.
+	frappe.db.add_unique(
+		"Sparsh Learning Resource", ["current_key"], constraint_name="unique_current_resource"
+	)

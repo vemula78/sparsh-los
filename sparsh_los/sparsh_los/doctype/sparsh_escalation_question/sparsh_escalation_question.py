@@ -44,12 +44,48 @@ class SparshEscalationQuestion(Document):
 		endpoint, and between them sat the ordinary save: a reviewer holds write on this
 		DocType, so a user with both roles could set status, answer_text and answered_by
 		on their own question through the generic update API and never reach either
-		guard. Closing two of three doors was worth nothing.
+		guard.
+
+		The first version of this guard read `self.answered_by or frappe.session.user`
+		and compared that to the learner -- which asked the document who answered it.
+		`answered_by` is part of the document being saved, so a dual-role learner could
+		answer their own question and attribute it to a colleague, and the guard saw a
+		different name and allowed it. Who is writing is a fact about the request, never
+		about the payload.
 		"""
+		if self.is_new():
+			# `before_insert` has already blanked every reviewer-side field.
+			return
+
+		before = self.get_doc_before_save()
+		was_answered = bool(before and before.status == "Answered")
 		answering = self.status == "Answered" or self.answer_text or self.answered_by
+
+		if was_answered:
+			# An answer is what the learner was actually told. Editing it afterwards
+			# rewrites the record of advice already given -- and the stale `answered_by`
+			# made that edit look like the original reviewer's work.
+			for field in ("answer_text", "disposition", "answered_by", "status"):
+				if self.get(field) != before.get(field):
+					frappe.throw(
+						_("This question has already been answered and cannot be rewritten"),
+						frappe.PermissionError,
+					)
+			return
+
 		if not answering:
 			return
 
-		actor = self.answered_by or frappe.session.user
-		if actor == self.learner:
+		if frappe.session.user == self.learner:
 			frappe.throw(_("You cannot answer your own question"), frappe.PermissionError)
+
+		# Attribution is taken from the session, not accepted from the document, so a
+		# stored answer always names the person who actually wrote it.
+		self.answered_by = frappe.session.user
+		self.answered_at = self.answered_at or frappe.utils.now_datetime()
+		self.status = "Answered"
+
+		if not (self.answer_text or "").strip():
+			frappe.throw(_("An answer cannot be empty"))
+		if not self.disposition:
+			frappe.throw(_("An answer must be classified with a disposition"))

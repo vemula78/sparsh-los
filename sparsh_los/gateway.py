@@ -245,6 +245,11 @@ def spend(days=30):
 	# numeric total under `currency: None` -- an amount in an unknown unit, which is the
 	# one thing the comment above says must not happen.
 	mixed_currency = len(currencies) > 1 or unlabelled
+	# Nothing priced at all is not "zero spend": it is a ledger that records no cost.
+	# Reporting 0.0 reads as cheap, which is the same misreading the `*_recorded` flags
+	# were introduced to end -- and the comment above already said so while the code
+	# still returned the zero.
+	nothing_priced = not priced
 	# Mixed currencies suppress the totals, not the report. Returning a different shape
 	# meant every other figure -- including the count of calls made with no
 	# de-identification assertion, the number worth escalating -- vanished exactly when
@@ -256,19 +261,21 @@ def spend(days=30):
 		"priced_interactions_without_a_currency": len([r for r in priced if not r.cost_currency]),
 		"currencies": sorted(currencies),
 		"mixed_currency": mixed_currency,
-		"total_cost": None if mixed_currency else round(total, 6),
+		"total_cost": None if (mixed_currency or nothing_priced) else round(total, 6),
 		# Three states, not one flag: what the provider billed, what is only estimated,
 		# and what is not known at all. A ledger with no cost fields used to report
 		# total_cost 0.0, which a reader takes as "cheap" rather than "unknown".
-		"total_actual": None if mixed_currency else round(sum(cost(r) for r in actual_rows), 6),
+		"total_actual": None
+		if (mixed_currency or nothing_priced)
+		else round(sum(cost(r) for r in actual_rows), 6),
 		"total_estimated": None
-		if mixed_currency
+		if (mixed_currency or nothing_priced)
 		else round(sum(cost(r) for r in estimated_rows), 6),
 		"interactions_with_no_cost_recorded": len(unknown_rows),
 		"cost_is_partly_estimated": bool(estimated_rows),
 		"learners": len(learners),
 		"cost_per_learner": None
-		if (mixed_currency or not learners)
+		if (mixed_currency or nothing_priced or not learners)
 		else round(learner_total / len(learners), 6),
 		"interactions_with_no_learner": len(rows) - len(learner_rows),
 		"input_tokens": sum(r.input_tokens or 0 for r in rows),

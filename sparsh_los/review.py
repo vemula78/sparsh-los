@@ -43,28 +43,27 @@ def pending(competency=None, limit=50):
 	if limit < 1 or limit > MAX_QUEUE:
 		frappe.throw(_("A queue limit must be between 1 and {0}").format(MAX_QUEUE))
 
-	attempts = frappe.get_all(
-		"Sparsh Attempt",
-		filters={"outcome": "Not Evaluated"},
-		fields=["name", "learner", "activity", "response", "hint_level_used", "attempted_at"],
-		order_by="creation asc",
-		limit=limit,
+	# The limit is applied to rows that are already eligible. It used to take the oldest
+	# `limit` attempts and then discard those with evidence or from another competency,
+	# so fifty old reviewed attempts returned an empty queue while unreviewed work sat
+	# behind them -- the queue starved silently rather than reporting truncation.
+	waiting = frappe.db.sql(
+		"""
+		select a.name, a.learner, a.activity, a.response, a.hint_level_used, a.attempted_at,
+		       act.competency, act.title
+		from `tabSparsh Attempt` a
+		inner join `tabSparsh Activity` act on act.name = a.activity
+		where a.outcome = 'Not Evaluated'
+		  and not exists (
+		      select 1 from `tabSparsh Evidence` e where e.attempt = a.name
+		  )
+		  and (%(competency)s is null or act.competency = %(competency)s)
+		order by a.creation asc
+		limit %(limit)s
+		""",
+		{"competency": competency or None, "limit": limit},
+		as_dict=True,
 	)
-
-	waiting = []
-	for attempt in attempts:
-		if frappe.db.exists("Sparsh Evidence", {"attempt": attempt.name}):
-			continue
-
-		activity = frappe.db.get_value(
-			"Sparsh Activity", attempt.activity, ["competency", "title", "version"], as_dict=True
-		)
-		if not activity:
-			continue
-		if competency and activity.competency != competency:
-			continue
-
-		waiting.append(dict(attempt, competency=activity.competency, title=activity.title))
 
 	return waiting
 

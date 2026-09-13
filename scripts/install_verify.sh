@@ -10,7 +10,7 @@ set -euo pipefail
 
 TARGET="${TARGET:-local}"
 SKIP_VERIFY="${SKIP_VERIFY:-0}"
-MIN_CHECKS="${MIN_CHECKS:-77}"
+MIN_CHECKS="${MIN_CHECKS:-79}"
 
 case "${TARGET}" in
 local)
@@ -78,6 +78,12 @@ host_cmd "docker exec -u frappe ${CONTAINER} bash -lc '
 
 echo "==> Installing app on site ${SITE}"
 host_cmd "docker exec -u frappe ${CONTAINER} bash -lc 'cd ${BENCH_DIR} && bench --site ${SITE} install-app sparsh_los'"
+
+echo "==> Migrating (DocType JSON changes only reach the database through this)"
+# install-app is a no-op when the app is already installed, so a changed DocType JSON
+# never reached the schema and a new column silently did not exist. Bumping `modified`
+# is necessary and was never sufficient on its own.
+host_cmd "docker exec -u frappe ${CONTAINER} bash -lc 'cd ${BENCH_DIR} && bench --site ${SITE} migrate'"
 
 echo "==> Clearing cache"
 host_cmd "docker exec -u frappe ${CONTAINER} bash -lc 'cd ${BENCH_DIR} && bench --site ${SITE} clear-cache'"

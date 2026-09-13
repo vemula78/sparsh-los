@@ -3480,6 +3480,83 @@ def check_escalation_cannot_be_self_answered_by_update():
 		frappe.db.get_value("Sparsh Escalation Question", name, "status") == "Open",
 		"The question did not stay Open after the refused self-answer",
 	)
+
+	# Setting `answered_by` to themselves is the one branch the first guard detected.
+	# A dual-role learner would name somebody else, and the guard -- which asked the
+	# document who answered it -- saw a different name and allowed it.
+	_make_learner(OTHER_LEARNER)
+	other = frappe.get_doc("User", OTHER_LEARNER)
+	if "Sparsh Reviewer" not in [r.role for r in other.roles]:
+		other.append("roles", {"role": "Sparsh Reviewer"})
+		other.save(ignore_permissions=True)
+	frappe.db.commit()
+
+	try:
+		frappe.set_user(DUAL_LEARNER)
+
+		def answer_but_blame_somebody_else():
+			doc = frappe.get_doc("Sparsh Escalation Question", name)
+			doc.status = "Answered"
+			doc.answer_text = "Answered by me, attributed to a colleague."
+			doc.answered_by = OTHER_LEARNER
+			doc.disposition = "Private answer"
+			doc.save()
+
+		frappe.db.savepoint("sparsh_spoof")
+		try:
+			answer_but_blame_somebody_else()
+		except frappe.PermissionError:
+			frappe.db.rollback(save_point="sparsh_spoof")
+		else:
+			frappe.db.rollback(save_point="sparsh_spoof")
+			raise AssertionError(
+				"A learner answered their own question and attributed it to somebody else"
+			)
+	finally:
+		frappe.set_user(original)
+
+	# A real reviewer answers it, and the learner must not be able to rewrite what they
+	# were told -- the stale `answered_by` made that edit look like the reviewer's work.
+	try:
+		frappe.set_user(OTHER_LEARNER)
+		escalation.answer(name, "The reviewer's actual answer.", "Private answer")
+		frappe.db.commit()
+	finally:
+		frappe.set_user(original)
+
+	stored = frappe.db.get_value(
+		"Sparsh Escalation Question", name, ["answered_by", "answer_text"], as_dict=True
+	)
+	_assert(
+		stored.answered_by == OTHER_LEARNER,
+		f"The answer was attributed to {stored.answered_by}, not the reviewer who wrote it",
+	)
+
+	try:
+		frappe.set_user(DUAL_LEARNER)
+
+		def rewrite_the_answer():
+			doc = frappe.get_doc("Sparsh Escalation Question", name)
+			doc.answer_text = "Something the reviewer never said."
+			doc.save()
+
+		frappe.db.savepoint("sparsh_rewrite")
+		try:
+			rewrite_the_answer()
+		except frappe.PermissionError:
+			frappe.db.rollback(save_point="sparsh_rewrite")
+		else:
+			frappe.db.rollback(save_point="sparsh_rewrite")
+			raise AssertionError("A learner rewrote the answer a reviewer had given them")
+	finally:
+		frappe.set_user(original)
+
+	_assert(
+		frappe.db.get_value("Sparsh Escalation Question", name, "answer_text")
+		== "The reviewer's actual answer.",
+		"The stored answer is not what the reviewer wrote",
+	)
+
 	_delete_all("Sparsh Escalation Question", {"learner": DUAL_LEARNER})
 	frappe.db.commit()
 
@@ -3658,6 +3735,19 @@ def check_resource_lineage_is_checked():
 	)
 	_assert(successor.status == "Current", "A valid successor did not become Current")
 
+	# The query above loses a race between two successors of the same predecessor: both
+	# see one Current version, both exempt it, both insert. Only the database can settle
+	# that, so the constraint -- not the check -- is the guarantee being verified here.
+	indexes = frappe.db.sql(
+		"""show index from `tabSparsh Learning Resource` where Key_name = 'unique_current_resource'""",
+		as_dict=True,
+	)
+	_assert(indexes, "There is no unique index on current_key, so two versions can race to Current")
+	_assert(
+		all(row.Non_unique == 0 for row in indexes),
+		"The current_key index exists but is not unique",
+	)
+
 	_delete_all("Sparsh Learning Resource", {"resource_id": ("like", PREFIX + "LIN%")})
 	frappe.db.commit()
 
@@ -3689,6 +3779,14 @@ def check_blank_currency_suppresses_totals():
 		_assert(
 			report["priced_interactions_without_a_currency"] >= 1,
 			"The unlabelled priced row was not counted",
+		)
+		# Without this the check passes on the *labelled* row somebody else recorded in
+		# the same window: `bool(currencies) and unlabelled` is true then too, so the
+		# old expression would have been reported as fixed.
+		_assert(
+			report["currencies"] == [],
+			f"Another priced row carries a currency, so this window cannot test the "
+			f"all-blank case: {report['currencies']}",
 		)
 		_assert(
 			report["mixed_currency"],
@@ -3722,6 +3820,9 @@ def check_supervisor_ignores_rejected_evidence():
 	# The learner is still Practising with three evidence rows, so appearing here is
 	# correct. What must not happen is the explanation citing the rejected passes.
 	rows = [r for r in dashboard.supervisor_view(COMPETENCY)["stuck"] if r["learner"] == LEARNER]
+	# Asserting inside the loop alone is vacuous: if the learner ever stops appearing,
+	# every assertion below is skipped and the check reports success.
+	_assert(rows, "The learner is absent from the stuck list, so nothing below was tested")
 	for row in rows:
 		_assert(
 			row["assisted_passes"] == 0,
@@ -3921,7 +4022,88 @@ def check_no_programme_name_in_messages():
 	_assert(not offenders, f"The programme name appears in user-facing text: {offenders}")
 
 
+
+def check_queue_shows_work_that_is_actually_waiting():
+	"""The limit must apply to eligible rows, not to rows then thrown away.
+
+	`pending` took the oldest `limit` attempts and *then* discarded those with evidence
+	or from another competency, so a handful of old reviewed attempts returned an empty
+	queue while unreviewed work sat behind them. The queue starved without saying so.
+	"""
+	from sparsh_los import review
+
+	_reset_competency()
+	rule = _new_rule(1)
+
+	# Two older attempts that are not eligible, because a reviewer has already judged
+	# them, followed by one that is.
+	for _ in range(2):
+		attempt = _new_attempt(rule.name, outcome="Not Evaluated")
+		evidence = _new_evidence(ACTIVITY_1, "Pass")
+		frappe.db.set_value("Sparsh Evidence", evidence.name, "attempt", attempt.name)
+	frappe.db.commit()
+
+	waiting_attempt = _new_attempt(rule.name, outcome="Not Evaluated")
+	frappe.db.commit()
+
+	# A limit of two: under the old ordering both slots went to the reviewed attempts
+	# and the one genuinely waiting was invisible.
+	queue = review.pending(limit=2)
+	_assert(
+		any(row["name"] == waiting_attempt.name for row in queue),
+		"An attempt waiting for review was hidden behind older attempts that were "
+		"already judged",
+	)
+	_reset_competency()
+	frappe.db.commit()
+
+
+def check_ledger_with_no_price_reports_unknown_not_zero():
+	"""No cost recorded anywhere is not zero spend.
+
+	`total_cost: 0.0` reads as "cheap"; the comment beside the code said exactly that
+	while the code still returned the zero whenever no row carried a price at all.
+	"""
+	from sparsh_los import gateway
+
+	_delete_all("Sparsh Model Interaction", {"provider": "zzv-nocost"})
+	frappe.db.commit()
+
+	try:
+		gateway.record(
+			provider="zzv-nocost", model_id="zzv-model-nocost", purpose="Other", deidentified=1
+		)
+		frappe.db.commit()
+
+		report = gateway.spend(days=1)
+		_assert(
+			report["interactions"] >= 1,
+			"The fixture interaction is not in the reporting window",
+		)
+		if report["priced_interactions_without_a_currency"] or report["currencies"]:
+			# Another check's priced row is in the window; this one cannot discriminate
+			# and says so rather than passing on somebody else's data.
+			raise AssertionError(
+				"A priced row from another check is in the window, so the no-price case "
+				"cannot be tested here"
+			)
+		for key in ("total_cost", "total_actual", "total_estimated"):
+			_assert(
+				report[key] is None,
+				f"{key} was reported as {report[key]} when no interaction carried a price",
+			)
+		_assert(
+			report["interactions_with_no_cost_recorded"] >= 1,
+			"The costless interaction was not counted as unknown",
+		)
+	finally:
+		_delete_all("Sparsh Model Interaction", {"provider": "zzv-nocost"})
+		frappe.db.commit()
+
+
 CHECKS = (
+	("queue_shows_work_that_is_actually_waiting", check_queue_shows_work_that_is_actually_waiting),
+	("ledger_with_no_price_reports_unknown_not_zero", check_ledger_with_no_price_reports_unknown_not_zero),
 	("queue_limit_is_bounded", check_queue_limit_is_bounded),
 	("refresh_due_advice_names_the_refresher", check_refresh_due_advice_names_the_refresher),
 	("cross_user_endpoints_refuse", check_cross_user_endpoints_refuse),

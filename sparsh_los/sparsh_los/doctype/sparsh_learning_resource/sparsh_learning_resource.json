@@ -19,6 +19,7 @@
   "lms_lesson",
   "file_reference",
   "section_break_lineage",
+  "current_key",
   "supersedes",
   "column_break_lineage",
   "notes"
@@ -110,6 +111,15 @@
    "label": "Lineage"
   },
   {
+   "fieldname": "current_key",
+   "fieldtype": "Data",
+   "label": "Current Key",
+   "read_only": 1,
+   "hidden": 1,
+   "no_copy": 1,
+   "description": "Set while this version is current; the database enforces one per resource."
+  },
+  {
    "description": "The resource this one replaces. Superseding never deletes: earlier evidence must stay historically interpretable.",
    "fieldname": "supersedes",
    "fieldtype": "Link",
@@ -128,15 +138,57 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-13 18:10:00.000000",
+ "modified": "2026-09-13 11:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Learning Resource",
  "owner": "Administrator",
  "permissions": [
-  {"amend": 0, "cancel": 0, "create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "submit": 0, "write": 1},
-  {"amend": 0, "cancel": 0, "create": 0, "delete": 0, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "Sparsh Reviewer", "share": 0, "submit": 0, "write": 0},
-  {"amend": 0, "cancel": 0, "create": 0, "delete": 0, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "Sparsh Learner", "share": 0, "submit": 0, "write": 0}
+  {
+   "amend": 0,
+   "cancel": 0,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 0,
+   "write": 1
+  },
+  {
+   "amend": 0,
+   "cancel": 0,
+   "create": 0,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sparsh Reviewer",
+   "share": 0,
+   "submit": 0,
+   "write": 0
+  },
+  {
+   "amend": 0,
+   "cancel": 0,
+   "create": 0,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sparsh Learner",
+   "share": 0,
+   "submit": 0,
+   "write": 0
+  }
  ],
  "sort_field": "modified",
  "sort_order": "DESC",
