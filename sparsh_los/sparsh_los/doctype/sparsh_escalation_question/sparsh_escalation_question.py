@@ -104,3 +104,24 @@ class SparshEscalationQuestion(Document):
 			frappe.throw(_("An answer cannot be empty"))
 		if not self.disposition:
 			frappe.throw(_("An answer must be classified with a disposition"))
+
+	def on_trash(self):
+		"""Freezing an answered question is worth nothing if it can be deleted instead.
+
+		`validate` refuses every edit once the question is Answered, but deletion does
+		not pass through `validate`, and the installed System Manager DocPerm carries
+		`delete`. The answer is what a learner was actually told, together with the
+		question and the context that produced it -- removing the row removes the whole
+		record of the exchange, which is the same loss the freeze exists to prevent.
+
+		Data maintenance declares itself with a flag, as it does on Attempt and Event,
+		rather than working around the guard.
+		"""
+		if frappe.flags.in_sparsh_maintenance or frappe.flags.in_uninstall:
+			return
+
+		if self.status == "Answered":
+			frappe.throw(
+				_("An answered question is the record of what a learner was told and cannot be deleted"),
+				frappe.PermissionError,
+			)

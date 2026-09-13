@@ -12,6 +12,45 @@ class SparshLearningResource(Document):
 			frappe.throw(_("A resource cannot supersede itself"))
 
 		self._check_lineage()
+		self._material_changes_need_a_new_version()
+
+	# What the learner is actually sent to study. A change to any of these is a change
+	# of material, however the title reads.
+	MATERIAL_FIELDS = ("resource_id", "version", "resource_type", "url", "lms_lesson",
+					   "file_reference", "source")
+
+	def _material_changes_need_a_new_version(self):
+		"""A Current resource's material is fixed; changing it means a new version.
+
+		The refresher hook fires on `became_current` -- a status transition. Editing the
+		`url` of a resource that is already Current is not a transition, so the edit went
+		through, `current_key` was preserved, and nothing marked the learners who had
+		already studied the old material Refresh Due. Their competence state then
+		asserted mastery of material the row no longer points at.
+
+		Supersession is the path the programme owner specified for exactly this: the old
+		version stays, earlier evidence stays with it, and its readers become Refresh
+		Due. So the edit is refused rather than made to trigger a refresh -- a refresh
+		without a preserved predecessor still loses the record of what was studied.
+
+		Editorial fields -- title, notes, effective_date, status, supersedes -- are not
+		material and stay editable.
+		"""
+		if self.is_new():
+			return
+
+		before = self.get_doc_before_save()
+		if not before or before.status != "Current":
+			return
+
+		changed = [f for f in self.MATERIAL_FIELDS if self.get(f) != before.get(f)]
+		if changed:
+			frappe.throw(
+				_("{0} is Current: change {1} by publishing a new version that supersedes it, "
+				  "so earlier evidence keeps the material it was earned on").format(
+					self.name, ", ".join(changed)
+				)
+			)
 
 	def _check_lineage(self):
 		"""Supersession is a claim about the same material, so check that it is.

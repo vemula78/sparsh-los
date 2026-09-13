@@ -3572,8 +3572,10 @@ def check_escalation_cannot_be_self_answered_by_update():
 		frappe.db.savepoint("sparsh_spoof")
 		try:
 			answer_but_blame_somebody_else()
-		except frappe.PermissionError:
+		except frappe.PermissionError as exc:
 			frappe.db.rollback(save_point="sparsh_spoof")
+			_assert("your own question" in str(exc).lower(),
+					f"Refused, but for another reason: {exc}")
 		else:
 			frappe.db.rollback(save_point="sparsh_spoof")
 			raise AssertionError(
@@ -3610,8 +3612,10 @@ def check_escalation_cannot_be_self_answered_by_update():
 		frappe.db.savepoint("sparsh_rewrite")
 		try:
 			rewrite_the_answer()
-		except frappe.PermissionError:
+		except frappe.PermissionError as exc:
 			frappe.db.rollback(save_point="sparsh_rewrite")
+			_assert("already been answered" in str(exc).lower(),
+					f"Refused, but for another reason: {exc}")
 		else:
 			frappe.db.rollback(save_point="sparsh_rewrite")
 			raise AssertionError("A learner rewrote the answer a reviewer had given them")
@@ -3644,8 +3648,10 @@ def check_escalation_cannot_be_self_answered_by_update():
 		frappe.db.savepoint("sparsh_reassign")
 		try:
 			reassign_then_answer()
-		except frappe.PermissionError:
+		except frappe.PermissionError as exc:
 			frappe.db.rollback(save_point="sparsh_reassign")
+			_assert("belongs to the learner" in str(exc).lower(),
+					f"Refused, but for another reason: {exc}")
 		else:
 			frappe.db.rollback(save_point="sparsh_reassign")
 			raise AssertionError(
@@ -3658,6 +3664,73 @@ def check_escalation_cannot_be_self_answered_by_update():
 		frappe.db.get_value("Sparsh Escalation Question", fresh, "learner") == DUAL_LEARNER,
 		"The question changed hands",
 	)
+
+	# The freeze is stated as "every field except the framework's own bookkeeping", but
+	# the cases above only ever change `learner` and `answer_text`. A guard narrowed to
+	# a list of the fields the harness happens to try would still pass all of them, so
+	# every writable field on the answered question is tried in turn.
+	answered = frappe.get_doc("Sparsh Escalation Question", name)
+	bookkeeping = {"modified", "modified_by", "_user_tags", "_comments", "_assign",
+				   "_liked_by", "idx", "docstatus", "name", "owner", "creation",
+				   "doctype", "parent", "parentfield", "parenttype"}
+	meta = frappe.get_meta("Sparsh Escalation Question")
+	unfrozen = []
+	for field in meta.fields:
+		if field.fieldname in bookkeeping or field.fieldtype in frappe.model.no_value_fields:
+			continue
+		current = answered.get(field.fieldname)
+		if field.fieldtype in ("Datetime", "Date"):
+			altered = frappe.utils.add_to_date(frappe.utils.now_datetime(), days=-3)
+		elif field.fieldtype == "Select":
+			options = [o for o in (field.options or "").split("\n") if o and o != current]
+			if not options:
+				continue
+			altered = options[0]
+		elif field.fieldtype in ("Link", "Data", "Small Text", "Text", "Long Text", "Text Editor"):
+			altered = "zzv-frozen-field-probe"
+		elif field.fieldtype in ("Int", "Float", "Check"):
+			altered = (current or 0) + 1
+		else:
+			continue
+		if altered == current:
+			continue
+
+		frappe.db.savepoint("sparsh_frozen")
+		try:
+			doc = frappe.get_doc("Sparsh Escalation Question", name)
+			doc.set(field.fieldname, altered)
+			doc.save(ignore_permissions=True)
+		except frappe.PermissionError:
+			pass
+		except frappe.ValidationError:
+			# A link that does not resolve, a mandatory field emptied: refused by another
+			# layer, so this field says nothing either way about the freeze.
+			pass
+		else:
+			unfrozen.append(field.fieldname)
+		finally:
+			frappe.db.rollback(save_point="sparsh_frozen")
+
+	_assert(
+		not unfrozen,
+		f"An answered question accepted a change to {unfrozen}, so the freeze is a list "
+		f"of the fields the harness tries rather than the guarantee it claims",
+	)
+
+	# A freeze that can be stepped around by deleting the row protects nothing. The
+	# System Manager DocPerm carries `delete`, and deletion never reaches `validate`.
+	frappe.db.savepoint("sparsh_delete_answered")
+	try:
+		frappe.delete_doc("Sparsh Escalation Question", name, force=True, ignore_permissions=True)
+	except frappe.PermissionError as exc:
+		frappe.db.rollback(save_point="sparsh_delete_answered")
+		_assert("cannot be deleted" in str(exc).lower(),
+				f"Refused, but for another reason: {exc}")
+	else:
+		frappe.db.rollback(save_point="sparsh_delete_answered")
+		raise AssertionError(
+			"An answered question was deleted, which removes the answer the freeze protects"
+		)
 	_assert(
 		frappe.db.get_value("Sparsh Escalation Question", fresh, "status") == "Open",
 		"The reassigned question was answered anyway",
@@ -3904,6 +3977,13 @@ def check_resource_lineage_is_checked():
 	_assert(
 		all(row.Non_unique == 0 for row in indexes),
 		"The current_key index exists but is not unique",
+	)
+	# The name alone proves nothing: a unique index over some other column, carrying this
+	# constraint name, satisfied both assertions above.
+	_assert(
+		[row.Column_name for row in indexes] == ["current_key"],
+		f"unique_current_resource covers {[row.Column_name for row in indexes]}, "
+		f"not current_key alone",
 	)
 
 	_delete_all("Sparsh Learning Resource", {"resource_id": ("like", PREFIX + "LIN%")})
@@ -4222,12 +4302,9 @@ def check_queue_shows_work_that_is_actually_waiting():
 		frappe.db.set_value("Sparsh Evidence", evidence.name, "attempt", attempt.name)
 	frappe.db.commit()
 
-	waiting_attempt = _new_attempt(rule.name, outcome="Not Evaluated")
-	frappe.db.commit()
-
-	# An older *eligible* attempt on another competency, so the competency predicate is
-	# exercised too: without it in the query, this row consumes a slot and hides the one
-	# the caller asked for.
+	# The other-competency attempt is created *before* the one being looked for, so it
+	# is genuinely older. Created after, it sorted behind the waiting attempt and a
+	# query that filtered the competency only after limiting still passed.
 	other_activity_id = PREFIX + "QUEUE-OTHER"
 	_delete_all("Sparsh Activity", {"activity_id": other_activity_id})
 	other_activity = frappe.new_doc("Sparsh Activity")
@@ -4239,18 +4316,33 @@ def check_queue_shows_work_that_is_actually_waiting():
 	other_activity.version = 1
 	other_activity.evaluation_mode = "Human review"
 	other_activity.insert(ignore_permissions=True)
+	# Two of them, and the scoped call asks for two: a query that filters the competency
+	# only after limiting spends both slots on these and returns nothing, while a query
+	# that filters first never sees them. One foreign row was not enough -- it left a
+	# slot free, so the starved and the correct query returned the same thing.
 	other_attempt = _new_attempt(rule.name, outcome="Not Evaluated", activity=other_activity.name)
+	second_other = _new_attempt(rule.name, outcome="Not Evaluated", activity=other_activity.name)
+	frappe.db.commit()
+
+	waiting_attempt = _new_attempt(rule.name, outcome="Not Evaluated")
 	frappe.db.commit()
 
 	scoped = review.pending(competency=COMPETENCY, limit=2)
 	_assert(
-		not any(row["name"] == other_attempt.name for row in scoped),
+		not any(row["name"] in (other_attempt.name, second_other.name) for row in scoped),
 		"A competency-scoped queue returned an attempt from another competency",
 	)
+	# Without this, a scoped queue that returns nothing at all satisfies the assertion
+	# above and the check passes on an empty result.
+	_assert(
+		any(row["name"] == waiting_attempt.name for row in scoped),
+		"The competency-scoped queue omitted the attempt waiting in that competency",
+	)
 
-	# A limit of two: under the old ordering both slots went to the reviewed attempts
-	# and the one genuinely waiting was invisible.
-	queue = review.pending(limit=2)
+	# Four slots, of which the two foreign-competency rows take two: under the old
+	# ordering the two *reviewed* attempts took the earliest slots as well and the one
+	# genuinely waiting was pushed out of the window entirely.
+	queue = review.pending(limit=4)
 	_assert(
 		any(row["name"] == waiting_attempt.name for row in queue),
 		"An attempt waiting for review was hidden behind older attempts that were "
@@ -4274,7 +4366,7 @@ def check_ledger_with_no_price_reports_unknown_not_zero():
 	frappe.db.commit()
 
 	try:
-		gateway.record(
+		unpriced = gateway.record(
 			provider="zzv-nocost", model_id="zzv-model-nocost", purpose="Other", deidentified=1
 		)
 		frappe.db.commit()
@@ -4303,6 +4395,53 @@ def check_ledger_with_no_price_reports_unknown_not_zero():
 		_assert(
 			report["total_covers_every_interaction"] is False,
 			"A period containing an unpriced interaction claimed its totals were complete",
+		)
+
+		# The assertion above holds for a window where *nothing* is priced, which is also
+		# what `not priced` would report -- and `not priced` is wrong for the case the
+		# flag exists to explain: some rows priced, some not, so the total is a real
+		# subtotal rather than nothing at all. The guard above has already established
+		# that this window holds only this check's rows, so the mixed case can be built.
+		gateway.record(
+			provider="zzv-nocost", model_id="zzv-model-priced", purpose="Other",
+			deidentified=1, actual_cost=0.25, cost_currency="INR",
+		)
+		frappe.db.commit()
+
+		mixed = gateway.spend(days=1)
+		_assert(
+			mixed["total_cost"] == 0.25,
+			f"A window with one priced row reported a total of {mixed['total_cost']}, "
+			f"so a real subtotal was suppressed",
+		)
+		_assert(
+			mixed["total_covers_every_interaction"] is False,
+			"A window where only some interactions carry a price reported its total as "
+			"covering every interaction",
+		)
+
+		# Both assertions above are also satisfied by `not priced` and by a constant
+		# False, so neither discriminates on its own. The case that separates them is a
+		# window where *every* row is priced: the flag must then be True, which a
+		# constant False and `not priced` both get wrong.
+		frappe.flags.in_sparsh_maintenance = True
+		try:
+			frappe.delete_doc("Sparsh Model Interaction", unpriced, force=True,
+							  ignore_permissions=True)
+		finally:
+			frappe.flags.in_sparsh_maintenance = False
+		frappe.db.commit()
+
+		complete = gateway.spend(days=1)
+		_assert(
+			complete["interactions_with_no_cost_recorded"] == 0,
+			"The unpriced fixture is still in the window, so the complete case cannot be "
+			"tested here",
+		)
+		_assert(
+			complete["total_covers_every_interaction"] is True,
+			"A window in which every interaction carries a price still reported its "
+			"total as incomplete",
 		)
 
 		# The empty-period branch (`bool(rows)` in `nothing_priced`) is deliberately not
@@ -4353,6 +4492,121 @@ def check_partial_only_history_is_named_accurately():
 
 	_reset_competency()
 	frappe.db.commit()
+
+
+
+def check_current_resource_material_cannot_change_in_place():
+	"""A resource that is Current points at fixed material, or the refresh never fires.
+
+	`on_update` marks readers Refresh Due on `became_current` -- a *transition*. Editing
+	the `url` of a resource that is already Current is not a transition, so the edit went
+	through, the key was preserved, and every learner who had studied the old material
+	kept a competence state asserting mastery of material the row no longer pointed at.
+
+	Refusing the edit, rather than firing a refresh on it, is the point: a refresh with
+	no preserved predecessor still loses the record of what was actually studied.
+	"""
+	resource_id = PREFIX + "MAT"
+	_delete_all("Sparsh Learning Resource", {"resource_id": resource_id})
+	frappe.db.commit()
+
+	doc = frappe.new_doc("Sparsh Learning Resource")
+	doc.resource_id = resource_id
+	doc.version = 1
+	doc.title = "Material under test"
+	doc.resource_type = "Manual section"
+	doc.status = "Current"
+	doc.url = "https://example.invalid/original"
+	doc.insert(ignore_permissions=True)
+	frappe.db.commit()
+
+	try:
+		# Editorial fields stay editable: refusing these would make an ordinary typo
+		# correction require a new version, which is not what was asked for.
+		doc = frappe.get_doc("Sparsh Learning Resource", doc.name)
+		doc.title = "Material under test, retitled"
+		doc.notes = "A clarifying note."
+		doc.save(ignore_permissions=True)
+		frappe.db.commit()
+		_assert(
+			frappe.db.get_value("Sparsh Learning Resource", doc.name, "current_key") == resource_id,
+			"An editorial edit dropped the current key",
+		)
+
+		for field, value in (
+			("url", "https://example.invalid/replaced"),
+			("lms_lesson", "zzv-some-other-lesson"),
+			("file_reference", "zzv-some-other-file"),
+			("source", "A different source document"),
+			("resource_type", "Explainer"),
+		):
+			frappe.db.savepoint("sparsh_material")
+			try:
+				edit = frappe.get_doc("Sparsh Learning Resource", doc.name)
+				edit.set(field, value)
+				edit.save(ignore_permissions=True)
+			except frappe.ValidationError as exc:
+				frappe.db.rollback(save_point="sparsh_material")
+				_assert(
+					"publishing a new version" in str(exc),
+					f"Changing {field} was refused, but for another reason: {exc}",
+				)
+			else:
+				frappe.db.rollback(save_point="sparsh_material")
+				raise AssertionError(
+					f"A Current resource's {field} was changed in place, so learners who "
+					f"studied the old material were never marked Refresh Due"
+				)
+	finally:
+		_delete_all("Sparsh Learning Resource", {"resource_id": resource_id})
+		frappe.db.commit()
+
+
+def check_existing_current_resources_are_keyed():
+	"""The unique index is only a constraint over rows that carry the key.
+
+	`current_key` arrived with the index. On a site that already held resources, every
+	existing row predated the column and held NULL -- and NULLs do not collide, so the
+	index installed cleanly over a table that could already contain two Current versions
+	of the same resource. The constraint read as enforced while enforcing nothing for
+	precisely the rows that were there first.
+
+	The patch backfills them. This asserts the site it runs on has no Current resource
+	left unkeyed, which is the state the patch is responsible for producing -- and it
+	fails on a bench where the patch has not run.
+	"""
+	unkeyed = frappe.db.sql(
+		"""select name, resource_id from `tabSparsh Learning Resource`
+		   where status = 'Current' and (current_key is null or current_key = '')""",
+		as_dict=True,
+	)
+	_assert(
+		not unkeyed,
+		f"{len(unkeyed)} Current resource(s) carry no current_key, so the unique index "
+		f"does not constrain them: {[r.resource_id for r in unkeyed][:5]}",
+	)
+
+	# A keyed row must be keyed to itself, or the index constrains the wrong thing.
+	mismatched = frappe.db.sql(
+		"""select name, resource_id, current_key from `tabSparsh Learning Resource`
+		   where current_key is not null and current_key != '' and current_key != resource_id""",
+		as_dict=True,
+	)
+	_assert(
+		not mismatched,
+		f"{len(mismatched)} resource(s) hold a key that is not their resource_id",
+	)
+
+	# And a row that is not Current must not be holding one.
+	stale = frappe.db.sql(
+		"""select name from `tabSparsh Learning Resource`
+		   where status != 'Current' and current_key is not null and current_key != ''""",
+		as_dict=True,
+	)
+	_assert(
+		not stale,
+		f"{len(stale)} superseded or draft resource(s) still hold the Current key",
+	)
 
 
 CHECKS = (
@@ -4435,6 +4689,9 @@ CHECKS = (
 	("new_learner_can_begin", check_new_learner_can_begin),
 	("certification_cannot_be_born_suspended", check_certification_cannot_be_born_suspended),
 	("attempt_cannot_be_deleted", check_attempt_cannot_be_deleted),
+	("current_resource_material_cannot_change_in_place",
+	 check_current_resource_material_cannot_change_in_place),
+	("existing_current_resources_are_keyed", check_existing_current_resources_are_keyed),
 	("cleanup", check_cleanup),
 )
 

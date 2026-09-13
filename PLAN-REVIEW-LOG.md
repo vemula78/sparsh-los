@@ -1212,3 +1212,88 @@ The assistance race; rule-free automatic scoring, where the readiness verdict is
 execution path is not, and closing it is the programme owner's call; and the programme-name
 scanner, which reads `.py` string constants and so cannot see client-side templates or a name
 assembled from separate literals — a tripwire, as the determinism scan is.
+
+---
+
+## Audit 20 — round 5, independent (ChatGPT/Astra), against `f3ae955`
+
+The first round in which no save-path bypass was found. Both round-4 fixes were confirmed to
+hold: learner reassignment is refused, and editing a Current resource preserves its key. The
+findings moved outward from the save path to the three places a guard on `validate` does not
+reach — **deletion, in-place content change, and existing data at upgrade time** — plus five
+harness checks narrower than their own descriptions.
+
+The auditor stated plainly that it reviewed source and diff and did not execute the harness.
+Every finding below was verified against the code here before being acted on.
+
+| # | Finding | Severity | Disposition |
+|---|---|---|---|
+| A | An answered question can be deleted; `validate` freezes it but there is no `on_trash`, and the System Manager DocPerm carries `delete` | Major | **Confirmed, fixed.** Five sibling DocTypes already had the guard; this one did not. Maintenance declares itself with a flag, as on Attempt and Event |
+| B | A Current resource's `url`, `lms_lesson`, `file_reference` or `source` can be changed in place. `on_update` fires on `became_current`, a *transition*, so an edit is not one — learners keep a competence state asserting mastery of material the row no longer points at | Major | **Confirmed, fixed.** Material fields are refused on a Current row, directing the change to supersession. Refusing rather than firing a refresh is deliberate: a refresh with no preserved predecessor still loses what was studied. Editorial fields stay editable |
+| C | No patch backfills `current_key`. On a site with existing data every row predates the column and holds NULL — and NULLs do not collide, so the unique index installs cleanly over a table that may already hold two Current versions | Major | **Confirmed, fixed.** `backfill_resource_current_keys` claims the key for single Current rows and *reports* contested ones rather than demoting one, because choosing between two Current versions is a programme decision. Proved both ways on a seeded legacy row |
+| D | The completeness assertion only exercised a wholly unpriced window | Minor | **Confirmed, fixed** — and the auditor's suggested fix was not sufficient either (see below) |
+| E | The scoped-queue assertion is satisfied by an empty result, and the "older" foreign attempt was created *after* the one it was meant to hide | Major | **Confirmed, fixed.** First attempt at the fix still passed the revert; see below |
+| F | The freeze test changes `learner` and `question_text` only, so a guard narrowed to a list of those fields would pass | Major | **Confirmed, fixed.** Every writable field is now tried in turn |
+| G | Resource tests exercise fresh records, never an upgrade | Major | **Confirmed**, closed by C's new check |
+| H | The index check asserts the constraint name and uniqueness, never the column | Minor | **Confirmed, fixed.** Asserted by revert-proof only in part — see residual risk |
+| I | The empty-window branch of `nothing_priced` is untested | Minor | **Deferred.** The in-code reason stands: `spend` bounds `days` at 1 and this bench's ledger is never empty inside any window it accepts. Changing the bound to make it testable is changing code to suit a test |
+| J | Some escalation refusals accept any `PermissionError` without checking the reason | Minor | **Confirmed, fixed.** Three catches now assert the message |
+
+The auditor also corrected its own round-4 claim: losing the key did not permit a second
+sequential Current insert, because the application's clash query still rejected it. The missing
+key weakened *database* enforcement under concurrency, not the sequential path. Recorded because
+the earlier entry in this log overstates that consequence.
+
+### Two of my own fixes did not hold on first attempt
+
+Continuing the pattern this log exists to record.
+
+- **E.** I reordered the fixture so the foreign-competency attempt was genuinely older and added
+  the positive assertion. Reverting `review.pending` to filter the competency *after* limiting
+  still passed: with one foreign row and a limit of two, the starved query and the correct one
+  returned the same thing. A second foreign row makes the limit starve. Proved: "The
+  competency-scoped queue omitted the attempt waiting in that competency".
+- **D.** The auditor's mixed priced/unpriced case does not discriminate either — `not priced`
+  and `not unknown_rows` both report False there. The case that separates them is a window in
+  which *every* row is priced, where the flag must be True. Proved against both a constant
+  `False` and `not priced`.
+
+### Revert proofs
+
+Each fix reverted, its check observed failing, the revert undone:
+
+| Reverted | Check that failed |
+|---|---|
+| `on_trash` removed | "An answered question was deleted, which removes the answer the freeze protects" |
+| Material guard removed | "A Current resource's url was changed in place, so learners who studied the old material were never marked Refresh Due" |
+| Freeze narrowed to `learner`/`answer_text` | "An answered question accepted a change to `['escalation_reason', 'status', 'raised_at', 'question_text', 'disposition', 'answered_at', 'context_snapshot']`" — seven fields, which is finding F made concrete |
+| Competency filtered after limiting | "The competency-scoped queue omitted the attempt waiting in that competency" |
+| `total_covers_every_interaction` → `not priced` | "A period containing an unpriced interaction claimed its totals were complete" |
+| `total_covers_every_interaction` → constant `False` | "A window in which every interaction carries a price still reported its total as incomplete" |
+| A Current row's key nulled in SQL | "1 Current resource(s) carry no current_key, so the unique index does not constrain them" |
+
+The backfill patch was then run against that seeded row and claimed the key; run against two
+Current rows of the same resource, it claimed neither and named both.
+
+### Acceptance check
+
+`./scripts/install_verify.sh`, full uninstall-free path including `migrate`: exit 0,
+`RESULT passed=82 failed=0`. `MIN_CHECKS` raised 80 → 82.
+
+### Residual risk
+
+- **H is only partly proved.** The check now asserts `Column_name == ["current_key"]`, but I did
+  not build a unique index over a different column carrying that constraint name, so the
+  assertion is verified by reading rather than by reverting. Weaker than every other entry here.
+- **The freeze loop skips fields another layer refuses.** A field rejected as an unresolvable
+  Link or an emptied mandatory is counted as saying nothing either way, so a field that is
+  *only* protected by mandatoriness would not be distinguished from one the freeze protects.
+- **The material-field list is a list.** `MATERIAL_FIELDS` names seven fields; a field added to
+  the DocType later is editorial by default. The same ageing objection the auditor raised
+  against the freeze's exclusion list applies here, inverted.
+- The audit was source-and-diff only and did not execute the harness or reproduce the probe.
+
+### Still open
+
+Unchanged: the assistance race; rule-free automatic scoring; the programme-name scanner's blind
+spots; matrix and case-pack checks establishing volume rather than identity.
