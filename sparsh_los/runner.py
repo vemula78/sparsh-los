@@ -261,10 +261,14 @@ def submit(activity, response):
 	rung of the hint ladder and invites a retry; the answer is revealed only at the
 	top of the ladder.
 	"""
+	# Enrolment first, exactly as `start` does it. Looking the activity up ahead of the
+	# gate let an unenrolled account tell a real activity name from a fabricated one by
+	# which error came back -- a small oracle, but one that leaks the content catalogue
+	# to precisely the accounts that may not read it.
+	_require_enrolment()
+
 	doc = _activity(activity)
 	learner = frappe.session.user
-
-	_require_enrolment()
 
 	throttle("Sparsh Attempt")
 	hint_level, retry_index = _session_position(learner, activity)

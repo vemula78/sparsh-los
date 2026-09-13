@@ -1002,3 +1002,38 @@ moved into a `finally`.
 The audit also corrected my own F14 write-up: `_apply_learner_limits` replaces the forged outcome,
 which I had verified, but it noted the probe itself never re-read the stored row — true, the
 re-read was a separate script. The probe now stands as evidence of the refusal, not of the value.
+
+## 13-Sep-2026 — Audit 17 follow-up: three of the deferred items closed
+
+**The endpoint inventory was short.** Audit 17 flagged `Sparsh Certification Record.current()`
+as decorated in source but absent from the runtime's 21-method registry, and reasonably asked
+whether it was reachable. It is. The introspection walked a hand-kept list of 13 top-level
+modules and never entered the doctype packages. It now walks the whole package with
+`pkgutil.walk_packages`, and the count is **22**. Second time today an audit finding was the
+measuring tool rather than the app — the first being eleven false "ALLOWED" probes. Both failed
+in the direction of looking worse than reality, which is the safer direction and still wrong.
+`scripts/runtime_facts.py`, commit `ba5e4c7`.
+
+**The activity-existence oracle is closed.** `runner.submit` looked the activity up before
+`_require_enrolment()`, so an unenrolled account got `DoesNotExistError` for an invented name
+and `PermissionError` for a real one — enough to enumerate the catalogue a guess at a time.
+Enrolment now gates first, as `start` always did. `check_unenrolled_learns_nothing_from_the_error`
+compares the two refusals and requires them identical; with the fix reverted it fails with both
+messages printed side by side.
+
+**Every `_raises` call now names the reason it expects.** All 21 bare sites could pass on an
+unrelated `ValidationError` — the helper's own docstring said so. Rather than guess the reasons
+from the code the checks are supposed to be independent of, the helper was temporarily made to
+log what each refusal actually said, the harness was run, and the 21 messages were read off the
+output. The expected substrings are therefore observations, not assumptions.
+
+That the harness still reports 73 passing is itself the proof the sweep landed: a wrong
+substring raises `refused, but for another reason`, so every one of the 21 was matched against
+the real message. The sites covered rule-version immutability, evidence reconciliation, direct
+mastery mutation, critical-error certification blocking, activity/competency reconciliation,
+identifier rejection, cancellation guards, duplicate certification, and the deletion guards.
+
+Still open from audit 17: the assistance race (needs a lock on (learner, activity), a schema
+decision), `review.pending` limit bounds, the Refresh Due guidance text, domain strings in
+validation messages, shared-site lower bounds, and cross-user coverage for
+`certification_record.current()` and `orchestrator.next_in_pathway()`.

@@ -66,7 +66,9 @@ def _raises(fn, message, expect=None):
 
 	Without `expect` this only proves something in the validation stack objected.
 	frappe.PermissionError subclasses ValidationError, so a check could delete the rule
-	it tests and still pass on an unrelated refusal further down.
+	it tests and still pass on an unrelated refusal further down. Every call site now
+	passes one: the reasons were collected by logging what each refusal actually said,
+	rather than guessed from the code the check is meant to be independent of.
 	"""
 	frappe.db.savepoint("sparsh_verify")
 	try:
@@ -328,7 +330,7 @@ def check_rule_version_snapshot():
 		attempt_1.rule_version = 2
 		attempt_1.save(ignore_permissions=True)
 
-	_raises(mutate, "Editing a stored rule_version was allowed")
+	_raises(mutate, "Editing a stored rule_version was allowed", expect="historical snapshot")
 	frappe.db.commit()
 
 
@@ -349,7 +351,7 @@ def check_evidence_cannot_contradict_attempt():
 		evidence.critical_error = 0
 		evidence.insert(ignore_permissions=True)
 
-	_raises(launder, "Evidence citing a critical attempt was allowed to record a pass")
+	_raises(launder, "Evidence citing a critical attempt was allowed to record a pass", expect="contradicts the attempt")
 	frappe.db.commit()
 
 
@@ -362,7 +364,7 @@ def check_mastery_not_directly_settable():
 		doc.insert(ignore_permissions=True)
 
 	_assert(not frappe.flags.in_mastery_recompute, "recompute flag leaked from an earlier step")
-	_raises(force_state, "A Mastery State was insertable directly")
+	_raises(force_state, "A Mastery State was insertable directly", expect="cannot be set directly")
 
 
 def check_mastery_derived_from_evidence():
@@ -401,7 +403,7 @@ def check_critical_error_blocks():
 		cert.certification_status = "Full"
 		cert.insert(ignore_permissions=True)
 
-	_raises(certify, "Certification was allowed despite a standing critical error")
+	_raises(certify, "Certification was allowed despite a standing critical error", expect="blocks certification")
 	frappe.db.commit()
 
 
@@ -671,7 +673,7 @@ def check_evidence_activity_must_match_competency():
 	def cross_credit():
 		_new_evidence(ACTIVITY_1, "Pass", competency=COMPETENCY_2, submit=False)
 
-	_raises(cross_credit, "Evidence credited a competency the activity does not belong to")
+	_raises(cross_credit, "Evidence credited a competency the activity does not belong to", expect="belongs to competency")
 	frappe.db.commit()
 
 
@@ -807,7 +809,7 @@ def check_escalation_to_human_review():
 	def bad_disposition():
 		escalation.answer(question, "text", "Something else")
 
-	_raises(bad_disposition, "An unrecognised disposition was accepted")
+	_raises(bad_disposition, "An unrecognised disposition was accepted", expect="not a recognised disposition")
 
 	queue = escalation.open_queue()
 	_assert(
@@ -966,7 +968,7 @@ def check_only_review_clears_critical_error():
 		doc.certification_status = "Full"
 		doc.insert(ignore_permissions=True)
 
-	_raises(certify, "Certification was allowed while a critical error stood")
+	_raises(certify, "Certification was allowed while a critical error stood", expect="blocks certification")
 
 	review = frappe.new_doc("Sparsh Human Review")
 	review.evidence = critical.name
@@ -1019,6 +1021,7 @@ def check_activityless_evidence_cannot_demonstrate():
 	_raises(
 		lambda: _new_evidence(None, "Pass", submit=False),
 		"An unaided pass with no activity was accepted",
+		expect="carries no provenance",
 	)
 	_assert(
 		_state() not in ("Demonstrated", "Mastered"),
@@ -1039,12 +1042,12 @@ def check_identifiers_are_refused():
 		attempt.response = "Discussed with WS123456 about diet"
 		attempt.insert(ignore_permissions=True)
 
-	_raises(mrn_in_response, "An MRN-shaped identifier was accepted in an attempt")
+	_raises(mrn_in_response, "An MRN-shaped identifier was accepted in an attempt", expect="patient identifier")
 
 	def aadhaar_in_question():
 		escalation.raise_question("Caregiver quoted 123456789012, what do I do?", activity=ACTIVITY_1)
 
-	_raises(aadhaar_in_question, "A 12-digit identifier was accepted in an escalation")
+	_raises(aadhaar_in_question, "A 12-digit identifier was accepted in an escalation", expect="patient identifier")
 
 	# The grouped and separated forms people actually write.
 	for text, label in (
@@ -1061,7 +1064,7 @@ def check_identifiers_are_refused():
 			doc.response = value
 			doc.insert(ignore_permissions=True)
 
-		_raises(attempt_with, f"{label} was accepted")
+		_raises(attempt_with, f"{label} was accepted", expect="patient identifier")
 
 	# Ordinary clinical prose must still be accepted.
 	attempt = frappe.new_doc("Sparsh Attempt")
@@ -1318,6 +1321,7 @@ def check_clearance_must_be_backed_by_review():
 	_raises(
 		lambda: evidence.cancel(),
 		"Evidence carrying an unresolved critical error was cancelled",
+		expect="cannot be cancelled",
 	)
 	frappe.db.commit()
 
@@ -1425,7 +1429,7 @@ def check_evidence_cannot_contradict_the_attempt():
 		doc.assistance_level = 0
 		doc.insert(ignore_permissions=True)
 
-	_raises(upgrade, "Evidence upgraded a failed attempt to a pass")
+	_raises(upgrade, "Evidence upgraded a failed attempt to a pass", expect="contradicts the attempt")
 
 	assisted = _new_attempt(None, outcome="Pass", hint_level=3)
 
@@ -1440,7 +1444,7 @@ def check_evidence_cannot_contradict_the_attempt():
 		doc.assistance_level = 0
 		doc.insert(ignore_permissions=True)
 
-	_raises(understate_help, "Evidence claimed less assistance than the attempt recorded")
+	_raises(understate_help, "Evidence claimed less assistance than the attempt recorded", expect="less assistance")
 
 	# Omitting the activity used to escape both the provenance rule and the
 	# competency check; it is inherited from the attempt instead.
@@ -1531,6 +1535,7 @@ def check_human_review_activity_completes():
 	_raises(
 		lambda: review.record_evidence(result["attempt"], "Pass"),
 		"The same attempt was turned into evidence twice",
+		expect="already been turned into evidence",
 	)
 
 	activity.reload()
@@ -1592,7 +1597,7 @@ def check_one_standing_certification():
 		second.insert(ignore_permissions=True)
 		second.submit()
 
-	_raises(duplicate, "Two certifications stand for the same competency")
+	_raises(duplicate, "Two certifications stand for the same competency", expect="already stands for this competency")
 
 	# A revocation must name what it withdraws.
 	def unattached_revocation():
@@ -1602,7 +1607,7 @@ def check_one_standing_certification():
 		bad.certification_status = "Revoked"
 		bad.insert(ignore_permissions=True)
 
-	_raises(unattached_revocation, "A revocation naming no certification was accepted")
+	_raises(unattached_revocation, "A revocation naming no certification was accepted", expect="must name the certification")
 
 	revocation = frappe.new_doc("Sparsh Certification Record")
 	revocation.learner = LEARNER
@@ -1893,7 +1898,7 @@ def check_activity_cannot_change_competency():
 		doc.competency = COMPETENCY_2
 		doc.save(ignore_permissions=True)
 
-	_raises(reassign, "An activity with evidence was moved to another competency")
+	_raises(reassign, "An activity with evidence was moved to another competency", expect="cannot be moved to another competency")
 
 	# An activity with no evidence may still be moved.
 	_reset_competency()
@@ -3111,6 +3116,7 @@ def check_mastery_cannot_be_deleted():
 	_raises(
 		lambda: frappe.delete_doc("Sparsh Mastery State", name, ignore_permissions=True),
 		"A derived mastery state was deleted",
+		expect="derived and cannot be deleted",
 	)
 	frappe.db.commit()
 
@@ -3133,7 +3139,7 @@ def check_certification_standing_is_not_editable():
 		doc.standing_key = None
 		doc.save(ignore_permissions=True)
 
-	_raises(edit_standing, "Certification standing was edited directly")
+	_raises(edit_standing, "Certification standing was edited directly", expect="maintained by the system")
 
 	# Cancelling frees the slot, so another certification becomes possible.
 	certificate.reload()
@@ -3353,6 +3359,7 @@ def check_attempt_cannot_be_deleted():
 				"Sparsh Attempt", attempt.name, force=True, ignore_permissions=True
 			),
 			"An attempt was deleted",
+			expect="historical record and cannot be deleted",
 		)
 	finally:
 		frappe.flags.in_sparsh_maintenance = previous
@@ -3682,7 +3689,50 @@ def check_supervisor_ignores_rejected_evidence():
 	frappe.db.commit()
 
 
+
+def check_unenrolled_learns_nothing_from_the_error():
+	"""The refusal must not depend on whether the activity exists.
+
+	`runner.submit` looked the activity up before the enrolment gate, so an unenrolled
+	account got "no such activity" for a made-up name and an enrolment error for a real
+	one -- enough to enumerate the catalogue one guess at a time.
+	"""
+	from sparsh_los import runner
+
+	_make_learner(OTHER_LEARNER)
+	frappe.db.set_value("User", OTHER_LEARNER, "enabled", 1)
+	user = frappe.get_doc("User", OTHER_LEARNER)
+	for row in list(user.roles):
+		if row.role in ("Sparsh Learner", "Sparsh Reviewer"):
+			user.remove(row)
+	user.save(ignore_permissions=True)
+	frappe.db.commit()
+
+	original = frappe.session.user
+	errors = {}
+	try:
+		frappe.set_user(OTHER_LEARNER)
+		for label, name in (("real", ACTIVITY_1), ("invented", PREFIX + "NO-SUCH-ACTIVITY")):
+			frappe.db.savepoint("sparsh_oracle")
+			try:
+				runner.submit(name, "a response")
+			except Exception as exc:  # noqa: BLE001 - the message is the subject
+				errors[label] = f"{type(exc).__name__}: {exc}"
+			finally:
+				frappe.db.rollback(save_point="sparsh_oracle")
+	finally:
+		frappe.set_user(original)
+
+	_assert(len(errors) == 2, f"An unenrolled submit was not refused at all: {errors}")
+	_assert(
+		errors["real"] == errors["invented"],
+		f"The refusal revealed whether the activity exists: {errors}",
+	)
+	_assert("not enrolled" in errors["real"].lower(), f"Refused for another reason: {errors}")
+
+
 CHECKS = (
+	("unenrolled_learns_nothing_from_the_error", check_unenrolled_learns_nothing_from_the_error),
 	("escalation_cannot_be_self_answered_by_update", check_escalation_cannot_be_self_answered_by_update),
 	("no_rule_auto_scoring_blocks_the_pilot", check_no_rule_auto_scoring_blocks_the_pilot),
 	("resource_lineage_is_checked", check_resource_lineage_is_checked),
