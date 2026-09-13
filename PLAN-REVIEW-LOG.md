@@ -1069,3 +1069,39 @@ Both fixed in the check, not worked around in the assertion.
 
 Still open: the assistance race (a lock on (learner, activity), a schema decision) and the
 shared-site lower bounds at nine call sites.
+
+## 13-Sep-2026 — Audit 17 follow-up, third pass: the shared-site lower bounds
+
+The last item that did not need somebody else. Audit 17 listed nine assertions of the shape
+`_assert(x >= 1, ...)` that a pre-existing record on a shared site satisfies without the
+fixture doing anything. Six were tightened; three (`rules_total >= 17`, `matrix total >= 17`,
+and a repeat-assistance floor) are genuine lower bounds on seeded data and stay.
+
+- Both `supervisor_view` checks counted heads (`view["learners"] >= 1`). They now require the
+  verification learner by name in `ready_to_progress` or `stuck`.
+- `cohort_readiness` asserted the blocked *count* rose. It now requires this learner in the
+  blocked bucket.
+- The four gateway assertions were floors on a ledger window shared with every other check that
+  records an interaction. They now measure movement: a baseline `spend()` is taken before the
+  three fixtures, and the assertions are exact deltas -- `interactions` +3, `total_actual`
+  +2.0, `total_estimated` +1.5, and one each for the no-cost and no-assertion rows.
+
+**One of them was hollow, and tightening it proved it.** `programme_summary_counts_from_evidence`
+filed a single Pass and asserted `certification_ready >= 1`. A single Pass does not demonstrate
+anybody -- readiness needs unaided passes on two activities -- so the fixture never made a
+ready learner. The assertion passed on a learner demonstrated by an *earlier* check. The
+summary could have been broken outright and this check would have reported success.
+
+Rewriting it took two attempts, and the second was the instructive one: `certification_ready`
+counts distinct *learners*, not learner-competency pairs, and the usual subject was already
+ready through another competency, so demonstrating them again could never move the number. The
+check now uses a fresh learner, asserts they reached Demonstrated before testing the count, and
+requires the count to rise by exactly one.
+
+That is three hollow checks found in one day by the same method -- `check_learner_row_scope`
+testing one DocType under a name covering six, `check_no_rule_auto_scoring_blocks_the_pilot`
+passing on ambient state, and this one. The method is cheap: assert on the fixture by name, or
+on a delta, never on a floor.
+
+Harness at 77. Remaining from audit 17: the assistance race, which needs a lock on
+(learner, activity) and is a schema decision for the programme, not a patch.

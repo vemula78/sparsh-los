@@ -17,7 +17,7 @@ import traceback
 
 import frappe
 
-from sparsh_los.mastery import STATE_ORDER, derive_state
+from sparsh_los.mastery import DEMONSTRATED, MASTERED, STATE_ORDER, derive_state
 
 PREFIX = "ZZV-"
 PATHWAY = PREFIX + "PATH"
@@ -836,7 +836,12 @@ def check_dashboards():
 	)
 
 	view = dashboard.supervisor_view(competency=COMPETENCY)
-	_assert(view["learners"] >= 1, "The supervisor view found no learners")
+	# Naming the fixture, not counting heads: `learners >= 1` is true on this site
+	# whether or not this check's own learner reached the view.
+	_assert(
+		LEARNER in {r["learner"] for r in view["ready_to_progress"]} | {r["learner"] for r in view["stuck"]},
+		f"The verification learner is absent from the supervisor view: {view['learners']} learners seen",
+	)
 	_assert(
 		any(r["learner"] == LEARNER for r in view["ready_to_progress"]),
 		"A demonstrated learner is not shown as ready to progress",
@@ -900,7 +905,10 @@ def check_other_domain_runs_unchanged():
 	_assert(state == "Demonstrated", f"The other-domain competency reached {state}")
 
 	view = dashboard.supervisor_view(competency=OTHER_COMPETENCY)
-	_assert(view["learners"] >= 1, "The other-domain competency is invisible to the supervisor view")
+	_assert(
+		LEARNER in {r["learner"] for r in view["ready_to_progress"]} | {r["learner"] for r in view["stuck"]},
+		"The other-domain learner is invisible to the supervisor view",
+	)
 	frappe.db.commit()
 
 
@@ -1105,7 +1113,11 @@ def check_certification_readiness():
 	_assert(blocked["blocking_evidence"], "The blocking evidence was not named")
 
 	cohort = certification.cohort_readiness(COMPETENCY)
-	_assert(cohort["counts"][certification.BLOCKED] >= 1, "The cohort view did not count the block")
+	_assert(
+		any(r["learner"] == LEARNER for r in cohort["buckets"][certification.BLOCKED]),
+		f"The cohort view did not report this learner as blocked: "
+		f"{cohort['buckets'][certification.BLOCKED]}",
+	)
 	frappe.db.commit()
 
 
@@ -2274,6 +2286,11 @@ def check_model_ledger_records_cost_and_makes_no_call():
 	_delete_all("Sparsh Model Interaction", {"provider": "zzv-test"})
 	frappe.db.commit()
 
+	# The ledger window is shared with every other check that records an interaction, so
+	# the assertions below measure what these three fixtures added rather than asserting
+	# a floor that somebody else's row already clears.
+	baseline = gateway.spend(days=1)
+
 	name = gateway.record(
 		provider="zzv-test",
 		model_id="zzv-model-1",
@@ -2319,26 +2336,34 @@ def check_model_ledger_records_cost_and_makes_no_call():
 	frappe.db.commit()
 
 	report = gateway.spend(days=1)
-	_assert(report["interactions"] >= 3, "The spend report counted fewer than the three fixtures")
+	# Measured as movement across the three fixtures, not as a floor on a shared window:
+	# `total_actual >= 2.0` passes on somebody else's row and says nothing about this one.
 	_assert(
-		report["total_actual"] >= 2.0,
-		f"The billed cost was not reported as actual: {report['total_actual']}",
+		report["interactions"] - baseline["interactions"] == 3,
+		f"The spend report did not count exactly the three fixtures: "
+		f"{report['interactions'] - baseline['interactions']}",
 	)
 	_assert(
-		report["total_estimated"] >= 1.5,
-		f"The estimate was not reported as estimated: {report['total_estimated']}",
+		round(report["total_actual"] - (baseline["total_actual"] or 0), 6) == 2.0,
+		f"The billed cost was not added to the actual total: {report['total_actual']}",
+	)
+	_assert(
+		round(report["total_estimated"] - (baseline["total_estimated"] or 0), 6) == 1.5,
+		f"The estimate was not added to the estimated total: {report['total_estimated']}",
 	)
 	_assert(
 		report["cost_is_partly_estimated"],
 		"An estimate-only interaction was reported as an actual cost",
 	)
 	_assert(
-		report["interactions_with_no_cost_recorded"] >= 1,
-		"An interaction with no cost at all was not reported as unknown",
+		report["interactions_with_no_cost_recorded"]
+		- baseline["interactions_with_no_cost_recorded"] == 1,
+		"The interaction with no cost at all was not reported as unknown",
 	)
 	_assert(
-		report["without_deidentification_assertion"] >= 1,
-		"An interaction that asserted nothing was counted as having asserted",
+		report["without_deidentification_assertion"]
+		- baseline["without_deidentification_assertion"] == 1,
+		"The interaction that asserted nothing was counted as having asserted",
 	)
 
 	# A genuine zero is not an estimate. This is the case truthiness discarded.
@@ -3268,11 +3293,33 @@ def check_programme_summary_counts_from_evidence():
 	from sparsh_los import dashboard
 
 	_reset_competency()
-	_new_evidence(ACTIVITY_1, "Pass")
+	# A fresh learner, because `certification_ready` counts distinct *learners*: the
+	# usual subject is already ready through another competency, so demonstrating them
+	# again cannot move the number and the assertion could never fail. The old fixture
+	# filed one Pass -- not enough to demonstrate anybody -- and asserted
+	# `certification_ready >= 1`, which that other learner already satisfied.
+	_make_learner(TEST_LEARNER)
+	_delete_all("Sparsh Evidence", {"learner": TEST_LEARNER})
+	_delete_mastery({"learner": TEST_LEARNER})
 	frappe.db.commit()
 
+	ready_before = dashboard.programme_summary()["certification_ready"]
+	_new_evidence(ACTIVITY_1, "Pass", assistance_level=0, learner=TEST_LEARNER)
+	_new_evidence(ACTIVITY_2, "Pass", assistance_level=0, learner=TEST_LEARNER)
+	frappe.db.commit()
+	_assert(
+		frappe.db.get_value(
+			"Sparsh Mastery State", {"learner": TEST_LEARNER, "competency": COMPETENCY}, "state"
+		) in (DEMONSTRATED, MASTERED),
+		"The fixture learner was not demonstrated, so the ready count cannot be tested",
+	)
+
 	summary = dashboard.programme_summary()
-	_assert(summary["certification_ready"] >= 1, "A demonstrated learner is not counted as ready")
+	_assert(
+		summary["certification_ready"] - ready_before == 1,
+		f"The demonstrated learner did not move the ready count: "
+		f"{ready_before} -> {summary['certification_ready']}",
+	)
 	_assert("most_common_gap" in summary, "The summary names no most-common gap")
 	_assert(summary["period_days"] == 30, "The default period is not 30 days")
 
@@ -3765,7 +3812,7 @@ def check_refresh_due_advice_names_the_refresher():
 	earlier evidence had stopped counting.
 	"""
 	from sparsh_los import certification, refresher
-	from sparsh_los.mastery import DEMONSTRATED, MASTERED, recompute_mastery
+	from sparsh_los.mastery import recompute_mastery
 
 	_reset_competency()
 	rule = _new_rule(1)
