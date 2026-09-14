@@ -1,0 +1,5 @@
+{
+ "approved_by_name": "Dr Nayanjeet Chaudhury",
+ "approval_source": "SAI SPARSH Source-of-Truth Matrix (FINAL), Programme Owner Decision column, returned 14-Sep-2026 with rows dated 2026-09-13, together with the completed decisions document and handover note of the same date.",
+ "_why_this_is_data": "The approver's name and the document that carries the approval are programme content, not engine logic. Held here rather than in code for the same reason no module may contain the programme's name: the engine has to run an unrelated content pack without edits, and a person's name compiled into a controller is the plainest form of that coupling."
+}

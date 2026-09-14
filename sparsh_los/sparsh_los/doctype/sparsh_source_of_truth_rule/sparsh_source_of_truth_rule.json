@@ -25,7 +25,10 @@
   "section_break_provenance",
   "source_status",
   "source_criticality",
-  "source_automation_status"
+  "source_automation_status",
+  "approved_by_name",
+  "approval_source",
+  "approval_recorded_by"
  ],
  "fields": [
   {
@@ -150,11 +153,31 @@
    "label": "Source Automation Status",
    "read_only": 1,
    "description": "Verbatim from the matrix, including the condition under which automation becomes permissible."
+  },
+  {
+   "fieldname": "approved_by_name",
+   "fieldtype": "Data",
+   "label": "Approved By (as named in the record)",
+   "description": "The person who approved this wording, as named in the governance document. Not a system user: the programme owner may never hold an account here."
+  },
+  {
+   "fieldname": "approval_source",
+   "fieldtype": "Small Text",
+   "label": "Approval Source",
+   "description": "Which document carries the approval, and its date. This is the evidence the status rests on."
+  },
+  {
+   "fieldname": "approval_recorded_by",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "Approval Recorded By",
+   "read_only": 1,
+   "description": "Who entered the approval into this system. Taken from the session, never from the payload."
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-14 13:00:00.000000",
+ "modified": "2026-09-14 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Source of Truth Rule",

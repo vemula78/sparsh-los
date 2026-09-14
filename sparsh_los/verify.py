@@ -299,12 +299,15 @@ def _new_rule(version, supersedes=None, status="Validated"):
 	rule.rule_statement = "Verification rule statement."
 	rule.status = status
 	if status == "Validated":
-		# Validated now requires the three things that make it a claim about a person:
-		# approved wording, a named owner and a date. The fixture supplies them so the
-		# checks exercise the engine rather than the new guard -- and so that a fixture
-		# can never accidentally create the state the guard exists to prevent.
+		# Validated requires the four things that make it a claim about a person: the
+		# approved wording, who approved it, the document that says so, and the date.
+		# The fixture supplies them so the checks exercise the engine rather than the
+		# guard -- and so a fixture can never accidentally create the state the guard
+		# exists to prevent. Note it does NOT set `rule_owner`: an approver need not
+		# hold an account here, and requiring one blocked the first real decision.
 		rule.approved_statement = "Verification approved wording."
-		rule.rule_owner = "Administrator"
+		rule.approved_by_name = "Verification Programme Owner"
+		rule.approval_source = "Verification governance record, undated fixture."
 		rule.effective_date = frappe.utils.today()
 	rule.supersedes = supersedes
 	rule.insert(ignore_permissions=True)
@@ -7889,27 +7892,35 @@ def check_validated_means_somebody_validated_it():
 		return rule
 
 	try:
-		# Each of the three missing in turn, and the message must name what is missing.
-		for missing, values in (
-			("the approved wording", {"rule_owner": "Administrator",
-									  "effective_date": frappe.utils.today()}),
-			("a rule owner", {"approved_statement": "The owner's wording.",
-							  "effective_date": frappe.utils.today()}),
-			("an effective date", {"approved_statement": "The owner's wording.",
-								   "rule_owner": "Administrator"}),
+		complete = {
+			"approved_statement": "The owner's wording.",
+			"approved_by_name": "A Named Programme Owner",
+			"approval_source": "The governance record that carries the approval.",
+			"effective_date": frappe.utils.today(),
+		}
+
+		# Each requirement missing in turn, and the message must name what is missing.
+		for missing, field in (
+			("the approved wording", "approved_statement"),
+			("the name of the person who approved it", "approved_by_name"),
+			("the document the approval comes from", "approval_source"),
+			("an effective date", "effective_date"),
 		):
+			values = {k: v for k, v in complete.items() if k != field}
 			_raises(
 				lambda v=values: _rule(status="Validated", **v),
 				f"A rule was Validated without {missing}",
 				expect=missing,
 			)
 
-		# With all three it is allowed, and the candidate survives alongside the answer.
-		rule = _rule(
-			status="Validated",
-			approved_statement="The owner's wording.",
-			rule_owner="Administrator",
-			effective_date=frappe.utils.today(),
+		# `rule_owner` is deliberately NOT required. Requiring it made "approved this
+		# clinically" depend on "holds a Frappe account", which blocked the first real
+		# decision the guard ever met -- the programme owner signed a matrix and has no
+		# login. Asserting its absence is allowed keeps anyone from reinstating it.
+		rule = _rule(status="Validated", **complete)
+		_assert(
+			not rule.rule_owner,
+			"The fixture set a rule owner, so this does not prove one is unnecessary",
 		)
 		frappe.db.commit()
 		stored = frappe.db.get_value(
@@ -7924,9 +7935,70 @@ def check_validated_means_somebody_validated_it():
 			stored.approved_statement == "The owner's wording.",
 			"The approved wording was not stored",
 		)
+		# Who transcribed the approval is taken from the session, never the payload --
+		# the same rule that closed the self-answered escalation.
+		_assert(
+			frappe.db.get_value("Sparsh Source of Truth Rule", rule.name, "approval_recorded_by")
+			== frappe.session.user,
+			"The approval was not attributed to the session that recorded it",
+		)
 	finally:
 		_delete_all("Sparsh Source of Truth Rule", {"rule_id": PREFIX + "VAL"})
 		frappe.db.commit()
+
+
+def check_owner_decisions_reach_validated():
+	"""A row his matrix marks Validated arrives Validated, with its provenance attached.
+
+	The loader used to leave everything Draft because `rule_owner` was required and he
+	holds no account here. That made the engine unable to act on a decision he had
+	actually signed -- the guard was refusing the very thing it was built to permit.
+	Authority now rests on the governance record: who approved it, which document says
+	so, and when it took effect.
+	"""
+	from sparsh_los import seed
+
+	rows = {row["rule_id"]: row for row in seed._rows()}
+	signed = [
+		rule_id for rule_id, row in rows.items()
+		if row.get("source_status") == "Validated" and row.get("approved_statement")
+	]
+	_assert(signed, "The matrix source carries no signed decision, so nothing is proved here")
+
+	approval = seed._approval()
+	_assert(
+		approval.get("approved_by_name") and approval.get("approval_source"),
+		"The approval record names nobody, so a Validated rule would rest on nothing",
+	)
+
+	not_validated, no_provenance = [], []
+	for rule_id in signed:
+		row = frappe.db.get_value(
+			"Sparsh Source of Truth Rule",
+			{"rule_id": rule_id, "status": ("!=", "Superseded")},
+			["name", "status", "approved_statement", "approved_by_name", "approval_source",
+			 "effective_date"],
+			as_dict=True,
+			order_by="version desc",
+		)
+		if not row or row.status != "Validated":
+			not_validated.append(f"{rule_id}={row.status if row else 'missing'}")
+			continue
+		if not (row.approved_by_name and row.approval_source and row.effective_date):
+			no_provenance.append(rule_id)
+		_assert(
+			(row.approved_statement or "").strip() == rows[rule_id]["approved_statement"].strip(),
+			f"{rule_id} does not carry the programme owner's wording verbatim",
+		)
+
+	_assert(
+		not not_validated,
+		f"Rules he signed are not Validated in the engine: {not_validated}",
+	)
+	_assert(
+		not no_provenance,
+		f"Validated without the record it rests on: {no_provenance}",
+	)
 
 
 def check_matrix_keeps_the_owners_own_words():
@@ -8214,6 +8286,7 @@ CHECKS = (
 	("compliance_cohort_rate_counts_non_starters", check_compliance_cohort_rate_counts_non_starters),
 	("controller_hooks_are_on_the_class", check_controller_hooks_are_on_the_class),
 	("validated_means_somebody_validated_it", check_validated_means_somebody_validated_it),
+	("owner_decisions_reach_validated", check_owner_decisions_reach_validated),
 	("matrix_keeps_the_owners_own_words", check_matrix_keeps_the_owners_own_words),
 	("mastery_threshold_is_the_owners_not_the_engines",
 	 check_mastery_threshold_is_the_owners_not_the_engines),

@@ -65,11 +65,23 @@ class SparshSourceofTruthRule(Document):
 		if self.status != "Validated":
 			return
 
+		# `rule_owner` used to be required here, and it is a Link to `User`. That was
+		# wrong, and it blocked the first real decision the guard ever met: it made
+		# "approved this clinically" depend on "holds an account in Frappe". The
+		# programme owner approved seventeen rules in a signed matrix and may never log
+		# in at all. Requiring a login would have forced either a fabricated account or
+		# an indefinite wait, and neither is what the build guide asks for -- it asks
+		# that the owner be *named*, with an effective date and a source.
+		#
+		# So the authority is now the governance record: who approved it, which document
+		# says so, and when it took effect. `rule_owner` remains for the case where the
+		# approver does hold an account, and is not required.
 		missing = [
 			label
 			for label, value in (
 				("the approved wording", (self.approved_statement or "").strip()),
-				("a rule owner", self.rule_owner),
+				("the name of the person who approved it", (self.approved_by_name or "").strip()),
+				("the document the approval comes from", (self.approval_source or "").strip()),
 				("an effective date", self.effective_date),
 			)
 			if not value
@@ -77,9 +89,17 @@ class SparshSourceofTruthRule(Document):
 		if missing:
 			frappe.throw(
 				_("A rule cannot be Validated without {0}. Validated means a named person "
-				  "approved this wording on a date; without that the engine would score "
-				  "against text nobody signed.").format(", ".join(missing))
+				  "approved this wording on a date, in a document somebody can go and "
+				  "read; without that the engine would score against text nobody signed.").format(
+					", ".join(missing)
+				)
 			)
+
+		# Who *entered* it is a fact about the request, never about the payload -- the
+		# same rule that closed the self-answered escalation. It does not replace the
+		# approver; it records who transcribed the approval, which is the person to ask
+		# if the transcription is ever questioned.
+		self.approval_recorded_by = frappe.session.user
 
 	def on_update(self):
 		if not self.supersedes:

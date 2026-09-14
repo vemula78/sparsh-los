@@ -1747,3 +1747,54 @@ than a risk-stratification one, and asks whether it should move.
 ### Acceptance check
 
 `./scripts/install_verify.sh`: exit 0, `RESULT passed=144 failed=0`.
+
+---
+
+## Phase 4 completed — the guard was wrong, not the facts
+
+Seven rules are **Validated in the engine**, carrying his wording verbatim: Risk Level 4, S
+modifier, Red-flag symptoms and referral, BP handling and escalation, Hypoglycaemia response
+scope, Medication questions, and S Modifier data model. `unvalidated_safety_critical` fell from
+five to one, and that one is a competency row rather than a clinical rule.
+
+### I had built the blocker myself
+
+Yesterday's guard required `rule_owner` before a rule could be Validated. `rule_owner` is a Link
+to `User`. So "a clinician approved this wording" was made to depend on "holds an account in
+Frappe" — and the programme owner, who signed seventeen rows in a matrix, has no login and may
+never have one. The guard refused the first real decision it ever met: the exact thing it was
+built to permit.
+
+Reported as "I need his email" for a day. It was not a missing fact. It was a design error, and
+the honest fix is not a fabricated account or an indefinite wait.
+
+**Authority now rests on the governance record, which is what §8 and his own Instructions sheet
+actually ask for:** who approved it (`approved_by_name`), the document that says so
+(`approval_source`), and when it took effect (`effective_date`). `rule_owner` remains for an
+approver who does hold an account and is no longer required — and the check asserts its *absence*
+is allowed, so nobody reinstates the requirement without meeting that assertion.
+
+`approval_recorded_by` is taken from `frappe.session.user`, never the payload, under the rule that
+closed the self-answered escalation: who transcribed an approval is a fact about the request. It
+does not replace the approver; it records who to ask if the transcription is questioned.
+
+### The domain scanner caught a person's name compiled into a controller
+
+The approver's name and the document title went into `seed.py` as constants, and
+`check_no_programme_name_in_messages` refused them. It was right for a reason beyond the letter of
+the rule: an engine that must run an unrelated content pack without edits cannot carry a
+programme's document title or a clinician's name in its code. Both now live in
+`data/source_of_truth_approval.json`, beside the matrix they describe.
+
+### Checks
+
+`check_owner_decisions_reach_validated` asserts every row his matrix marks Validated is Validated
+in the engine, carries his wording **verbatim**, and rests on a named approver, a source and a
+date. Proved by reverting the loader to leave everything Draft: seven rules named, all `=Draft`.
+
+`check_validated_means_somebody_validated_it` now drops each of the four requirements in turn, and
+additionally asserts that a rule validated without `rule_owner` is accepted.
+
+### Acceptance check
+
+`./scripts/install_verify.sh`: exit 0, `RESULT passed=146 failed=0`.

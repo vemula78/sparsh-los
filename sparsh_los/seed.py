@@ -230,6 +230,19 @@ def link_competency_rules():
 	}
 
 
+# The governance record the approvals come from lives beside the matrix, not here: a
+# person's name and a programme's document title are content, and no module in this
+# engine may carry the programme's name. `_approval()` reads it.
+APPROVAL = pathlib.Path(__file__).parent / "data" / "source_of_truth_approval.json"
+
+
+def _approval():
+	"""Who approved the matrix rows, and the document that says so."""
+	if not APPROVAL.exists():
+		return {}
+	return json.loads(APPROVAL.read_text())
+
+
 @frappe.whitelist()
 def load_matrix_decisions():
 	"""Apply the programme owner's completed matrix to rules already seeded.
@@ -253,6 +266,7 @@ def load_matrix_decisions():
 	the last step is a person with an account flipping the status. What is missing is
 	reported rather than assumed.
 	"""
+	approval = _approval()
 	applied, superseded, skipped, ready = [], [], [], []
 
 	for row in _rows():
@@ -291,8 +305,13 @@ def load_matrix_decisions():
 			successor.source_status = row.get("source_status")
 			successor.source_automation_status = row.get("source_automation_status")
 			successor.effective_date = row.get("effective_date")
+			successor.approved_by_name = approval.get("approved_by_name")
+			successor.approval_source = approval.get("approval_source")
 			successor.supersedes = current.name
-			successor.status = "Draft"
+			# His own status, not ours. "Validated" in his matrix is the sign-off; the
+			# controller refuses it unless the approver, the source and the date are all
+			# present, which is why they are set immediately above.
+			successor.status = "Validated" if row.get("source_status") == "Validated" else "Draft"
 			successor.insert(ignore_permissions=True)
 			superseded.append(f"{row['rule_id']} v{current.version} -> v{successor.version}")
 		else:
@@ -304,9 +323,18 @@ def load_matrix_decisions():
 					"source_status": row.get("source_status"),
 					"source_criticality": row.get("source_criticality"),
 					"source_automation_status": row.get("source_automation_status"),
+					"approved_by_name": approval.get("approved_by_name"),
+					"approval_source": approval.get("approval_source"),
 				},
 				update_modified=False,
 			)
+			# Through the document, not db.set_value: the status transition must pass the
+			# controller's check that an approver, a source and a date are all present.
+			# Writing the status with the fields above would walk straight past it.
+			if row.get("source_status") == "Validated":
+				doc = frappe.get_doc("Sparsh Source of Truth Rule", current.name)
+				doc.status = "Validated"
+				doc.save(ignore_permissions=True)
 			applied.append(row["rule_id"])
 
 	frappe.db.commit()
@@ -317,12 +345,8 @@ def load_matrix_decisions():
 		"already_carried_a_decision": ready,
 		"no_decision_in_the_matrix": skipped,
 		# The one thing standing between these and Validated.
-		"awaiting_before_validation": (
-			"A rule may only be Validated with a named owner. The programme owner has no "
-			"User account on this site, so the owner cannot be recorded and the status is "
-			"left Draft. Create the account, then set the status on each rule that carries "
-			"an approved statement."
-		),
+		"approved_by": approval.get("approved_by_name"),
+		"approval_source": approval.get("approval_source"),
 	}
 
 
