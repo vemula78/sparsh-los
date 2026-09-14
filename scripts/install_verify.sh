@@ -10,16 +10,18 @@ set -euo pipefail
 
 TARGET="${TARGET:-local}"
 SKIP_VERIFY="${SKIP_VERIFY:-0}"
-MIN_CHECKS="${MIN_CHECKS:-154}"
+MIN_CHECKS="${MIN_CHECKS:-155}"
 
 case "${TARGET}" in
 local)
 	SITE="${SITE:-sparsh.localhost}"
 	CONTAINER="${CONTAINER:-frappe_docker-backend-1}"
+	FRONTEND="${FRONTEND:-frappe_docker-frontend-1}"
 	;;
 remote)
 	SITE="${SITE:-}"
 	CONTAINER="${CONTAINER:-internal-backend-1}"
+	FRONTEND="${FRONTEND:-internal-frontend-1}"
 	# Deliberately no defaults. The address, user and key of a hospital server do not
 	# belong in version control -- a private repository is still a copy of them, and a
 	# repository changes hands more easily than a server does. Supply them per-invocation:
@@ -41,6 +43,8 @@ esac
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCH_DIR="/home/frappe/frappe-bench"
+# Where the frontend image actually keeps served assets. Not under `sites`.
+FRONTEND_ASSETS="${FRONTEND_ASSETS:-/home/frappe/frappe-bench/assets}"
 APP_DIR="${BENCH_DIR}/apps/sparsh_los"
 
 # One indirection for both targets: locally `docker exec` runs here, remotely the
@@ -111,7 +115,27 @@ echo "==> Linking public assets"
 # `bench build --app sparsh_los` would create it, then exit non-zero on this stack because
 # node is not installed, which would fail the whole install for a step that had already
 # succeeded. The link is made directly instead: it needs no toolchain and is idempotent.
-host_cmd "docker exec -u frappe ${CONTAINER} bash -lc 'mkdir -p ${BENCH_DIR}/sites/assets && ln -sfn ${APP_DIR}/sparsh_los/public ${BENCH_DIR}/sites/assets/sparsh_los'"
+# The assets have to land in the FRONTEND container, and this took three wrong attempts
+# to establish. `sites` is a shared volume, so the obvious `ln -sfn` into
+# sites/assets/sparsh_los looked right from the backend -- the file was there, readable,
+# correct. But in the frontend image `sites/assets` is itself a symlink to
+# `/home/frappe/frappe-bench/assets`, which lives in the image layer and not in any
+# volume. nginx serves from there, so nothing written to the volume is ever served, and
+# copying instead of linking did not help either. A stylesheet that 404s renders as a
+# page nobody styled rather than as an error, which is why it went unnoticed.
+#
+# This is a deploy-time copy into a container's own filesystem, so it does not survive
+# the frontend being recreated. The durable fix is to bake the app into the frontend
+# image; until that happens, re-running this script restores it.
+host_cmd "docker exec ${CONTAINER} tar -C ${APP_DIR}/sparsh_los -cf - public" \
+	| host_cmd "docker exec -u root -i ${FRONTEND} bash -lc '
+		rm -rf ${FRONTEND_ASSETS}/sparsh_los &&
+		rm -rf /tmp/_sparsh_assets && mkdir -p /tmp/_sparsh_assets &&
+		tar -C /tmp/_sparsh_assets -xf - &&
+		mv /tmp/_sparsh_assets/public ${FRONTEND_ASSETS}/sparsh_los &&
+		chown -R frappe:frappe ${FRONTEND_ASSETS}/sparsh_los &&
+		rm -rf /tmp/_sparsh_assets
+	'"
 
 echo "==> Clearing cache"
 host_cmd "docker exec -u frappe ${CONTAINER} bash -lc 'cd ${BENCH_DIR} && bench --site ${SITE} clear-cache'"
@@ -139,7 +163,13 @@ if [ "${SKIP_VERIFY}" != "1" ]; then
 	# That cost hours twice: once on a QueueOverloaded from this stack's missing rq
 	# worker, once on a genuine harness failure that looked identical. The redis flush
 	# below removes the usual cause; this removes the masking.
-	OUTPUT="$(host_cmd "docker exec -u frappe ${CONTAINER} bash -lc 'cd ${BENCH_DIR}/sites && ../env/bin/python ${APP_DIR}/scripts/run_verify.py ${SITE} 2>&1'")"
+	# `|| true` is load-bearing under `set -e`. The harness exits non-zero when a check
+	# fails, and without it the shell killed the script at this assignment -- before the
+	# `echo` below, before every diagnostic. A failing run printed the banner and nothing
+	# else, which read as the harness hanging rather than as checks failing. It cost two
+	# separate investigations on one day. The exit status is not lost: it is re-derived
+	# from the RESULT line, which is the thing actually worth trusting.
+	OUTPUT="$(host_cmd "docker exec -u frappe ${CONTAINER} bash -lc 'cd ${BENCH_DIR}/sites && ../env/bin/python ${APP_DIR}/scripts/run_verify.py ${SITE} 2>&1'" || true)"
 	echo "${OUTPUT}"
 	if ! echo "${OUTPUT}" | grep -q 'RESULT passed='; then
 		echo "FAIL: verify harness did not print a RESULT line" >&2

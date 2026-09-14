@@ -8589,6 +8589,99 @@ def check_pilot_prepare_leaves_activation_to_a_person():
 		frappe.db.commit()
 
 
+def check_decisions_promote_a_rule_whose_wording_arrived_first():
+	"""Re-seeding promotes a signed rule that already carries its wording but is Draft.
+
+	`load_matrix_decisions` used to `continue` the moment a rule carried an
+	`approved_statement`, on the reasoning that re-running must not rewrite a decision.
+	But the wording and the Draft -> Validated promotion were written in the same branch,
+	so anything that wrote the wording on its own left the status stranded: no later run
+	would ever look at it again. `restore_matrix_source_wording` does exactly that, and on
+	the live site seven rules the programme owner had signed sat inert at Draft because of
+	it -- the engine will not score against a rule that is not Validated.
+
+	The status is put back afterwards whatever happens, so the check does not leave the
+	site holding a decision it invented.
+	"""
+	from sparsh_los import seed
+
+	rows = {row["rule_id"]: row for row in seed._rows()}
+	signed = [
+		rule_id for rule_id, row in rows.items()
+		if row.get("source_status") == "Validated" and row.get("approved_statement")
+	]
+	_assert(signed, "The matrix source carries no signed decision, so nothing is proved here")
+
+	rule_id = sorted(signed)[0]
+	current = frappe.db.get_value(
+		"Sparsh Source of Truth Rule",
+		{"rule_id": rule_id, "status": ("!=", "Superseded")},
+		["name", "status", "approved_statement", "approved_by_name", "approval_source",
+		 "effective_date"],
+		as_dict=True,
+		order_by="version desc",
+	)
+	_assert(current, f"{rule_id} is not seeded here, so the promotion cannot be exercised")
+	_assert(
+		(current.approved_statement or "").strip(),
+		f"{rule_id} carries no approved wording, so this is not the state being reproduced",
+	)
+
+	was = {
+		"status": current.status,
+		"approved_by_name": current.approved_by_name,
+		"approval_source": current.approval_source,
+		"effective_date": current.effective_date,
+	}
+	try:
+		# Exactly the state `restore_matrix_source_wording` leaves behind: the wording is
+		# there, and nothing else is -- no status, and none of the three provenance fields
+		# the controller requires before it will allow Validated. Stripping the status
+		# alone would not reproduce the live site, and a check that reproduces a simpler
+		# state than the real one is how the first version of this fix passed while the
+		# server still failed. Written straight to the columns, because the controller
+		# would refuse to move in this direction.
+		frappe.db.set_value(
+			"Sparsh Source of Truth Rule", current.name,
+			{
+				"status": "Draft",
+				"approved_by_name": None,
+				"approval_source": None,
+				"effective_date": None,
+			},
+			update_modified=False,
+		)
+		frappe.db.commit()
+
+		result = seed.load_matrix_decisions()
+
+		after = frappe.db.get_value("Sparsh Source of Truth Rule", current.name, "status")
+		_assert(
+			after == "Validated",
+			f"{rule_id} carried his wording and stayed {after} after re-seeding; a decision "
+			f"he signed would never reach the engine",
+		)
+		attached = frappe.db.get_value(
+			"Sparsh Source of Truth Rule", current.name,
+			["approved_by_name", "approval_source", "effective_date"], as_dict=True,
+		)
+		_assert(
+			attached.approved_by_name and attached.approval_source and attached.effective_date,
+			f"{rule_id} reached Validated without an approver, a source and a date attached; "
+			f"the engine would be scoring against text whose provenance is gone",
+		)
+		_assert(
+			rule_id in (result.get("promoted_to_validated") or []),
+			f"{rule_id} was promoted but not reported under promoted_to_validated; a silent "
+			f"status change to a governing rule is the thing that must never be silent",
+		)
+	finally:
+		frappe.db.set_value(
+			"Sparsh Source of Truth Rule", current.name, was, update_modified=False,
+		)
+		frappe.db.commit()
+
+
 CHECKS = (
 	("partial_only_history_is_named_accurately", check_partial_only_history_is_named_accurately),
 	("queue_shows_work_that_is_actually_waiting", check_queue_shows_work_that_is_actually_waiting),
@@ -8736,6 +8829,7 @@ CHECKS = (
 	("controller_hooks_are_on_the_class", check_controller_hooks_are_on_the_class),
 	("validated_means_somebody_validated_it", check_validated_means_somebody_validated_it),
 	("owner_decisions_reach_validated", check_owner_decisions_reach_validated),
+	("decisions_promote_a_rule_whose_wording_arrived_first", check_decisions_promote_a_rule_whose_wording_arrived_first),
 	("matrix_keeps_the_owners_own_words", check_matrix_keeps_the_owners_own_words),
 	("mastery_threshold_is_the_owners_not_the_engines",
 	 check_mastery_threshold_is_the_owners_not_the_engines),

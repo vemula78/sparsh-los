@@ -59,7 +59,7 @@ Two traps here, both of which have cost hours:
   bench the last teardown emptied, so the check fails for want of fixtures rather than for its own
   reason. `run_one` brackets it with `setup()` and `teardown()`.
 
-Flush the job queue before any run: the local stack has no rq worker, so a 154-check run reaches
+Flush the job queue before any run: the local stack has no rq worker, so a 155-check run reaches
 the 700-job cap on its own. `install_verify.sh` does it for you; by hand it is
 `docker exec frappe_docker-redis-queue-1 redis-cli flushall`. Never on the hospital bench.
 
@@ -94,7 +94,7 @@ schema work — run it after touching any DocType JSON.
 
 Twenty Python modules under `sparsh_los/`, plus `www/`, `patches/` and the DocType package, over
 18 top-level DocTypes and 8 child tables, all prefixed `Sparsh `.
-The acceptance harness is **154 checks**; raise `MIN_CHECKS` in `install_verify.sh` with it, or an
+The acceptance harness is **155 checks**; raise `MIN_CHECKS` in `install_verify.sh` with it, or an
 empty `CHECKS` tuple reads as success.
 
 | Module | Role |
@@ -154,9 +154,16 @@ Conventions the pages must keep:
   every possible number of ticks and the page looks it up.
 - The institute's name and campus come from `branding.masthead()`, overridable with
   `sparsh_branding` in `site_config.json` — not written into templates.
-- `install_verify.sh` links `sites/assets/sparsh_los`. Nothing in `install-app` or `migrate` creates
-  it, and without it every page 404s its stylesheet and renders unstyled in silence. `bench build`
-  would also create it and then exits non-zero here because node is absent.
+- `install_verify.sh` copies the app's `public/` into the **frontend** container at
+  `/home/frappe/frappe-bench/assets/sparsh_los`. Nothing in `install-app` or `migrate` puts it
+  there, and without it every page 404s its stylesheet and renders unstyled in silence — which
+  reads as a page nobody designed rather than as an error. Do not "fix" this back to a symlink
+  under `sites/assets`: `sites` is a shared volume and that link looks correct from the backend,
+  but in the frontend image `sites/assets` is itself a symlink into the image layer at
+  `/home/frappe/frappe-bench/assets`, which is what nginx serves. Anything written to the volume
+  is never served. `bench build` would also place it and then exits non-zero here because node is
+  absent. The copy lives in the container's own filesystem, so **recreating the frontend container
+  loses it** — re-run the script. Baking the app into the frontend image is the durable fix.
 
 Frappe's own navbar and "Powered by ERPNext" footer wrap these pages; both are Website Settings on
 the site, not app code, and are a deployment step rather than something the app overrides.

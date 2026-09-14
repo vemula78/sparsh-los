@@ -259,15 +259,14 @@ def load_matrix_decisions():
 	wording Refresh Due -- which is exactly right when the rule they were judged against
 	has changed.
 
-	Nothing here sets `status = "Validated"`. His matrix says Validated and this function
-	is a script: the rule requires a named owner, and a `Sparsh Source of Truth Rule`
-	names its owner by `User`, which he does not yet have on this site. The approved
-	wording and the effective date are loaded so nothing is lost and nothing is retyped;
-	the last step is a person with an account flipping the status. What is missing is
-	reported rather than assumed.
+	Where his matrix records a decision of "Validated", that decision is applied: the
+	status is set through the document, so the controller's check that an approver, a
+	source and a date are all present still has to pass. This is not the script deciding
+	anything -- it is the script transcribing a decision he has already made and signed.
+	Rows his matrix leaves undecided stay Draft and are reported, never assumed.
 	"""
 	approval = _approval()
-	applied, superseded, skipped, ready = [], [], [], []
+	applied, superseded, skipped, ready, promoted = [], [], [], [], []
 
 	for row in _rows():
 		if not row.get("approved_statement"):
@@ -277,7 +276,7 @@ def load_matrix_decisions():
 		current = frappe.db.get_value(
 			"Sparsh Source of Truth Rule",
 			{"rule_id": row["rule_id"], "status": ("!=", "Superseded")},
-			["name", "version", "rule_statement", "approved_statement"],
+			["name", "version", "rule_statement", "approved_statement", "status"],
 			as_dict=True,
 			order_by="version desc",
 		)
@@ -286,8 +285,39 @@ def load_matrix_decisions():
 			continue
 
 		if current.approved_statement:
-			# Already carries an answer. Re-running must not rewrite a decision.
-			ready.append(row["rule_id"])
+			# Already carries an answer. Re-running must not rewrite a decision -- but
+			# carrying the wording and being Validated are two different things, and they
+			# are not always written together. `restore_matrix_source_wording` writes the
+			# wording alone; a row that arrived that way would stay Draft forever, because
+			# this branch used to `continue` on the wording and never look at the status.
+			# Seven rules the programme owner had signed sat inert on the live site that
+			# way. Promoting here rewrites no decision: it applies the one he already made.
+			if row.get("source_status") == "Validated" and current.status != "Validated":
+				# Provenance first, or the controller refuses the transition -- rightly:
+				# Validated means a named person approved this wording on a date, in a
+				# document somebody can go and read. `restore_matrix_source_wording`
+				# writes the wording alone, so on a site seeded that way these three
+				# fields are empty and the promotion cannot be allowed to proceed
+				# without them. Writing them rewrites no decision: the wording, which is
+				# his, is left exactly as it stands.
+				frappe.db.set_value(
+					"Sparsh Source of Truth Rule", current.name,
+					{
+						"effective_date": row.get("effective_date"),
+						"source_status": row.get("source_status"),
+						"source_criticality": row.get("source_criticality"),
+						"source_automation_status": row.get("source_automation_status"),
+						"approved_by_name": approval.get("approved_by_name"),
+						"approval_source": approval.get("approval_source"),
+					},
+					update_modified=False,
+				)
+				doc = frappe.get_doc("Sparsh Source of Truth Rule", current.name)
+				doc.status = "Validated"
+				doc.save(ignore_permissions=True)
+				promoted.append(row["rule_id"])
+			else:
+				ready.append(row["rule_id"])
 			continue
 
 		if row.get("supersedes_previous"):
@@ -343,6 +373,7 @@ def load_matrix_decisions():
 		"decisions_applied": applied,
 		"superseded_with_new_version": superseded,
 		"already_carried_a_decision": ready,
+		"promoted_to_validated": promoted,
 		"no_decision_in_the_matrix": skipped,
 		# The one thing standing between these and Validated.
 		"approved_by": approval.get("approved_by_name"),
