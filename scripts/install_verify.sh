@@ -18,11 +18,20 @@ local)
 	CONTAINER="${CONTAINER:-frappe_docker-backend-1}"
 	;;
 remote)
-	SITE="${SITE:-erp.sssihms.org}"
+	SITE="${SITE:-}"
 	CONTAINER="${CONTAINER:-internal-backend-1}"
-	SSH_KEY="${SSH_KEY:-~/Downloads/sssihms-web-vm2023_key.pem}"
-	SSH_HOST="${SSH_HOST:-azureuser@20.219.253.136}"
+	# Deliberately no defaults. The address, user and key of a hospital server do not
+	# belong in version control -- a private repository is still a copy of them, and a
+	# repository changes hands more easily than a server does. Supply them per-invocation:
+	#   SSH_HOST=user@host SSH_KEY=~/path/key.pem TARGET=remote ./scripts/install_verify.sh
+	SSH_KEY="${SSH_KEY:-}"
+	SSH_HOST="${SSH_HOST:-}"
 	SSH_PORT="${SSH_PORT:-2222}"
+	if [ -z "${SSH_HOST}" ] || [ -z "${SSH_KEY}" ] || [ -z "${SITE}" ]; then
+		echo "TARGET=remote needs SSH_HOST, SSH_KEY and SITE in the environment." >&2
+		echo "  SSH_HOST=user@host SSH_KEY=~/path/key.pem SITE=<site> TARGET=remote $0" >&2
+		exit 2
+	fi
 	;;
 *)
 	echo "TARGET must be 'local' or 'remote', got '${TARGET}'" >&2

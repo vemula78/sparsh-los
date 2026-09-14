@@ -56,10 +56,17 @@ caller to fill; nothing in this app calls a model or the network.
 ## Install
 
 ```
-SITE=erp.sssihms.org ./scripts/install_verify.sh
+./scripts/install_verify.sh
 ```
 
-Streams the app into the `internal-backend-1` container, installs it, and runs the harness.
+Defaults to the local development bench. Streams the app into the container, installs it,
+migrates, and runs the harness.
+
+Reaching a remote bench is deliberate and needs its address supplied, never defaulted:
+
+```
+SSH_HOST=user@host SSH_KEY=~/path/key.pem SITE=<site> TARGET=remote ./scripts/install_verify.sh
+```
 `SKIP_VERIFY=1` proves the install plumbing only. `MIN_CHECKS` guards against a harness that
 silently runs nothing.
 
@@ -69,8 +76,12 @@ attribute 'org'`, bench 5.31). The script falls back to `pip install -e` plus an
 ## Verify
 
 ```
-bench --site erp.sssihms.org execute sparsh_los.verify.run
+python scripts/run_verify.py <site>
 ```
+
+Not `bench execute`: it falls back to `eval()` on the method string, so any error inside the
+harness is reported as `NameError: name 'sparsh_los' is not defined` and the real one never
+appears.
 
 One `PASS`/`FAIL` line per check and a final `RESULT passed=N failed=M`. Re-runnable: it clears its
 own fixtures first and deletes them after.
@@ -78,17 +89,18 @@ own fixtures first and deletes them after.
 ## Load the programme matrix
 
 ```
-bench --site erp.sssihms.org execute sparsh_los.seed.load_matrix
+bench --site <site> execute sparsh_los.seed.load_matrix
 ```
 
-Creates the 17 Source-of-Truth Matrix rows as **Draft**. Nothing arrives validated.
+Creates the Source-of-Truth Matrix rows as **Draft**. Nothing arrives validated.
 `sparsh_los.seed.matrix_status` reports what still awaits the programme owner — including which
 safety-critical rules are unvalidated and which rules are cleared to become fixed logic.
 
 ## Uninstall
 
 ```
-SITE=erp.sssihms.org ./scripts/uninstall.sh
+./scripts/uninstall.sh          # local
+SSH_HOST=user@host SSH_KEY=~/path/key.pem SITE=<site> TARGET=remote ./scripts/uninstall.sh
 ```
 
 ## Status
