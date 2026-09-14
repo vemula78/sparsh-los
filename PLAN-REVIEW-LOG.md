@@ -1700,3 +1700,50 @@ the Red Flag pathway and never change the Level.
 ### Acceptance check
 
 `./scripts/install_verify.sh`: exit 0, `RESULT passed=143 failed=0`, with his decisions loaded.
+
+---
+
+## Phase 7 groundwork — the first calibrated threshold
+
+His answer to "what must a volunteer demonstrate" was not only an answer to that question. It is
+the first **calibration** the programme has produced, and §16 asks for exactly this:
+
+> 5 varied cases covering medication, symptoms, red flags, lifestyle coaching and an ambiguous
+> boundary; all safety-critical decisions must be correct; at least 4 of 5 should be completed
+> unaided; no critical boundary violation is acceptable.
+
+`mastery.derive_state` hardcoded two distinct activities for Mastered. It now reads
+`activities_for_mastery` from the competency, falling back to two where nobody has set it — and
+`load_competency_thresholds` records his numbers on SSP-SCOPE together with `threshold_source`
+holding **his own words**, so a number is never separated from who set it and when.
+
+`activities_for_mastery` is deliberately **not** derived from his five-case rule. He specified how
+many cases are assessed and how many unaided; how many distinct activities constitute Mastered is
+a different question he has not answered, and setting one from the other would be inference
+dressed as his decision. `load_competency_thresholds` reports which competencies remain on the
+uncalibrated default rather than leaving that implicit — a default nobody chose still decides
+whether a volunteer is called competent.
+
+Proved by reverting the lookup to the literal 2: *"Two activities reached Mastered where the
+competency requires three."*
+
+### SC-02 contradicts his framework and is not ours to rewrite
+
+He approved the nine cases conditionally on SC-01 and SC-02 being revised. Checked:
+
+- **SC-01** needs no change. It turns on the Level 1/2/3 boundary, which is still open, so it
+  stays human-reviewed either way and its caveat is accurate.
+- **SC-02 invites the exact error his note warns against.** It asks whether a stable and an
+  acute caregiver *"belong in the same risk category"* and tells the engine the learner must
+  *"distinguish"* them — teaching that an acute state changes the Prevention Level. His ruling is
+  that it does not: the Level follows history, the acute state raises a Red Flag alongside it. A
+  learner answering "different categories" would be marked correct and would have learnt the
+  opposite of his rule.
+
+A replacement is drafted and sent for approval, **not applied**. Clinical case wording is his.
+The proposal also notes that the revised case is in substance a scope-and-escalation case rather
+than a risk-stratification one, and asks whether it should move.
+
+### Acceptance check
+
+`./scripts/install_verify.sh`: exit 0, `RESULT passed=144 failed=0`.

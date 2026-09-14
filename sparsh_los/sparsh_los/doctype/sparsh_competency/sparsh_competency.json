@@ -21,7 +21,13 @@
   "section_break_lessons",
   "linked_lessons",
   "refresh_interval_days",
-  "learning_resources"
+  "learning_resources",
+  "section_break_thresholds",
+  "activities_for_mastery",
+  "unaided_passes_required",
+  "assessment_cases",
+  "all_safety_decisions_must_be_correct",
+  "threshold_source"
  ],
  "fields": [
   {
@@ -121,11 +127,51 @@
    "fieldtype": "Table",
    "label": "Learning Resources",
    "options": "Sparsh Competency Resource Link"
+  },
+  {
+   "fieldname": "section_break_thresholds",
+   "fieldtype": "Section Break",
+   "label": "Mastery thresholds"
+  },
+  {
+   "fieldname": "activities_for_mastery",
+   "fieldtype": "Int",
+   "label": "Distinct Activities For Mastery",
+   "default": "2",
+   "description": "Independent passes on this many distinct activities before Mastered. The default of 2 is a placeholder the programme owner has not calibrated; set it per competency when they do."
+  },
+  {
+   "fieldname": "unaided_passes_required",
+   "fieldtype": "Int",
+   "label": "Unaided Passes Required",
+   "default": "0",
+   "description": "How many of the assessed cases must be completed unaided. 0 means not set by the programme owner."
+  },
+  {
+   "fieldname": "assessment_cases",
+   "fieldtype": "Int",
+   "label": "Assessment Cases",
+   "default": "0",
+   "description": "How many varied cases the programme owner requires for this competency. 0 means not set."
+  },
+  {
+   "fieldname": "all_safety_decisions_must_be_correct",
+   "fieldtype": "Check",
+   "label": "Every Safety Decision Must Be Correct",
+   "default": "0",
+   "description": "When set, no safety-critical case may be failed, whatever the aggregate."
+  },
+  {
+   "fieldname": "threshold_source",
+   "fieldtype": "Small Text",
+   "label": "Where These Thresholds Came From",
+   "read_only": 1,
+   "description": "The programme owner's own words, so a number is never separated from who set it."
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-14 10:00:00.000000",
+ "modified": "2026-09-14 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Competency",

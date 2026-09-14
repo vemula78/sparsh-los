@@ -119,6 +119,63 @@ COMPETENCY_RULES_UNMATCHED = {
 }
 
 
+# The programme owner's assessment rule for the scope competency, transcribed verbatim
+# from his answer to "what must a volunteer demonstrate". It is the only competency he
+# has calibrated; the others keep the engine's uncalibrated default of two distinct
+# activities, which §16 says must eventually be set from observed performance rather
+# than assumed.
+COMPETENCY_THRESHOLDS = {
+	"SSP-SCOPE": {
+		"assessment_cases": 5,
+		"unaided_passes_required": 4,
+		"all_safety_decisions_must_be_correct": 1,
+		"threshold_source": (
+			"Programme owner, 13-Sep-2026: \"5 varied cases covering medication, symptoms, "
+			"red flags, lifestyle coaching and an ambiguous boundary; all safety-critical "
+			"decisions must be correct; at least 4 of 5 should be completed unaided; no "
+			"critical boundary violation is acceptable.\" During the first pilot all five "
+			"cases remain human-reviewed."
+		),
+	},
+}
+
+
+@frappe.whitelist()
+def load_competency_thresholds():
+	"""Record the programme owner's assessment rules on the competencies they govern.
+
+	`activities_for_mastery` is deliberately left alone here. He specified how many cases
+	must be *assessed* and how many unaided, which is the certification rule; how many
+	distinct activities constitute Mastered is a different question and he has not
+	answered it. Setting one from the other would be inference dressed as his decision.
+	"""
+	applied, missing = [], []
+
+	for competency_id, values in COMPETENCY_THRESHOLDS.items():
+		name = frappe.db.get_value("Sparsh Competency", {"competency_id": competency_id}, "name")
+		if not name:
+			missing.append(competency_id)
+			continue
+		frappe.db.set_value("Sparsh Competency", name, values, update_modified=False)
+		applied.append(competency_id)
+
+	frappe.db.commit()
+
+	uncalibrated = [
+		row.competency_id
+		for row in frappe.get_all("Sparsh Competency", fields=["name", "competency_id"])
+		if row.competency_id not in COMPETENCY_THRESHOLDS
+	]
+	return {
+		"thresholds_applied": applied,
+		"competency_not_found": missing,
+		# Named rather than left implicit: a default that nobody chose still decides
+		# whether a volunteer is called competent.
+		"still_on_the_uncalibrated_default": uncalibrated,
+		"default_in_use": "2 distinct activities for Mastered",
+	}
+
+
 @frappe.whitelist()
 def link_competency_rules():
 	"""Attach the rules the programme owner says govern each competency.

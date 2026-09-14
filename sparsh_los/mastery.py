@@ -100,9 +100,20 @@ def derive_state(learner, competency) -> str:
 	passes = _independent_passes(rows)
 	distinct_activities = {r.activity for r in passes if r.activity}
 
-	# Mastery requires independent passes across two distinct activities. Passes with no
-	# activity recorded cannot establish it: provenance matters most exactly here.
-	if len(distinct_activities) >= 2:
+	# How many distinct activities constitute mastery is the programme owner's decision,
+	# not the engine's. It was hardcoded at two, which §16 of the build guide calls out
+	# specifically: thresholds should be "empirically calibrated using performance of
+	# currently certified volunteers rather than copied from AI-generated percentages".
+	# Two remains the default because it is what the engine has always done and nobody
+	# has calibrated it; a competency the owner has ruled on carries their number, and
+	# `threshold_source` carries their words beside it.
+	required = frappe.db.get_value("Sparsh Competency", competency, "activities_for_mastery")
+	required = required if (required or 0) >= 1 else 2
+
+	# Mastery requires independent passes across the required number of distinct
+	# activities. Passes with no activity recorded cannot establish it: provenance
+	# matters most exactly here.
+	if len(distinct_activities) >= required:
 		state = MASTERED
 	elif passes:
 		state = DEMONSTRATED

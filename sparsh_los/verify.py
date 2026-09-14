@@ -7974,6 +7974,48 @@ def check_matrix_keeps_the_owners_own_words():
 	)
 
 
+def check_mastery_threshold_is_the_owners_not_the_engines():
+	"""How many activities make Mastered is a programme decision, and was hardcoded.
+
+	Section 16 asks for thresholds calibrated from what certified volunteers actually
+	do, not copied from an assumed number. Two remains the default because it is what
+	the engine has always done and nobody has calibrated it -- but a competency the
+	programme owner has ruled on must carry their number, and the default must not
+	quietly override it.
+	"""
+	_reset_competency()
+	_make_learner(TEST_LEARNER)
+	original = frappe.db.get_value("Sparsh Competency", COMPETENCY, "activities_for_mastery")
+	try:
+		# Three required: two distinct unaided passes must no longer reach Mastered.
+		frappe.db.set_value("Sparsh Competency", COMPETENCY, "activities_for_mastery", 3)
+		frappe.db.commit()
+
+		_new_evidence(ACTIVITY_1, "Pass", learner=TEST_LEARNER)
+		_new_evidence(ACTIVITY_2, "Pass", learner=TEST_LEARNER)
+		frappe.db.commit()
+		_assert(
+			_state(TEST_LEARNER) == DEMONSTRATED,
+			f"Two activities reached {_state(TEST_LEARNER)} where the competency requires three",
+		)
+
+		# And the engine's old default must not be reachable by leaving the field unset
+		# in a way that reads as zero.
+		frappe.db.set_value("Sparsh Competency", COMPETENCY, "activities_for_mastery", 0)
+		frappe.db.commit()
+		from sparsh_los.mastery import recompute_mastery
+
+		recompute_mastery(TEST_LEARNER, COMPETENCY)
+		_assert(
+			_state(TEST_LEARNER) == MASTERED,
+			f"An unset threshold did not fall back to the engine default: {_state(TEST_LEARNER)}",
+		)
+	finally:
+		frappe.db.set_value("Sparsh Competency", COMPETENCY, "activities_for_mastery", original)
+		frappe.db.commit()
+		_reset_competency()
+
+
 CHECKS = (
 	("partial_only_history_is_named_accurately", check_partial_only_history_is_named_accurately),
 	("queue_shows_work_that_is_actually_waiting", check_queue_shows_work_that_is_actually_waiting),
@@ -8121,6 +8163,8 @@ CHECKS = (
 	("controller_hooks_are_on_the_class", check_controller_hooks_are_on_the_class),
 	("validated_means_somebody_validated_it", check_validated_means_somebody_validated_it),
 	("matrix_keeps_the_owners_own_words", check_matrix_keeps_the_owners_own_words),
+	("mastery_threshold_is_the_owners_not_the_engines",
+	 check_mastery_threshold_is_the_owners_not_the_engines),
 	("cleanup", check_cleanup),
 )
 
