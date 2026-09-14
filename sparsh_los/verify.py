@@ -8016,6 +8016,58 @@ def check_mastery_threshold_is_the_owners_not_the_engines():
 		_reset_competency()
 
 
+def check_pilot_gate_names_what_is_missing():
+	"""“Can we start on Monday” must be answered by what exists, not by a flag.
+
+	A pilot reported ready when it is not is worse than no report: the people who would
+	catch the gap are the ones reading the report. Each precondition is therefore
+	asserted by removing it and watching the gate name it.
+	"""
+	from sparsh_los import pilot
+
+	_make_learner(TEST_LEARNER)
+	report = pilot.status()
+
+	_assert(
+		isinstance(report.get("blocking"), list),
+		"The pilot gate did not report what is blocking",
+	)
+	_assert(
+		report["can_begin"] is (not report["blocking"]),
+		f"can_begin disagrees with its own blocking list: {report['can_begin']} / {report['blocking']}",
+	)
+
+	# A rule carrying the programme owner's wording but no owner is answered, not in
+	# force, and the gate must say which of the two it is.
+	rules = report["rules"]
+	for bucket in ("in_force", "answered_but_not_in_force", "no_decision_yet"):
+		_assert(bucket in rules, f"The pilot gate does not report {bucket}")
+	for row in rules["answered_but_not_in_force"]:
+		_assert(
+			row.get("missing"),
+			f"{row.get('rule')} is answered and not in force, with no reason given",
+		)
+
+	# No enabled reviewer must block, because nobody can judge an attempt without one.
+	_assert(
+		"reviewers" in report and "enabled" in report["reviewers"],
+		"The pilot gate does not report who can actually judge an attempt",
+	)
+	if not report["reviewers"]["enabled"]:
+		_assert(
+			any("reviewer role" in b for b in report["blocking"]),
+			f"No enabled reviewer, yet the gate did not block: {report['blocking']}",
+		)
+
+	# And it is a reviewer action: it names learners and cohorts.
+	original = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+		_refused(pilot.status, "A learner read the pilot gate", expect="reviewer")
+	finally:
+		frappe.set_user(original)
+
+
 CHECKS = (
 	("partial_only_history_is_named_accurately", check_partial_only_history_is_named_accurately),
 	("queue_shows_work_that_is_actually_waiting", check_queue_shows_work_that_is_actually_waiting),
@@ -8165,6 +8217,7 @@ CHECKS = (
 	("matrix_keeps_the_owners_own_words", check_matrix_keeps_the_owners_own_words),
 	("mastery_threshold_is_the_owners_not_the_engines",
 	 check_mastery_threshold_is_the_owners_not_the_engines),
+	("pilot_gate_names_what_is_missing", check_pilot_gate_names_what_is_missing),
 	("cleanup", check_cleanup),
 )
 
