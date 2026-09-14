@@ -142,14 +142,28 @@ def next_experience(competency, learner=None):
 	refresher = frappe.db.get_value(
 		"Sparsh Refresher Assignment",
 		{"learner": learner, "competency": competency, "status": "Assigned"},
-		["name", "trigger_reason", "detail"],
+		["name", "trigger_reason", "detail", "focus_activity"],
 		as_dict=True,
 	)
 	if refresher:
+		# The activity the gap was actually found on, where one is named. `activities[0]`
+		# was the whole of the weak-area targeting: a learner sent back for one specific
+		# failure met whichever activity sorted first in the competency, and could pass
+		# it without ever revisiting what they got wrong.
+		focus = None
+		if refresher.focus_activity:
+			focus = next(
+				(a for a in activities if a["name"] == refresher.focus_activity), None
+			)
+		chosen = focus or activities[0]
 		return {
 			"reason": REFRESHER,
-			"activity": activities[0]["name"],
-			"title": activities[0]["title"],
+			"activity": chosen["name"],
+			"title": chosen["title"],
+			# True when the refresher named an activity that is no longer in the
+			# competency -- retired or moved. Reported rather than passed off as the
+			# focus, because the learner is then meeting a substitute.
+			"focus_missing": bool(refresher.focus_activity and not focus),
 			"state": state,
 			"refresher": refresher.name,
 			"trigger": refresher.trigger_reason,

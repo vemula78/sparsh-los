@@ -1798,3 +1798,63 @@ additionally asserts that a rule validated without `rule_owner` is accepted.
 ### Acceptance check
 
 `./scripts/install_verify.sh`: exit 0, `RESULT passed=146 failed=0`.
+
+---
+
+## Phase 5 — the refresher pathway's front door
+
+§8.2 is explicit: *"Do not force current certified volunteers through the entire new pathway.
+Begin with a short competency diagnostic"*, then *"Assign only weak-area refreshers."* Neither
+existed. `PERFORMANCE_GAP` was declared in `refresher.py` and assigned by nothing, and
+`next_experience` handed every refresher learner `activities[0]` regardless of trigger — so
+somebody sent back for one specific failure met whichever activity sorted first in the competency
+and could clear the refresher without ever revisiting what they got wrong.
+
+**Built:** `Sparsh Assessment Event` (the §7 object that was missing), `diagnostic.py`, a
+`focus_activity` on the refresher, and weak-area targeting in the orchestrator.
+
+### No threshold was invented
+
+A competency is weak when the learner's diagnostic attempt was **not an unaided pass**. That is
+the assistance model the whole engine already runs on, not a number anybody has to approve. §25
+item 5 permits placeholder non-clinical logic; this did not need even the placeholder.
+
+Competencies the learner did not attempt are reported as `not_attempted`, never folded into
+`strong`. Calling an unknown a pass is the Optimistic Path, and in a refresher diagnostic it
+would silently clear somebody who never demonstrated anything.
+
+### The check that survived its own revert
+
+`diagnostic_assigns_a_refresher_only_where_weak` asserted that the failed competency was marked
+weak and produced one refresher naming the gap. Reverting the weak test to `if False` — so that
+**every** competency is weak and every one gets a refresher — **still passed.** Asserting the
+failed case says nothing without the other half.
+
+It now also demonstrates a competency unaided and asserts that one produces `strong`, no `weak`,
+and **no refresher**. The revert then fails with the whole shape visible:
+`strong: [], weak: ['ZZV-COMP', 'ZZV-COMP2']`.
+
+This is the second time in two days that a check passed its own revert on the first attempt. Both
+had the same shape: the positive case asserted, the negative case assumed.
+
+### And a check that failed for the wrong reason
+
+The reopen assertion called `db_set` inside its lambda before the guarded save, so it reopened
+the event itself and then found nothing left to refuse. Rewritten to exercise the save path only.
+The underlying limit stands and is recorded: **a guard in `validate` is a guard on saving and on
+nothing else** — `db_set` can still reopen a closed diagnostic, as it can still bypass every other
+validate-time guard here.
+
+### Acceptance check
+
+`./scripts/install_verify.sh`: exit 0, `RESULT passed=150 failed=0`. Each of the four new checks
+proved by reverting its fix.
+
+### Phases 6 and 7
+
+Neither is buildable. **Phase 6 is the pilot itself** — it needs the 8–10 currently-certified
+volunteers he named and his two named reviewers, which is people rather than code. **Phase 7 is
+threshold calibration**, and §16 requires it be *"empirically calibrated using performance of
+currently certified volunteers"* — data that cannot exist until Phase 6 runs. The one piece of
+Phase 7 that could be done is done: `derive_state` reads the competency's own threshold, set from
+his five-case assessment rule, instead of the hardcoded two.

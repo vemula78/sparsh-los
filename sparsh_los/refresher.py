@@ -36,8 +36,14 @@ def _already_assigned(learner, competency, reason):
 	)
 
 
-def assign(learner, competency, reason, detail=None):
-	"""Assign one refresher. Idempotent: an open assignment is not duplicated."""
+def assign(learner, competency, reason, detail=None, focus_activity=None):
+	"""Assign one refresher. Idempotent: an open assignment is not duplicated.
+
+	`focus_activity` names the activity a weak-area refresher is about. Without it the
+	orchestrator handed a refresher learner whichever activity sorted first in the
+	competency, so somebody sent back for one specific gap met something else -- which
+	is the opposite of §8.2's "assign only weak-area refreshers".
+	"""
 	if _already_assigned(learner, competency, reason):
 		return None
 
@@ -47,6 +53,7 @@ def assign(learner, competency, reason, detail=None):
 	doc.trigger_reason = reason
 	doc.status = "Assigned"
 	doc.detail = detail
+	doc.focus_activity = focus_activity
 	doc.insert(ignore_permissions=True)
 	return doc.name
 

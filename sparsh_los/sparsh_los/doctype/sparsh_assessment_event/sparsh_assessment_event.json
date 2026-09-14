@@ -1,0 +1,130 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-09-14 15:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "learner",
+  "purpose",
+  "competency",
+  "column_break_head",
+  "status",
+  "pathway",
+  "started_at",
+  "completed_at",
+  "section_break_outcome",
+  "outcome_summary",
+  "detail"
+ ],
+ "fields": [
+  {
+   "fieldname": "learner",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "Learner",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "purpose",
+   "fieldtype": "Select",
+   "label": "Purpose",
+   "options": "Diagnostic\nGate\nCertification readiness",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "Why this checkpoint happened. A Diagnostic opens a refresher pathway for somebody already certified; a Gate is a checkpoint inside a pathway; Certification readiness is the compiled summary."
+  },
+  {
+   "fieldname": "competency",
+   "fieldtype": "Link",
+   "options": "Sparsh Competency",
+   "label": "Competency",
+   "description": "Left empty for a diagnostic that spans several competencies."
+  },
+  {
+   "fieldname": "column_break_head",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Open\nCompleted\nAbandoned",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "pathway",
+   "fieldtype": "Link",
+   "options": "Sparsh Pathway",
+   "label": "Pathway"
+  },
+  {
+   "fieldname": "started_at",
+   "fieldtype": "Datetime",
+   "label": "Started At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "completed_at",
+   "fieldtype": "Datetime",
+   "label": "Completed At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_outcome",
+   "fieldtype": "Section Break",
+   "label": "What it found"
+  },
+  {
+   "fieldname": "outcome_summary",
+   "fieldtype": "Small Text",
+   "label": "Outcome Summary",
+   "read_only": 1,
+   "description": "Written by the engine from the record, never supplied by a caller."
+  },
+  {
+   "fieldname": "detail",
+   "fieldtype": "Small Text",
+   "label": "Detail"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-09-14 15:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sparsh LOS",
+ "name": "Sparsh Assessment Event",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sparsh Reviewer",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

@@ -8140,6 +8140,287 @@ def check_pilot_gate_names_what_is_missing():
 		frappe.set_user(original)
 
 
+def _close_open_diagnostics(learner):
+	for name in frappe.get_all(
+		"Sparsh Assessment Event",
+		filters={"learner": learner, "purpose": "Diagnostic", "status": "Open"},
+		pluck="name",
+	):
+		frappe.db.set_value("Sparsh Assessment Event", name, "status", "Abandoned",
+							update_modified=False)
+	frappe.db.commit()
+
+
+def check_diagnostic_opens_one_activity_per_competency():
+	"""A refresher pathway starts with a short diagnostic, not the whole curriculum.
+
+	Section 8.2: "Do not force current certified volunteers through the entire new
+	pathway. Begin with a short competency diagnostic." Nothing implemented it, so a
+	certified volunteer had no entry point other than the ordinary pathway.
+	"""
+	from sparsh_los import diagnostic
+
+	_make_learner(TEST_LEARNER)
+	_reset_competency()
+	_close_open_diagnostics(TEST_LEARNER)
+
+	original = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+		opened = diagnostic.start()
+	finally:
+		frappe.set_user(original)
+
+	try:
+		offered = opened["activities"]
+		competencies = [row["competency"] for row in offered]
+		_assert(
+			len(competencies) == len(set(competencies)),
+			f"The diagnostic offered a competency twice: {competencies}",
+		)
+		_assert(
+			COMPETENCY in competencies,
+			f"The fixture competency is not in the diagnostic: {competencies}",
+		)
+		# Every competency that has an activity, and no competency that has none.
+		with_activities = {
+			row.competency
+			for row in frappe.get_all("Sparsh Activity", fields=["competency"])
+			if row.competency
+		}
+		_assert(
+			set(competencies) == with_activities,
+			f"The diagnostic covered {sorted(set(competencies))}, not {sorted(with_activities)}",
+		)
+
+		# A second start must not open a second diagnostic: two open ones make closing
+		# ambiguous and would assign every refresher twice.
+		try:
+			frappe.set_user(TEST_LEARNER)
+			again = diagnostic.start()
+		finally:
+			frappe.set_user(original)
+		_assert(again["already_open"], "A second diagnostic was opened alongside the first")
+		_assert(again["event"] == opened["event"], "The second start returned a different event")
+	finally:
+		_close_open_diagnostics(TEST_LEARNER)
+
+
+def check_diagnostic_assigns_a_refresher_only_where_weak():
+	"""Only weak areas produce a refresher, and the refresher names the gap.
+
+	`PERFORMANCE_GAP` was declared and assigned by nothing, so §8.2's "assign only
+	weak-area refreshers" had no implementation at all. Weak means "not an unaided
+	pass" -- the assistance model the engine already runs on, not an invented threshold.
+	"""
+	from sparsh_los import diagnostic, refresher
+
+	_make_learner(TEST_LEARNER)
+	_reset_competency()
+	_close_open_diagnostics(TEST_LEARNER)
+	_delete_all("Sparsh Refresher Assignment", {"learner": TEST_LEARNER})
+	_delete_all("Sparsh Refresher Assignment", {"competency": COMPETENCY_2})
+	strong_id = PREFIX + "DIAG-OTHER"
+	_delete_all("Sparsh Attempt", {"activity": ("like", strong_id + "%")})
+	_delete_all("Sparsh Activity", {"activity_id": strong_id})
+	other = frappe.new_doc("Sparsh Activity")
+	other.activity_id = strong_id
+	other.title = "Verification Activity"
+	other.competency = COMPETENCY_2
+	other.activity_type = "Knowledge check"
+	other.instruction = "Verification instruction."
+	other.version = 1
+	other.evaluation_mode = "Human review"
+	other.insert(ignore_permissions=True)
+	frappe.db.commit()
+
+	original = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+		opened = diagnostic.start()
+	finally:
+		frappe.set_user(original)
+
+	try:
+		offered = {row["competency"]: row["activity"] for row in opened["activities"]}
+		fixture_activity = offered.get(COMPETENCY)
+		_assert(fixture_activity, "The fixture competency was not offered, so nothing is proved")
+
+		# A wrong answer on the fixture competency: not an unaided pass.
+		_submit(fixture_activity, "zzv a wrong answer entirely", as_user=TEST_LEARNER)
+		frappe.db.commit()
+
+		# The positive control, and the whole discriminating power of this check. Without
+		# it, a version of `close` that calls every competency weak passes: asserting the
+		# failed one is weak says nothing unless a competency the learner demonstrated
+		# unaided is shown to produce no refresher. The first version of this check had
+		# exactly that hole and survived its own revert.
+		strong_activity = offered.get(COMPETENCY_2)
+		_assert(
+			strong_activity,
+			"The second competency was not offered, so the strong case cannot be shown",
+		)
+		unaided = frappe.new_doc("Sparsh Attempt")
+		unaided.learner = TEST_LEARNER
+		unaided.activity = strong_activity
+		unaided.response = "zzv an unaided correct answer"
+		unaided.outcome = "Pass"
+		unaided.hint_level_used = 0
+		unaided.retry_index = 0
+		unaided.attempted_at = frappe.utils.now_datetime()
+		unaided.insert(ignore_permissions=True)
+		frappe.db.commit()
+
+		result = diagnostic.close(opened["event"])
+
+		_assert(
+			COMPETENCY_2 in result["strong"],
+			f"An unaided pass was not counted as demonstrated: {result}",
+		)
+		_assert(
+			COMPETENCY_2 not in result["weak"],
+			"A competency demonstrated unaided was marked weak",
+		)
+		_assert(
+			not frappe.get_all(
+				"Sparsh Refresher Assignment",
+				filters={"learner": TEST_LEARNER, "competency": COMPETENCY_2,
+						 "status": "Assigned"},
+			),
+			"A refresher was raised on a competency the learner demonstrated unaided",
+		)
+
+		_assert(
+			COMPETENCY in result["weak"],
+			f"A failed diagnostic did not mark the competency weak: {result}",
+		)
+		_assert(
+			COMPETENCY not in result["not_attempted"],
+			"An attempted competency was reported as not attempted",
+		)
+		# Competencies nobody attempted must be reported as unknown, never as strong.
+		for competency in result["not_attempted"]:
+			_assert(
+				competency not in result["strong"],
+				f"{competency} was never attempted and was counted strong",
+			)
+
+		assigned = frappe.get_all(
+			"Sparsh Refresher Assignment",
+			filters={"learner": TEST_LEARNER, "competency": COMPETENCY, "status": "Assigned"},
+			fields=["name", "trigger_reason", "focus_activity"],
+		)
+		_assert(len(assigned) == 1, f"Expected one refresher on the weak competency: {assigned}")
+		_assert(
+			assigned[0].trigger_reason == refresher.PERFORMANCE_GAP,
+			f"The refresher was raised as {assigned[0].trigger_reason}, not a performance gap",
+		)
+		_assert(
+			assigned[0].focus_activity == fixture_activity,
+			f"The refresher does not name the activity the gap was found on: {assigned[0]}",
+		)
+
+		# A closed diagnostic stays closed: reopening would assign every refresher twice
+		# and make the completion time a lie. Asserted on the save path -- the first
+		# version of this check called `db_set` first, which bypasses `validate`
+		# entirely, so it reopened the event and then found nothing left to refuse. A
+		# guard in `validate` is a guard on saving and on nothing else; `db_set` can
+		# still reopen one, which is the same limit recorded against every other
+		# validate-time guard here.
+		_refused(
+			lambda: _reopen_event(opened["event"]),
+			"A completed diagnostic was reopened",
+			expect="cannot be reopened",
+		)
+	finally:
+		_close_open_diagnostics(TEST_LEARNER)
+		_delete_all("Sparsh Refresher Assignment", {"learner": TEST_LEARNER})
+		_delete_all("Sparsh Attempt", {"activity": ("like", strong_id + "%")})
+		_delete_all("Sparsh Activity", {"activity_id": strong_id})
+		frappe.db.commit()
+
+
+def _reopen_event(event):
+	doc = frappe.get_doc("Sparsh Assessment Event", event)
+	doc.status = "Open"
+	doc.save(ignore_permissions=True)
+
+
+def check_refresher_sends_the_learner_to_the_gap():
+	"""A weak-area refresher hands back the activity it was raised on.
+
+	`next_experience` returned `activities[0]` for every refresher regardless of trigger,
+	so a learner sent back for one specific failure met whichever activity sorted first
+	and could clear the refresher without revisiting what they got wrong.
+	"""
+	from sparsh_los import orchestrator, refresher
+
+	_make_learner(TEST_LEARNER)
+	_reset_competency()
+	_delete_all("Sparsh Refresher Assignment", {"learner": TEST_LEARNER})
+	frappe.db.commit()
+
+	activities = frappe.get_all(
+		"Sparsh Activity", filters={"competency": COMPETENCY},
+		fields=["name"], order_by="activity_id asc",
+	)
+	_assert(len(activities) >= 2,
+			"The fixture competency needs two activities for this to prove anything")
+	first, second = activities[0]["name"], activities[1]["name"]
+
+	try:
+		refresher.assign(TEST_LEARNER, COMPETENCY, refresher.PERFORMANCE_GAP,
+						 detail="zzv gap", focus_activity=second)
+		frappe.db.commit()
+
+		original = frappe.session.user
+		try:
+			frappe.set_user(TEST_LEARNER)
+			suggestion = orchestrator.next_experience(COMPETENCY)
+		finally:
+			frappe.set_user(original)
+
+		_assert(
+			suggestion["activity"] == second,
+			f"The refresher sent the learner to {suggestion['activity']}, not the gap {second}",
+		)
+		_assert(
+			second != first,
+			"The gap is the first activity anyway, so this fixture cannot discriminate",
+		)
+		_assert(not suggestion.get("focus_missing"), "The focus activity was reported missing")
+	finally:
+		_delete_all("Sparsh Refresher Assignment", {"learner": TEST_LEARNER})
+		frappe.db.commit()
+
+
+def check_assessment_event_cannot_be_deleted():
+	"""A checkpoint record is evidence, like an attempt or an event log."""
+	_make_learner(TEST_LEARNER)
+	event = frappe.new_doc("Sparsh Assessment Event")
+	event.learner = TEST_LEARNER
+	event.purpose = "Gate"
+	event.status = "Open"
+	event.insert(ignore_permissions=True)
+	frappe.db.commit()
+
+	try:
+		_refused(
+			lambda: frappe.delete_doc("Sparsh Assessment Event", event.name, force=True,
+									  ignore_permissions=True),
+			"An assessment event was deleted",
+			expect="cannot be deleted",
+		)
+	finally:
+		frappe.flags.in_sparsh_maintenance = True
+		try:
+			frappe.delete_doc("Sparsh Assessment Event", event.name, force=True,
+							  ignore_permissions=True)
+		finally:
+			frappe.flags.in_sparsh_maintenance = False
+		frappe.db.commit()
+
+
 CHECKS = (
 	("partial_only_history_is_named_accurately", check_partial_only_history_is_named_accurately),
 	("queue_shows_work_that_is_actually_waiting", check_queue_shows_work_that_is_actually_waiting),
@@ -8291,6 +8572,12 @@ CHECKS = (
 	("mastery_threshold_is_the_owners_not_the_engines",
 	 check_mastery_threshold_is_the_owners_not_the_engines),
 	("pilot_gate_names_what_is_missing", check_pilot_gate_names_what_is_missing),
+	("diagnostic_opens_one_activity_per_competency",
+	 check_diagnostic_opens_one_activity_per_competency),
+	("diagnostic_assigns_a_refresher_only_where_weak",
+	 check_diagnostic_assigns_a_refresher_only_where_weak),
+	("refresher_sends_the_learner_to_the_gap", check_refresher_sends_the_learner_to_the_gap),
+	("assessment_event_cannot_be_deleted", check_assessment_event_cannot_be_deleted),
 	("cleanup", check_cleanup),
 )
 

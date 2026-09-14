@@ -15,7 +15,8 @@
   "assigned_on",
   "completed_on",
   "section_break_detail",
-  "detail"
+  "detail",
+  "focus_activity"
  ],
  "fields": [
   {
@@ -75,12 +76,19 @@
    "fieldtype": "Small Text",
    "label": "Detail",
    "read_only": 1
+  },
+  {
+   "fieldname": "focus_activity",
+   "fieldtype": "Link",
+   "options": "Sparsh Activity",
+   "label": "Focus Activity",
+   "description": "The activity this refresher is about. A weak-area refresher names the activity the gap was found on; a time- or rule-triggered one may leave it empty."
   }
  ],
  "idx": 0,
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-13 18:10:00.000000",
+ "modified": "2026-09-14 15:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Refresher Assignment",

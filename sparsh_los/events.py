@@ -34,6 +34,8 @@ MASTERY_STATE_CHANGED = "mastery_state_changed"
 REFRESHER_ASSIGNED = "refresher_assigned"
 REFRESHER_COMPLETED = "refresher_completed"
 CERTIFICATION_STATE_CHANGED = "certification_state_changed"
+ASSESSMENT_STARTED = "assessment_started"
+ASSESSMENT_COMPLETED = "assessment_completed"
 
 # The events a learner causes by doing something. The rest of the list is the engine or
 # a reviewer acting *about* a learner -- a review completed, a mastery state recomputed,
