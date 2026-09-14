@@ -13,6 +13,8 @@
   "derived_state",
   "certified_on",
   "certified_by",
+  "certificate_version",
+  "renewal_due",
   "section_break_remarks",
   "remarks",
   "amended_from",
@@ -71,6 +73,22 @@
    "no_copy": 1
   },
   {
+   "fieldname": "certificate_version",
+   "fieldtype": "Int",
+   "label": "Certificate Version",
+   "read_only": 1,
+   "no_copy": 1,
+   "in_list_view": 1,
+   "description": "Assigned at submission: 1 for the first certificate on this learner and competency, 2 for a re-certification after a lapse or revocation. 0 means the record predates versioning and its ordinal could not be determined."
+  },
+  {
+   "fieldname": "renewal_due",
+   "fieldtype": "Date",
+   "label": "Renewal Due",
+   "no_copy": 1,
+   "description": "Set by the programme when it has a renewal policy. Empty means no renewal policy is set for this certificate, not that renewal is not due."
+  },
+  {
    "fieldname": "section_break_remarks",
    "fieldtype": "Section Break",
    "label": "Remarks"
@@ -124,7 +142,7 @@
  "index_web_pages_for_search": 0,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-09-12 22:36:27.872004",
+ "modified": "2026-09-14 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Certification Record",

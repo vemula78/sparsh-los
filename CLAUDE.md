@@ -51,10 +51,13 @@ schema work — run it after touching any DocType JSON.
   name onto `sparsh_los` and the install then fails on a module named `sssihms_vmssparsh_los`. The
   script adds the newline first.
 - The local compose stack runs **no rq worker**, so enqueued jobs accumulate for ever. Past 700 the
-  framework refuses to enqueue at all and the harness dies with `QueueOverloaded` — which
-  `bench execute` then masks as `NameError: name 'sparsh_los' is not defined`, because it falls back
-  to `eval()` on the method string and reports *that* failure instead of the real one. Clear it with
-  `docker exec frappe_docker-redis-queue-1 redis-cli flushall`. Never on the hospital bench.
+  framework refuses to enqueue at all and the harness dies with `QueueOverloaded`. At 140+ checks a
+  single run reaches the cap on its own, so `install_verify.sh` now flushes the queue itself before
+  the harness — local target only, never the hospital bench.
+  `bench execute` used to mask *every* harness error as `NameError: name 'sparsh_los' is not
+  defined`, because it falls back to `eval()` on the method string and reports that failure instead
+  of the real one. The script now runs `scripts/run_verify.py` through the bench's own python, so
+  the real traceback appears. Use that script when running the harness by hand, for the same reason.
 - DocType JSON is only re-synced when its `modified` timestamp is newer than the database's. Editing
   a JSON without bumping `modified` means `bench migrate` silently ignores your change — and
   `on_doctype_update` (where unique indexes are created) never fires.
@@ -67,7 +70,7 @@ schema work — run it after touching any DocType JSON.
 ## Architecture
 
 Nineteen modules over 17 top-level DocTypes and 8 child tables, all prefixed `Sparsh `.
-The acceptance harness is **82 checks**; raise `MIN_CHECKS` in `install_verify.sh` with it, or an
+The acceptance harness is **141 checks**; raise `MIN_CHECKS` in `install_verify.sh` with it, or an
 empty `CHECKS` tuple reads as success.
 
 | Module | Role |
@@ -142,8 +145,12 @@ proven otherwise.
   `frappe.get_attr("requests.get")`, or Frappe's own request helpers without an import line. Its
   first version banned each module in one of its two spellings and would have missed
   `import openai` entirely. `Activity.evaluation_mode` declares six evaluator types, but only
-  `Deterministic` is dispatched. Every unbuilt mode returns `Not Evaluated` and waits for a
-  person; `Reflection` also returns `Not Evaluated` but waits for nobody — it is stored, kept out
+  `Deterministic` and `Numeric validation` are auto-scored, and both only under a validated rule.
+  `Rubric` is human-judged and engine-aggregated (`review.score_rubric`): a reviewer states which
+  criteria were met, the engine decides Pass/Partial/Fail and issues the next hint, which is how
+  free-text work finally has a ladder. `AI-assisted` is deliberately unbuilt. Every unbuilt mode
+  returns `Not Evaluated` and waits for a person; `Reflection` also returns `Not Evaluated` but
+  waits for nobody — it is stored, kept out
   of `review.pending`, and refused by `record_evidence`, because a reflection is the learner's own
   writing and not work awaiting a verdict. An unbuilt mode must never fall through to the string
   comparison, and a response matching a critical marker still escalates to a person in every mode.
@@ -225,6 +232,19 @@ value — if something is missing, the output says missing.
   the single most productive rule in the project; it has exposed a check that tested one DocType
   under a name covering six, one that passed on ambient state, and several that asserted nothing at
   all.
+- **A check that fails for the wrong reason is not a check.** Read the failure message the revert
+  produces, not just the red. `_raises` brackets its call in a savepoint, so it cannot wrap anything
+  that **commits**: with the guard reverted the commit destroys the savepoint and the rollback fails
+  with `SAVEPOINT sparsh_verify does not exist` — red, and silent about the thing under test. Assert
+  the refusal directly there, then read the stored value back so a silent success is caught too.
+- **A bare `_(...)` in a module that never imports `_` is invisible until the guard fires**, and
+  then it is a 500 instead of a refusal. `ast.parse` accepts it and reading the diff does not catch
+  it — it shipped twice in one day. `check_translations_are_imported` walks every module for it;
+  `frappe._(...)` is fine.
+- The install script must not ship macOS AppleDouble sidecars (`._name`) into the bench. It does so
+  by default from a Mac, ~150 of them, and because the determinism scanner reads with
+  `errors="ignore"` they counted as scanned files and met its floor with junk. `COPYFILE_DISABLE=1`
+  plus `--exclude '._*'`.
 
 ## History
 

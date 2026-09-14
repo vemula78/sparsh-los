@@ -105,6 +105,10 @@ class SparshCertificationRecord(Document):
 		# standing key.
 		self.certification_state = "Active"
 
+		# Always overwritten here for the same reason: a crafted document could
+		# otherwise submit itself as version 1 over an existing certificate.
+		self.certificate_version = _next_version(self.learner, self.competency, self.name)
+
 	def on_update_after_submit(self):
 		"""Standing is decided by reconciliation and revocation, not by editing.
 
@@ -143,6 +147,35 @@ class SparshCertificationRecord(Document):
 				)
 			finally:
 				frappe.flags.in_sparsh_certification = previous
+
+
+def _next_version(learner, competency, exclude_name):
+	"""The ordinal of a certificate issued now for this learner and competency.
+
+	Every issue record that already exists -- standing, suspended, revoked or
+	cancelled -- is earlier than this one, so the new ordinal is at least one more
+	than their count, and at least one more than the highest version any of them
+	carries. Taking the larger of the two keeps the sequence correct on a site whose
+	older records predate the column and hold 0: those stay unnumbered (the backfill
+	reports them), and the new certificate is still placed after all of them rather
+	than issued as a second "version 1".
+
+	Two concurrent issues would compute the same number. They also both set
+	`standing_key`, and its unique index refuses the second, so uniqueness of
+	(learner, competency, version) is held by that index rather than by a separate
+	one: a version is only ever assigned in the transaction that takes the key.
+	"""
+	row = frappe.db.sql(
+		"""select count(*) as issued, ifnull(max(certificate_version), 0) as highest
+		   from `tabSparsh Certification Record`
+		   where learner = %(learner)s and competency = %(competency)s
+		     and docstatus in (1, 2)
+		     and ifnull(certification_status, '') != 'Revoked'
+		     and name != %(name)s""",
+		{"learner": learner, "competency": competency, "name": exclude_name},
+		as_dict=True,
+	)[0]
+	return max(int(row.issued or 0), int(row.highest or 0)) + 1
 
 
 def on_doctype_update():

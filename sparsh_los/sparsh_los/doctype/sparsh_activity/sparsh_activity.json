@@ -20,8 +20,15 @@
   "section_break_errors",
   "evaluation_mode",
   "expected_response",
+  "expected_value",
+  "tolerance",
+  "rubric_criteria",
   "hints",
-  "critical_markers"
+  "critical_markers",
+  "section_break_provenance",
+  "source_status",
+  "validation_required",
+  "engine_guidance"
  ],
  "fields": [
   {
@@ -120,6 +127,32 @@
    "permlevel": 1
   },
   {
+   "depends_on": "eval:doc.evaluation_mode=='Numeric validation'",
+   "description": "The one accepted number, in the unit the instruction names. Text, so blank means not yet agreed and 0 means zero.",
+   "fieldname": "expected_value",
+   "fieldtype": "Data",
+   "label": "Expected Value",
+   "permlevel": 1
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.evaluation_mode=='Numeric validation'",
+   "description": "Absolute tolerance in the same unit: a response within expected value \u00b1 tolerance passes. 0 means exact.",
+   "fieldname": "tolerance",
+   "fieldtype": "Float",
+   "label": "Tolerance",
+   "non_negative": 1,
+   "permlevel": 1
+  },
+  {
+   "depends_on": "eval:doc.evaluation_mode=='Rubric'",
+   "description": "One criterion per line. Line 1 is criterion 1. All met is a Pass, none met a Fail, otherwise Partial.",
+   "fieldname": "rubric_criteria",
+   "fieldtype": "Small Text",
+   "label": "Rubric Criteria",
+   "permlevel": 1
+  },
+  {
    "description": "One hint per line, weakest first. Line 1 is hint level 1.",
    "fieldname": "hints",
    "fieldtype": "Small Text",
@@ -132,11 +165,37 @@
    "fieldtype": "Small Text",
    "label": "Critical Error Markers",
    "permlevel": 1
+  },
+  {
+   "fieldname": "section_break_provenance",
+   "fieldtype": "Section Break",
+   "label": "Where this came from"
+  },
+  {
+   "fieldname": "source_status",
+   "fieldtype": "Data",
+   "label": "Source Status",
+   "read_only": 1,
+   "description": "The status this case carried in the programme's own case pack."
+  },
+  {
+   "fieldname": "validation_required",
+   "fieldtype": "Small Text",
+   "label": "Programme Validation Needed",
+   "read_only": 1,
+   "description": "What the programme owner requires to be confirmed before this case can be scored."
+  },
+  {
+   "fieldname": "engine_guidance",
+   "fieldtype": "Small Text",
+   "label": "Suggested Engine Behaviour",
+   "read_only": 1,
+   "description": "Developer guidance from the case pack. NOT the standard a learner is judged against."
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-13 18:00:00.000000",
+ "modified": "2026-09-14 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Activity",

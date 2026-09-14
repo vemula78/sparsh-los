@@ -10,7 +10,7 @@ set -euo pipefail
 
 TARGET="${TARGET:-local}"
 SKIP_VERIFY="${SKIP_VERIFY:-0}"
-MIN_CHECKS="${MIN_CHECKS:-111}"
+MIN_CHECKS="${MIN_CHECKS:-141}"
 
 case "${TARGET}" in
 local)
@@ -102,9 +102,24 @@ host_cmd "docker exec -u frappe ${CONTAINER} bash -lc 'cd ${BENCH_DIR} && bench 
 echo "==> DocType count for module 'Sparsh LOS'"
 host_cmd "docker exec -u frappe ${CONTAINER} bash -lc \"cd ${BENCH_DIR} && bench --site ${SITE} mariadb --execute=\\\"select count(*) from tabDocType where module='Sparsh LOS' and istable=0\\\"\""
 
+if [ "${SKIP_VERIFY}" != "1" ] && [ "${TARGET}" = "local" ]; then
+	# No rq worker on the local compose stack, so enqueued jobs accumulate until the
+	# framework refuses to enqueue at all. At 140+ checks a single run reaches the cap
+	# by itself, so the flush belongs here rather than in the operator's memory.
+	# Local only -- never the hospital bench, which has real workers and real jobs.
+	docker exec frappe_docker-redis-queue-1 redis-cli flushall >/dev/null 2>&1 || true
+fi
+
 if [ "${SKIP_VERIFY}" != "1" ]; then
 	echo "==> Running behavioural verification harness"
-	OUTPUT="$(host_cmd "docker exec -u frappe ${CONTAINER} bash -lc 'cd ${BENCH_DIR} && bench --site ${SITE} execute sparsh_los.verify.run'")"
+	# Run through the bench's own python rather than `bench execute`. `bench execute`
+	# falls back to `eval()` on the method string, so ANY exception raised while
+	# importing or running the harness is reported as
+	# `NameError: name 'sparsh_los' is not defined` -- the real error never appears.
+	# That cost hours twice: once on a QueueOverloaded from this stack's missing rq
+	# worker, once on a genuine harness failure that looked identical. The redis flush
+	# below removes the usual cause; this removes the masking.
+	OUTPUT="$(host_cmd "docker exec -u frappe ${CONTAINER} bash -lc 'cd ${BENCH_DIR}/sites && ../env/bin/python ${APP_DIR}/scripts/run_verify.py ${SITE} 2>&1'")"
 	echo "${OUTPUT}"
 	if ! echo "${OUTPUT}" | grep -q 'RESULT passed='; then
 		echo "FAIL: verify harness did not print a RESULT line" >&2

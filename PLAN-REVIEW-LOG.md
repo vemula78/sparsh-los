@@ -1477,3 +1477,90 @@ Phases 2–3 are ours: §18 analytics v1 and the §20 no-model-call share; Numer
 Rubric evaluators, which close acceptance criterion 4 without any model call. Phases 4–7 remain
 blocked on the programme owner's eleven answers. F7 (assistance recorded without assistance shown
 on a hint-less activity) is still open.
+
+---
+
+## Phases 2 and 3, and audit 23 — specification conformance (Fable 5.1)
+
+Three agents built Phases 2 and 3 in parallel on disjoint files; a fourth wrote the checks. A
+fifth was then asked to do something none of the twenty-two prior rounds had done: **read the four
+original programme documents and audit the build against them**, rather than auditing the code
+against itself.
+
+**111 → 141 checks.**
+
+### Built
+
+| Phase | Delivered |
+|---|---|
+| 2a | §18 analytics: inactivity with last-activity date, refresher participation, escalation turnaround, competency state change over time, attempts/retries/hints by competency, pathway completion, and the §20 no-model-call share computed two ways |
+| 2b | §18 view 4 `compliance_view`, `certificate_version`, nullable `renewal_due`, and a backfill patch |
+| 3 | **Numeric validation** and **Rubric** — acceptance criterion 4 closed without any model call |
+
+### Judgement calls worth recording
+
+- **Numeric uses `Decimal`, not float.** Unit-tested: `2.7 − 2.5` in binary float is a shade over
+  `0.2` and would have failed a 0.2 tolerance the author meant to accept — a wrong verdict on a
+  correct answer.
+- **`expected_value` is Data, not Float**, because Frappe creates Float as `NOT NULL DEFAULT 0` on
+  this bench, which makes "not yet agreed" indistinguishable from "zero". Zero is a legitimate
+  expected answer.
+- **A non-numeric response is refused before an Attempt exists** — it does not climb the ladder,
+  does not count as a retry, and does not reach a reviewer as free text. Not answering is not the
+  same as answering wrongly, and the difference is permanent in the assistance record.
+- **Rubric aggregation is all-or-nothing.** Any looser threshold names which criterion may be
+  skipped, which is the programme owner's judgement, not the engine's.
+- **`renewal_due` stays NULL** and reads as "no renewal policy set", never "not due".
+- **The backfill refuses to guess**: two unnumbered legacy certificates for one learner stay at 0
+  and are named, because whether the second was a re-certification or an amendment is a programme
+  fact the data does not settle.
+
+### Audit 23 — the build against the original documents
+
+This found a class of defect invisible to every prior round, because the code is self-consistent:
+**the build had quietly rewritten the programme's own content on the way in.**
+
+| Finding | Disposition |
+|---|---|
+| `load_case_pack` stored the pack's *"suggested engine behaviour"* — developer guidance such as "Short case -> decision -> brief reasoning -> graded hint" — in **`expected_evidence`**, the field a reviewer opens to see what the learner was supposed to demonstrate. A pilot reviewer would have judged a volunteer against build instructions | **Confirmed, fixed.** `expected_evidence` is left empty (the pack states none — missing is missing); the guidance moves to a new read-only `engine_guidance` |
+| The pack's `Current status` and `Programme validation needed` were dropped entirely on load. For SC-06 the latter reads *"Use programme-approved red-flag/referral rules only"* | **Confirmed, fixed.** Both carried across, and surfaced **in the reviewer's queue** — the reviewer is the last person who can notice that the rule behind the case they are judging is unapproved |
+| Already-seeded sites keep the old values, because `load_case_pack` skips existing activities | **Confirmed, fixed** by `restore_case_pack_provenance`, which clears `expected_evidence` only where it still holds the pack's engine text verbatim and reports any case where somebody has since authored real content |
+| The matrix load silently remaps vocabulary: Criticality `Medium`/`High` → `Normal`/`High-risk`, Status `Context-dependent` → `Draft`, every `until validated` qualifier dropped. Row 17 loads **more restrictive than the owner authorised** | **Confirmed, open** — see below |
+| `Sparsh Source of Truth Rule` has one `rule_statement` holding *candidate* text. The matrix's Instructions sheet says *"Enter the approved current rule in exact wording when confirmed"* — a separate column. There is nowhere to put his answer without destroying the candidate | **Confirmed, open** — a schema change, and the single most important one before he answers anything |
+| `SSP-DOC` is a **fourth competency the build invented**. The matrix and §10 scope the MVP to three; Documentation is backlog item 15 | **Confirmed, open** — a programme decision, not ours to take back unilaterally |
+| SC-06/SC-07 seeded with **no `critical_markers`**, though the pack calls SC-06 *"Safety case with a critical-error flag"* | **Confirmed, open** — the phrases are not in the pack; inventing them would be fabricating safety content |
+| Acceptance criterion 8 "a critical safety error can block progression" **holds in the harness and not on programme content**: the rule gate precedes the marker branch, no rule is Validated, and none is linked to SSP-SCOPE | **Confirmed, by design** — an unvalidated rule escalates rather than blocks. But it means the safety gate is untested against real content |
+| No learner-facing escalation control: §17 step 1 and criterion 9 are API-only | **Confirmed, open** |
+| Dead vocabulary that looks implemented: `Closed`, `Needs More Evidence`, `Provisional`/`Full`, `mastery_contribution`, `PERFORMANCE_GAP`, `Sparsh Scenario`, `Competency Lesson Reference` | **Confirmed, open** |
+
+### A tripwire that fired on ordinary English
+
+`check_no_domain_strings` matched `sai` as a bare substring and flagged a field description
+containing the word "**sai**d". The false positive is trivial; the risk is not — a tripwire that
+fires on innocent prose is one somebody eventually weakens to make a build pass. Pattern is now
+`sparsh|\bsai\b`, which still catches `SAI SPARSH`, `SAI-SPARSH`, a bare `SAI` and `saisparsh`.
+
+### The masking is gone, not documented again
+
+`bench execute` falls back to `eval()` on the method string, so **every** harness error — a
+`QueueOverloaded`, an import failure, a genuine assertion — was reported as
+`NameError: name 'sparsh_los' is not defined`. It cost hours twice. `install_verify.sh` now runs
+`scripts/run_verify.py` through the bench's own python. Proved by raising a deliberate
+`RuntimeError` inside `verify.py`: the new runner names the file, the line and the exception;
+`bench execute` says `name 'sparsh_los' is not defined`.
+
+The script also flushes the job queue itself before the harness, local target only — at 141 checks
+a single run reaches this stack's 700-job cap unaided, because the local compose stack has no rq
+worker.
+
+### Acceptance check
+
+`./scripts/install_verify.sh`, full path including `migrate` and three patches: exit 0,
+`RESULT passed=141 failed=0`.
+
+### Still open
+
+Phases 4–7 remain blocked on the programme owner. Added to that list by this audit: the
+candidate-versus-approved wording schema gap, the matrix vocabulary remapping, the invented fourth
+competency, and the absent critical markers on the two safety cases — the last three are all
+questions for him rather than defects we may fix ourselves.

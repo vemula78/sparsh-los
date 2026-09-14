@@ -1,6 +1,8 @@
 # Copyright (c) 2026, SSSIHMS and contributors
 # For license information, please see license.txt
 
+from decimal import Decimal, InvalidOperation
+
 import frappe
 from frappe import _
 from frappe.model.document import Document
@@ -23,9 +25,25 @@ class SparshActivity(Document):
 			self.instruction,
 			self.expected_evidence,
 			self.expected_response,
+			self.expected_value,
+			self.rubric_criteria,
 			self.hints,
 			self.critical_markers,
 		)
+
+		# The numeric answer key is text (blank must differ from zero), so its shape is
+		# checked here rather than by the column. One number and nothing else: a unit
+		# belongs in the instruction, and "120/80" is two numbers, not one.
+		if (self.expected_value or "").strip():
+			try:
+				Decimal(self.expected_value.strip())
+			except InvalidOperation:
+				frappe.throw(
+					_("Expected Value must be a single number, in the unit the instruction names")
+				)
+
+		if (self.tolerance or 0) < 0:
+			frappe.throw(_("Tolerance cannot be negative"))
 
 		# The ladder is one hint per line, weakest first: line 1 is hint level 1.
 		# It was a child table until a child table proved to be separately queryable

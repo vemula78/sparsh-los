@@ -3,3 +3,5 @@
 [post_model_sync]
 sparsh_los.patches.v1_0.backfill_cost_recorded_flags
 sparsh_los.patches.v1_0.backfill_resource_current_keys
+sparsh_los.patches.v1_0.backfill_certificate_versions
+sparsh_los.patches.v1_0.restore_case_pack_provenance

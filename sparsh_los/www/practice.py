@@ -53,6 +53,10 @@ def get_context(context):
 	# before it looked at Mastery States at all.
 	context.next_up = None
 	context.pathway = None
+	# Set explicitly rather than only in the failure branch: an undefined name is
+	# falsy in the template today, which makes the notice depend on Jinja's undefined
+	# behaviour rather than on the page saying what it means.
+	context.pathway_problem = None
 
 	from sparsh_los import cohort
 
@@ -88,13 +92,18 @@ def get_context(context):
 		from sparsh_los import runner
 
 		opened = runner.start(context.next_up["activity"])
-		# Only what the page shows. `start` also returns `hint_level` and `retry_index`
-		# as literal zeros -- they are placeholders for a session it has just opened,
-		# not this learner's position on the ladder, and copying them into the page
-		# context would hand the next template author a number that looks authoritative
-		# and is not.
+		# `start` reports the learner's real position now that a reviewer's Rubric
+		# verdict can issue a hint. That hint arrives after the session which produced
+		# the attempt has closed, so this page is its only route to the learner: drop it
+		# here and a Partial verdict's help is written and never delivered.
 		context.next_up.update(
-			{"title": opened["title"], "instruction": opened["instruction"]}
+			{
+				"title": opened["title"],
+				"instruction": opened["instruction"],
+				"hint": opened["hint"],
+				"hint_level": opened["hint_level"],
+				"retry_index": opened["retry_index"],
+			}
 		)
 
 	return context

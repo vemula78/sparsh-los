@@ -20,10 +20,27 @@
 	.sp-badge.is-strong { background: #1E8449; color: #fff; }
 	.sp-badge.is-due { background: #D4AC0D; color: #2C2C2C; }
 	.sp-empty { color: #6C6C6C; }
+	.sp-notice { border-left: 3px solid #D4AC0D; padding: 8px 12px; margin-bottom: 16px;
+	             background: #FBF6E3; color: #2C2C2C; }
+	.sp-step { color: #6C6C6C; font-size: 12px; margin-top: 4px; }
+	.sp-hint { border-left: 3px solid #1A5276; padding: 8px 12px; margin: 12px 0;
+	           background: #D6E8F7; color: #2C2C2C; }
+	.sp-hint-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+	                 color: #1A5276; margin-bottom: 2px; }
 </style>
 
 <div class="sp-wrap">
 	<h1>Practice</h1>
+
+	{% if pathway_problem %}
+	{# Set when a learner sits in two Active cohorts: the engine refuses to guess which
+	   programme they are on. Shown rather than swallowed -- it is an administrator's
+	   misconfiguration and somebody has to be told. #}
+	<div class="sp-notice">
+		Your programme assignment needs attention: {{ pathway_problem }}
+		You can still practise below.
+	</div>
+	{% endif %}
 
 	{% if next_up %}
 	<div class="sp-task">
@@ -34,7 +51,20 @@
 			{% else %}Today's task{% endif %}
 		</div>
 		<strong>{{ next_up.title or next_up.activity }}</strong>
+		{% if pathway and next_up.step %}
+		<div class="sp-step">Step {{ next_up.step }} of your assigned pathway</div>
+		{% endif %}
 		<p class="sp-instruction">{{ next_up.instruction or "" }}</p>
+
+		{% if next_up.hint %}
+		{# The strongest hint already issued -- including one a reviewer's Rubric verdict
+		   produced after the learner's session closed. This page is its only route to
+		   them. #}
+		<div class="sp-hint">
+			<div class="sp-hint-label">Help you have already been given{% if next_up.hint_level %} · hint {{ next_up.hint_level }}{% endif %}</div>
+			{{ next_up.hint }}
+		</div>
+		{% endif %}
 
 		<textarea class="sp-response" id="sp-response" placeholder="Your answer"></textarea>
 		<div class="sp-actions">

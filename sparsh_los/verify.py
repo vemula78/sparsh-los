@@ -18,7 +18,7 @@ import traceback
 import frappe
 import frappe.client
 
-from sparsh_los.mastery import DEMONSTRATED, MASTERED, STATE_ORDER, derive_state
+from sparsh_los.mastery import DEMONSTRATED, MASTERED, REJECTED, STATE_ORDER, derive_state
 
 PREFIX = "ZZV-"
 PATHWAY = PREFIX + "PATH"
@@ -38,7 +38,12 @@ OTHER_LEARNER = "zzv-other@example.invalid"
 SUMMARY_LEARNER = "zzv-summary@example.invalid"
 
 PII_PATTERN = re.compile(r"patient|mrn|uhid|dob|aadhaar|phone|address", re.IGNORECASE)
-DOMAIN_STRING_PATTERN = re.compile(r"sparsh|sai", re.IGNORECASE)
+# `sai` needs a word boundary. As a bare substring it matches ordinary English --
+# "said" was the first false positive, on a field description -- and a tripwire that
+# fires on innocent prose is one somebody eventually weakens to make a build pass,
+# which is worse than not having it. The boundary still catches "SAI SPARSH",
+# "SAI-SPARSH" and a bare "SAI"; "saisparsh" is caught by the other alternative.
+DOMAIN_STRING_PATTERN = re.compile(r"sparsh|\bsai\b", re.IGNORECASE)
 
 results = []
 
@@ -140,7 +145,17 @@ def _delete_each(doctype, filters):
 		doc = frappe.get_doc(doctype, name)
 		if doc.meta.is_submittable and doc.docstatus == 1:
 			doc.cancel()
-		frappe.delete_doc(doctype, name, force=True, ignore_permissions=True)
+		# `delete_doc` enqueues `delete_dynamic_links` once per row. This bench runs no
+		# worker, so a full run's own cleanup queued ~800 jobs and the framework refused
+		# the 701st with QueueOverloaded -- in teardown, after every check had passed.
+		# `frappe.in_test` is the framework's own switch for running that job inline;
+		# it is set for the delete alone and restored, not cleared.
+		previous_in_test = frappe.in_test
+		frappe.in_test = True
+		try:
+			frappe.delete_doc(doctype, name, force=True, ignore_permissions=True)
+		finally:
+			frappe.in_test = previous_in_test
 
 
 def _reset_competency(competency=None):
@@ -222,6 +237,7 @@ def teardown():
 		"zzv-stranger@example.invalid",
 		PREFIX + "pathway@example.invalid",
 		"zzv-reviewer@example.invalid",
+		"zzv-inactive@example.invalid",
 	)
 	for name in frappe.get_all(
 		"Sparsh Evidence", filters={"learner": ("in", fixture_users)}, pluck="name"
@@ -6359,6 +6375,1481 @@ def check_translations_are_imported():
 	)
 
 
+# ------------------------------------------------------------- phase 2: analytics
+INACTIVE_LEARNER = "zzv-inactive@example.invalid"
+REFLECTION_ACTIVITY = PREFIX + "ACT-REFL"
+# Three criteria whose wording is distinctive enough that a summary carrying any of it
+# would be caught: the learner can read their own Evidence, so the text must not reach it.
+RUBRIC_CRITERIA = (
+	"Names the concern in plain words\n"
+	"Asks what the caregiver already does\n"
+	"Agrees one next step together"
+)
+
+
+def _summary():
+	from sparsh_los import dashboard
+
+	return dashboard.programme_summary()
+
+
+def _author(activity_name, **fields):
+	"""Write authored fields on an activity. Returns the originals, for `_author(name, **original)`."""
+	activity = frappe.get_doc("Sparsh Activity", activity_name)
+	original = {field: activity.get(field) for field in fields}
+	for field, value in fields.items():
+		activity.set(field, value)
+	activity.save(ignore_permissions=True)
+	frappe.db.commit()
+	return original
+
+
+def _ensure_activity(name, competency=COMPETENCY, **fields):
+	if frappe.db.exists("Sparsh Activity", name):
+		return frappe.get_doc("Sparsh Activity", name)
+	activity = frappe.new_doc("Sparsh Activity")
+	activity.activity_id = name
+	activity.title = "Verification Activity"
+	activity.competency = competency
+	activity.activity_type = "Knowledge check"
+	activity.instruction = "Verification instruction."
+	activity.version = 1
+	activity.hints = "First hint.\nSecond hint."
+	for field, value in fields.items():
+		activity.set(field, value)
+	activity.insert(ignore_permissions=True)
+	frappe.db.commit()
+	return activity
+
+
+def _reconciles(summary, label):
+	inactivity = summary["inactivity"]
+	_assert(
+		inactivity["inactive"] + summary["active_in_period"] == summary["enrolled"],
+		f"{label}: inactive {inactivity['inactive']} + active {summary['active_in_period']} "
+		f"!= enrolled {summary['enrolled']}",
+	)
+
+
+def _fresh_inactive_learner():
+	"""No account, no attempt, no event: the one learner whose last activity is genuinely unknown."""
+	_delete_all("Sparsh Attempt", {"learner": INACTIVE_LEARNER})
+	_delete_all("Sparsh Event", {"learner": INACTIVE_LEARNER})
+	if frappe.db.exists("User", INACTIVE_LEARNER):
+		frappe.delete_doc("User", INACTIVE_LEARNER, force=True, ignore_permissions=True)
+	frappe.db.commit()
+
+
+def _inactivity_row(inactivity, learner):
+	rows = [r for r in inactivity["learners"] if r["learner"] == learner]
+	_assert(len(rows) == 1, f"{learner} appears {len(rows)} time(s) in the inactive list")
+	return rows[0]
+
+
+def check_inactive_reconciles():
+	"""inactive + active_in_period == enrolled exactly, and inactive is counted from Attempts.
+
+	A learner who opened a session and answered nothing has been seen, not active: the
+	Event moves their last-activity date and nothing else. Counting inactivity from
+	Events would break the identity the moment somebody logged in without working.
+	"""
+	from sparsh_los import events
+
+	_fresh_inactive_learner()
+	# Any mode records an attempt; Human review is the one no other check's leftovers
+	# can turn into a refusal (a Numeric key would refuse the text below outright).
+	original = _set_mode(ACTIVITY_1, "Human review")
+	try:
+		base = _summary()
+		_assert(
+			base["inactivity"]["inactive"] is not None,
+			"No account holds the learner role, so inactivity is undefined and this check cannot run",
+		)
+		_reconciles(base, "baseline")
+
+		_make_learner(INACTIVE_LEARNER)
+		frappe.db.commit()
+		quiet = _summary()
+		_assert(quiet["enrolled"] - base["enrolled"] == 1, "The fixture account did not enrol")
+		_assert(
+			quiet["inactivity"]["inactive"] - base["inactivity"]["inactive"] == 1,
+			f"A learner with no attempt did not move inactive: "
+			f"{base['inactivity']['inactive']} -> {quiet['inactivity']['inactive']}",
+		)
+		row = _inactivity_row(quiet["inactivity"], INACTIVE_LEARNER)
+		_assert(
+			row["last_activity"] is None and row["source"] is None,
+			f"A learner never seen is reported with a last activity: {row}",
+		)
+		_reconciles(quiet, "after enrolment")
+
+		events.emit(events.SESSION_STARTED, learner=INACTIVE_LEARNER)
+		frappe.db.commit()
+		seen = _summary()
+		_assert(
+			seen["inactivity"]["inactive"] - base["inactivity"]["inactive"] == 1,
+			f"A session event with no attempt changed the inactive count: "
+			f"{quiet['inactivity']['inactive']} -> {seen['inactivity']['inactive']}",
+		)
+		_assert(
+			seen["active_in_period"] == base["active_in_period"],
+			"A session event with no attempt counted as active",
+		)
+		_reconciles(seen, "after a session event")
+
+		_submit(ACTIVITY_1, "zzv one attempt ends inactivity", as_user=INACTIVE_LEARNER)
+		frappe.db.commit()
+		back = _summary()
+		_assert(
+			back["inactivity"]["inactive"] == base["inactivity"]["inactive"],
+			f"One attempt did not return inactive to its baseline: "
+			f"{base['inactivity']['inactive']} -> {back['inactivity']['inactive']}",
+		)
+		_assert(
+			back["active_in_period"] - base["active_in_period"] == 1,
+			f"One attempt did not move active_in_period: {base['active_in_period']} -> {back['active_in_period']}",
+		)
+		_assert(
+			not [r for r in back["inactivity"]["learners"] if r["learner"] == INACTIVE_LEARNER],
+			"A learner who has just attempted something is still listed as inactive",
+		)
+		_reconciles(back, "after an attempt")
+		_assert(
+			back["inactivity"]["proportion"]
+			== round(back["inactivity"]["inactive"] / back["enrolled"], 4),
+			f"The inactive proportion is not inactive/enrolled: {back['inactivity']}",
+		)
+	finally:
+		_restore_mode(ACTIVITY_1, original)
+		_delete_all("Sparsh Attempt", {"learner": INACTIVE_LEARNER})
+		frappe.db.commit()
+
+
+def check_last_activity_date_from_event():
+	"""An inactive learner's last-seen date takes the Event when it is all there is."""
+	from sparsh_los import events
+
+	_fresh_inactive_learner()
+	_make_learner(INACTIVE_LEARNER)
+	frappe.db.commit()
+	base = _summary()["inactivity"]
+	_assert(
+		_inactivity_row(base, INACTIVE_LEARNER)["source"] is None,
+		"The fixture learner already has a last activity, so the event cannot be shown to supply it",
+	)
+
+	events.emit(events.SESSION_STARTED, learner=INACTIVE_LEARNER)
+	frappe.db.commit()
+	after = _summary()["inactivity"]
+	row = _inactivity_row(after, INACTIVE_LEARNER)
+	_assert(
+		row["source"] == "event" and row["last_activity"] is not None,
+		f"A session event did not supply the last-activity date: {row}",
+	)
+	_assert(
+		frappe.utils.getdate(row["last_activity"]) == frappe.utils.getdate(),
+		f"The last-activity date is not the event's date: {row}",
+	)
+	_assert(
+		after["inactive_with_event_in_period"] - base["inactive_with_event_in_period"] == 1,
+		f"Seen-but-idle did not move: {base['inactive_with_event_in_period']} -> "
+		f"{after['inactive_with_event_in_period']}",
+	)
+	_assert(after["inactive"] == base["inactive"], "An event changed the inactive count")
+
+
+def check_refresher_repeated():
+	"""A second refresher on the same learner and competency is one repeat, not two."""
+	from sparsh_los import refresher
+
+	_reset_competency()
+	try:
+		base = _summary()["refreshers"]
+		first = refresher.assign(LEARNER, COMPETENCY, refresher.TIME_ELAPSED, "zzv first refresher")
+		second = refresher.assign(LEARNER, COMPETENCY, refresher.RULE_CHANGED, "zzv second refresher")
+		frappe.db.commit()
+		_assert(first and second, f"The fixture did not produce two assignments: {first}, {second}")
+
+		after = _summary()["refreshers"]
+		_assert(
+			after["issued"] - base["issued"] == 2,
+			f"Two assignments moved issued {base['issued']} -> {after['issued']}",
+		)
+		_assert(
+			after["repeated"] - base["repeated"] == 1,
+			f"A second refresher on one pair moved repeated {base['repeated']} -> {after['repeated']}, expected +1",
+		)
+		_assert(
+			after["open_now"] - base["open_now"] == 2,
+			f"Two open assignments moved open_now {base['open_now']} -> {after['open_now']}",
+		)
+		_assert(after["completed"] == base["completed"], "Issuing a refresher counted as completing one")
+	finally:
+		_reset_competency()
+
+
+def check_refresher_overdue_is_undefined():
+	"""There is no due date, so overdue is None with a reason -- never a zero that reads as 'none overdue'."""
+	report = _summary()["refreshers"]
+	_assert("overdue" in report, "The refresher block does not report overdue at all")
+	_assert(report["overdue"] is None, f"Overdue was counted as {report['overdue']!r} with no due date to count from")
+	reason = report.get("overdue_undefined_because")
+	_assert(
+		isinstance(reason, str) and reason.strip(),
+		f"Overdue is undefined but no reason is given: {reason!r}",
+	)
+	_assert(
+		not frappe.get_meta("Sparsh Refresher Assignment").has_field("due_on")
+		and not frappe.get_meta("Sparsh Refresher Assignment").has_field("due_date"),
+		"A due-date field now exists on Refresher Assignment; overdue can be counted and this check is stale",
+	)
+
+
+def check_escalation_turnaround_median():
+	"""Median hours from raised to answered, over the questions answered in the period."""
+	from sparsh_los import escalation
+
+	_make_learner(TEST_LEARNER)
+	# Every question on this bench is the harness's own, and the median is a whole-table
+	# figure, so the table is emptied rather than the fixture asserted as a delta.
+	_delete_all("Sparsh Escalation Question", {"learner": ("like", PREFIX.lower() + "%")})
+	frappe.db.commit()
+
+	base = _summary()["escalation_turnaround"]
+	_assert(
+		base["answered_in_period"] == 0,
+		f"{base['answered_in_period']} answered question(s) not raised by this harness are inside "
+		"the window; the median cannot be isolated on this site",
+	)
+	_assert(
+		base["median_hours"] is None and base["median_undefined_because"],
+		f"An empty period reports a median: {base}",
+	)
+
+	question = _raise_as(TEST_LEARNER, "zzv how long does an answer take")
+	two_hours_ago = frappe.utils.add_to_date(frappe.utils.now_datetime(), hours=-2)
+	frappe.db.set_value("Sparsh Escalation Question", question, "raised_at", two_hours_ago)
+	frappe.db.commit()
+
+	waiting = _summary()["escalation_turnaround"]
+	_assert(
+		waiting["still_open_raised_in_period"] == 1 and waiting["answered_in_period"] == 0,
+		f"An open question raised in the period is misreported: {waiting}",
+	)
+
+	escalation.answer(question, "zzv answered two hours later", "Private answer")
+	frappe.db.commit()
+	turnaround = _summary()["escalation_turnaround"]
+	_assert(turnaround["answered_in_period"] == 1, f"The answered question was not counted: {turnaround}")
+	_assert(turnaround["answered_without_raised_at"] == 0, f"A timed question read as untimed: {turnaround}")
+	_assert(
+		turnaround["median_hours"] is not None and 1.9 <= turnaround["median_hours"] <= 2.1,
+		f"A question answered two hours after it was raised has median_hours {turnaround['median_hours']}",
+	)
+	_assert(turnaround["answered_before_raised"] == 0, f"The clocks were read backwards: {turnaround}")
+	_assert(turnaround["median_undefined_because"] is None, "A defined median still carries an undefined reason")
+	_assert(turnaround["still_open_raised_in_period"] == 0, "An answered question is still counted open")
+
+
+def _state_change_bucket(report):
+	return report["by_competency"].get(
+		COMPETENCY, {"changes": 0, "improved": 0, "regressed": 0, "lateral": 0, "transitions": {}}
+	)
+
+
+def check_state_change_parsed():
+	"""Transitions are parsed from the event log and ranked: Practising -> Demonstrated is an improvement."""
+	_reset_competency()
+	base = _summary()["competency_state_changes"]
+	b0 = _state_change_bucket(base)
+
+	# An assisted pass first, so the second transition starts from Practising rather
+	# than from nothing: ranking Demonstrated level with Practising would read it as
+	# lateral, and only a transition out of Practising can show that.
+	_new_evidence(None, "Pass", assistance_level=1)
+	_new_evidence(ACTIVITY_1, "Pass")
+	frappe.db.commit()
+	_assert(_state() == DEMONSTRATED, f"The fixture did not reach Demonstrated: {_state()}")
+
+	after = _summary()["competency_state_changes"]
+	b1 = _state_change_bucket(after)
+	for key in ("none -> Practising", "Practising -> Demonstrated"):
+		_assert(
+			b1["transitions"].get(key, 0) - b0["transitions"].get(key, 0) == 1,
+			f"The transition {key!r} was not parsed once: {b0['transitions']} -> {b1['transitions']}",
+		)
+	_assert(b1["changes"] - b0["changes"] == 2, f"Two transitions moved changes {b0['changes']} -> {b1['changes']}")
+	_assert(
+		b1["improved"] - b0["improved"] == 2,
+		f"Two upward transitions moved improved {b0['improved']} -> {b1['improved']}",
+	)
+	_assert(b1["regressed"] == b0["regressed"], "An upward transition was counted as a regression")
+	_assert(b1["lateral"] == b0["lateral"], "An upward transition was counted as lateral")
+	_assert(after["unparsed"] == base["unparsed"], f"A well-formed detail was reported unparsed: {after['unparsed']}")
+	_assert(after["events"] - base["events"] == 2, f"Two events moved the count {base['events']} -> {after['events']}")
+
+
+def _attempt_bucket(report):
+	return report["by_competency"].get(
+		COMPETENCY,
+		{"attempts": 0, "retries": 0, "assisted": 0, "critical_errors": 0, "hint_levels": {}, "outcomes": {}},
+	)
+
+
+def _attempts_sum_to_total(report, label):
+	total = sum(b["attempts"] for b in report["by_competency"].values()) + report["unattributed"]
+	_assert(
+		total == report["attempts"],
+		f"{label}: per-competency attempts {total - report['unattributed']} + unattributed "
+		f"{report['unattributed']} != attempts {report['attempts']}",
+	)
+
+
+def check_attempts_by_competency_sum():
+	"""Per-competency attempts, hint levels and the unattributed remainder sum to the total."""
+	_reset_competency()
+	original = _author(ACTIVITY_1, evaluation_mode="Deterministic", expected_response="level two")
+	orphan = PREFIX + "GONE"
+	try:
+		base = _summary()["attempts_by_competency"]
+		_attempts_sum_to_total(base, "baseline")
+		b0 = _attempt_bucket(base)
+
+		wrong = _submit(ACTIVITY_1, "level four")
+		_assert(wrong["outcome"] == "Fail" and wrong["hint_level"] == 1, f"The first wrong answer did not earn hint 1: {wrong}")
+		assisted = _submit(ACTIVITY_1, "level five")
+		frappe.db.commit()
+		_assert(
+			frappe.db.get_value("Sparsh Attempt", assisted["attempt"], "hint_level_used") == 1,
+			"The second attempt did not record the hint it followed",
+		)
+
+		after = _summary()["attempts_by_competency"]
+		b1 = _attempt_bucket(after)
+		_assert(b1["attempts"] - b0["attempts"] == 2, f"Two attempts moved the competency {b0['attempts']} -> {b1['attempts']}")
+		_assert(after["attempts"] - base["attempts"] == 2, f"Two attempts moved the total {base['attempts']} -> {after['attempts']}")
+		for level in (0, 1):
+			_assert(
+				b1["hint_levels"].get(level, 0) - b0["hint_levels"].get(level, 0) == 1,
+				f"Hint level {level} bucket did not move by one: {b0['hint_levels']} -> {b1['hint_levels']}",
+			)
+		_assert(b1["assisted"] - b0["assisted"] == 1, f"One assisted attempt moved assisted {b0['assisted']} -> {b1['assisted']}")
+		_assert(b1["retries"] - b0["retries"] == 1, f"One retry moved retries {b0['retries']} -> {b1['retries']}")
+		_assert(
+			b1["outcomes"].get("Fail", 0) - b0["outcomes"].get("Fail", 0) == 2,
+			f"Two failures moved the Fail outcome {b0['outcomes']} -> {b1['outcomes']}",
+		)
+		_assert(b1["critical_errors"] == b0["critical_errors"], "A plain wrong answer counted as a critical error")
+		_assert(after["unattributed"] == base["unattributed"], "An attempt on a live activity was unattributed")
+		_attempts_sum_to_total(after, "after two attempts")
+
+		# An attempt whose activity has gone. Written the way such a row arrives -- the
+		# activity deleted underneath it -- rather than through a controller that
+		# would refuse it.
+		frappe.db.sql(
+			"update `tabSparsh Attempt` set activity = %s where name = %s", (orphan, assisted["attempt"])
+		)
+		frappe.db.commit()
+		orphaned = _summary()["attempts_by_competency"]
+		_assert(
+			orphaned["unattributed"] - after["unattributed"] == 1,
+			f"An attempt on a missing activity was not counted unattributed: "
+			f"{after['unattributed']} -> {orphaned['unattributed']}",
+		)
+		_assert(
+			_attempt_bucket(orphaned)["attempts"] - b0["attempts"] == 1,
+			"The orphaned attempt is still credited to its old competency",
+		)
+		_assert(orphaned["attempts"] == after["attempts"], "Orphaning an attempt changed the total")
+		_attempts_sum_to_total(orphaned, "with an orphaned attempt")
+	finally:
+		_author(ACTIVITY_1, **original)
+		_delete_all("Sparsh Attempt", {"activity": orphan})
+		_reset_competency()
+
+
+def _pathway_fixture(members):
+	"""An Active cohort of `members` on an Active two-step pathway: ACTIVITY_1, then ACTIVITY_2."""
+	_clear_cohorts()
+	_delete_all("Sparsh Pathway", {"name": PATHWAY})
+	frappe.db.commit()
+	pathway = frappe.new_doc("Sparsh Pathway")
+	pathway.pathway_id = PATHWAY
+	pathway.title = "Verification pathway"
+	pathway.status = "Active"
+	for order, activity in enumerate((ACTIVITY_1, ACTIVITY_2), start=1):
+		pathway.append(
+			"steps", {"step_order": order, "activity": activity, "competency": COMPETENCY, "is_mandatory": 1}
+		)
+	pathway.insert(ignore_permissions=True)
+	_new_cohort(COHORT_A, members, status="Active", pathway=PATHWAY)
+	frappe.db.commit()
+
+
+def _clear_pathway_fixture():
+	_clear_cohorts()
+	_delete_all("Sparsh Pathway", {"name": PATHWAY})
+	frappe.db.commit()
+
+
+def _fixture_pathway_bucket(report):
+	_assert(PATHWAY in report["by_pathway"], f"The fixture pathway is not reported: {sorted(report['by_pathway'])}")
+	return report["by_pathway"][PATHWAY]
+
+
+def check_pathway_completion():
+	"""Steps are assigned through Active cohorts and completed only by an unaided pass."""
+	_make_learner(TEST_LEARNER)
+	_reset_competency()
+	base = _summary()["pathway_completion"]
+	_pathway_fixture([TEST_LEARNER])
+	try:
+		nothing = _summary()["pathway_completion"]
+		_assert(
+			_fixture_pathway_bucket(nothing) == {"learners": 1, "steps_assigned": 2, "steps_completed": 0},
+			f"A fresh member of a two-step pathway is misreported: {_fixture_pathway_bucket(nothing)}",
+		)
+		_assert(
+			nothing["steps_assigned"] - base["steps_assigned"] == 2,
+			f"Two assigned steps moved steps_assigned {base['steps_assigned']} -> {nothing['steps_assigned']}",
+		)
+		_assert(
+			nothing["learners_assigned"] - base["learners_assigned"] == 1,
+			f"One member moved learners_assigned {base['learners_assigned']} -> {nothing['learners_assigned']}",
+		)
+		_assert(nothing["active_cohorts"] - base["active_cohorts"] == 1, "The fixture cohort is not counted Active")
+
+		_new_evidence(ACTIVITY_1, "Pass", learner=TEST_LEARNER)
+		frappe.db.commit()
+		one = _summary()["pathway_completion"]
+		_assert(
+			_fixture_pathway_bucket(one)["steps_completed"] == 1,
+			f"An unaided pass on step 1 did not complete it: {_fixture_pathway_bucket(one)}",
+		)
+		_assert(one["steps_completed"] - base["steps_completed"] == 1, "The global completed figure did not move by one")
+		expected = round((base["steps_completed"] + 1) / (base["steps_assigned"] + 2), 4)
+		_assert(
+			one["proportion"] == expected,
+			f"proportion is {one['proportion']}, expected {expected} (0.5 on a bench with no other Active cohort)",
+		)
+
+		_new_evidence(ACTIVITY_2, "Pass", assistance_level=1, learner=TEST_LEARNER)
+		frappe.db.commit()
+		two = _summary()["pathway_completion"]
+		_assert(
+			_fixture_pathway_bucket(two)["steps_completed"] == 1,
+			f"An assisted pass on step 2 completed it: {_fixture_pathway_bucket(two)}",
+		)
+		_assert(
+			two["steps_passed_assisted_only"] - base["steps_passed_assisted_only"] == 1,
+			f"The assisted pass was not reported separately: "
+			f"{base['steps_passed_assisted_only']} -> {two['steps_passed_assisted_only']}",
+		)
+		_assert(
+			two["learners_completed_all_steps"] == base["learners_completed_all_steps"],
+			"A learner with an assisted step read as having completed the pathway",
+		)
+
+		_new_evidence(ACTIVITY_2, "Pass", learner=TEST_LEARNER)
+		frappe.db.commit()
+		done = _summary()["pathway_completion"]
+		_assert(
+			_fixture_pathway_bucket(done)["steps_completed"] == 2,
+			f"An unaided pass on step 2 did not complete it: {_fixture_pathway_bucket(done)}",
+		)
+		_assert(
+			done["learners_completed_all_steps"] - base["learners_completed_all_steps"] == 1,
+			"Completing both steps did not count the learner as finished",
+		)
+		_assert(
+			done["steps_passed_assisted_only"] == base["steps_passed_assisted_only"],
+			"A step now passed unaided is still counted as assisted-only",
+		)
+	finally:
+		_clear_pathway_fixture()
+		_reset_competency()
+
+
+def check_rejected_pass_does_not_complete_a_step():
+	"""A pass a reviewer rejected stops completing the step it once completed."""
+	_make_learner(TEST_LEARNER)
+	_reset_competency()
+	_pathway_fixture([TEST_LEARNER])
+	try:
+		evidence = _new_evidence(ACTIVITY_1, "Pass", learner=TEST_LEARNER)
+		frappe.db.commit()
+		before = _summary()["pathway_completion"]
+		_assert(
+			_fixture_pathway_bucket(before)["steps_completed"] == 1,
+			"The positive control did not complete the step, so a rejection cannot be shown to undo it",
+		)
+
+		review = frappe.new_doc("Sparsh Human Review")
+		review.evidence = evidence.name
+		review.review_status = "Rejected"
+		review.reviewer_comments = "zzv not a demonstration of the competency"
+		review.insert(ignore_permissions=True)
+		review.submit()
+		frappe.db.commit()
+		_assert(
+			frappe.db.get_value("Sparsh Evidence", evidence.name, "human_review_status") == REJECTED,
+			"The rejection did not reach the evidence, so the fixture proves nothing",
+		)
+
+		after = _summary()["pathway_completion"]
+		_assert(
+			_fixture_pathway_bucket(after)["steps_completed"] == 0,
+			f"A rejected pass still completes the step: {_fixture_pathway_bucket(after)}",
+		)
+		_assert(
+			after["steps_passed_assisted_only"] == before["steps_passed_assisted_only"],
+			"A rejected pass crept into the assisted-only figure",
+		)
+	finally:
+		_clear_pathway_fixture()
+		_reset_competency()
+
+
+def check_no_model_share():
+	"""Two readings of the no-model-call share, and they are reported disagreeing when they do."""
+	_make_learner(TEST_LEARNER)
+	_reset_competency()
+	# The share is a whole-window figure. Every attempt and ledger row on this bench is
+	# the harness's own, so the window is emptied and the shape asserted exactly.
+	_delete_all("Sparsh Attempt", {"learner": ("like", PREFIX.lower() + "%")})
+	_delete_all("Sparsh Attempt", {"activity": ("like", PREFIX + "%")})
+	_delete_all("Sparsh Model Interaction", {"provider": ("like", "zzv%")})
+	frappe.db.commit()
+	original_one = _set_mode(ACTIVITY_1, "Human review")
+	original_two = _set_mode(ACTIVITY_2, "AI-assisted")
+	try:
+		base = _summary()["no_model_call_share"]
+		_assert(
+			base["attempts"] == 0,
+			f"{base['attempts']} attempt(s) not made by this harness are in the window; the share cannot be isolated",
+		)
+		_assert(
+			base["by_ledger"]["model_interactions_in_period"] == 0,
+			f"{base['by_ledger']['model_interactions_in_period']} ledger row(s) not written by this harness are in the window",
+		)
+		_assert(base["by_mode"]["share"] is None and base["share_undefined_because"], f"An empty window has a share: {base}")
+
+		_submit(ACTIVITY_1, "zzv work for a person", as_user=TEST_LEARNER)
+		frappe.db.commit()
+		human = _summary()["no_model_call_share"]
+		_assert(
+			human["by_mode"] == {"numerator": 1, "denominator": 1, "share": 1.0},
+			f"One Human-review attempt does not read as 1.0 by mode: {human['by_mode']}",
+		)
+		_assert(
+			human["by_ledger"]["numerator"] == 1 and human["by_ledger"]["share"] == 1.0,
+			f"One attempt and an empty ledger do not read as 1.0 by ledger: {human['by_ledger']}",
+		)
+		_assert(human["readings_agree"] is True and human["disagreement"] is None, f"Agreeing readings reported otherwise: {human}")
+		_assert(human["attempts_on_unknown_activity"] == 0, "The attempt's activity was not found")
+
+		ai = _submit(ACTIVITY_2, "zzv work an unbuilt model would judge", as_user=TEST_LEARNER)
+		frappe.db.commit()
+		_assert(ai["outcome"] == "Not Evaluated", f"The AI-assisted attempt was scored: {ai['outcome']}")
+		mixed = _summary()["no_model_call_share"]
+		_assert(
+			mixed["by_mode"] == {"numerator": 1, "denominator": 2, "share": 0.5},
+			f"An AI-assisted attempt did not lower the by-mode reading: {mixed['by_mode']}",
+		)
+		_assert(
+			mixed["by_ledger"]["numerator"] == 2 and mixed["by_ledger"]["share"] == 1.0,
+			f"With no model call recorded the ledger reading moved: {mixed['by_ledger']}",
+		)
+		_assert(mixed["readings_agree"] is False, "One AI-assisted attempt against an empty ledger read as agreement")
+		_assert(
+			isinstance(mixed["disagreement"], str) and "1 attempt" in mixed["disagreement"],
+			f"The disagreement is not stated: {mixed['disagreement']!r}",
+		)
+	finally:
+		_restore_mode(ACTIVITY_1, original_one)
+		_restore_mode(ACTIVITY_2, original_two)
+		_delete_all("Sparsh Attempt", {"learner": TEST_LEARNER})
+		frappe.db.commit()
+
+
+# ------------------------------------------------------ phase 3: numeric evaluator
+def _attempt_count(learner, activity):
+	return frappe.db.count("Sparsh Attempt", {"learner": learner, "activity": activity})
+
+
+def check_numeric_scores_within_tolerance():
+	"""|response - expected| <= tolerance, in decimal arithmetic, with the unit ignored."""
+	_reset_competency()
+	original_one = _author(ACTIVITY_1, evaluation_mode="Numeric validation", expected_value="72.5", tolerance=0.5)
+	original_two = _author(ACTIVITY_2, evaluation_mode="Numeric validation", expected_value="2.5", tolerance=0.2)
+	try:
+		close = _submit(ACTIVITY_1, "72.9 kg")
+		_assert(close["outcome"] == "Pass", f"72.9 against 72.5 +/- 0.5 was {close['outcome']}")
+		_assert(close.get("evidence"), "A numeric pass produced no evidence")
+		_assert(
+			frappe.db.get_value("Sparsh Evidence", close["evidence"], "assistance_level") == 0,
+			"An unaided numeric pass was recorded as assisted",
+		)
+
+		far = _submit(ACTIVITY_1, "73.2")
+		_assert(far["outcome"] == "Fail", f"73.2 against 72.5 +/- 0.5 was {far['outcome']}")
+		_assert(far["hint_level"] == 1 and far["hint"] == "First hint.", f"A numeric miss did not earn the first hint: {far}")
+		_assert("evidence" not in far, "A numeric miss produced evidence")
+		_assert(not far["critical_error"], "A numeric miss was flagged critical")
+
+		# 2.7 - 2.5 in binary floating point is a shade over 0.2; the author meant 2.7 to pass.
+		edge = _submit(ACTIVITY_2, "2.7")
+		_assert(
+			edge["outcome"] == "Pass",
+			f"2.7 against 2.5 +/- 0.2 was {edge['outcome']}: the tolerance is being compared in binary floating point",
+		)
+		_assert(_state() == MASTERED, f"Two unaided numeric passes on distinct activities gave {_state()}")
+	finally:
+		_author(ACTIVITY_1, **original_one)
+		_author(ACTIVITY_2, **original_two)
+		_reset_competency()
+
+
+def check_numeric_zero_is_an_answer():
+	"""'0' is an answer and '' is the absence of one; the field type is what keeps them apart."""
+	_reset_competency()
+	original = _author(ACTIVITY_1, evaluation_mode="Numeric validation", expected_value="0", tolerance=0)
+	try:
+		_assert(
+			frappe.get_meta("Sparsh Activity").get_field("expected_value").fieldtype == "Data",
+			"expected_value is not a Data field; a numeric column stores blank as 0 and 'not agreed' becomes 'zero'",
+		)
+		zero = _submit(ACTIVITY_1, "0")
+		_assert(zero["outcome"] == "Pass", f"'0' against an expected value of 0 was {zero['outcome']}")
+
+		_author(ACTIVITY_1, expected_value="")
+		stored = frappe.db.get_value("Sparsh Activity", ACTIVITY_1, "expected_value")
+		_assert(stored in (None, ""), f"A blank expected value was stored as {stored!r}")
+		blank = _submit(ACTIVITY_1, "0")
+		_assert(
+			blank["outcome"] == "Not Evaluated",
+			f"With no expected value agreed, '0' was scored {blank['outcome']}",
+		)
+		_assert("evidence" not in blank, "An unscorable numeric activity produced evidence")
+		_assert("reviewed by a person" in blank["message"].lower(), f"The learner was told something else: {blank['message']}")
+	finally:
+		_author(ACTIVITY_1, **original)
+		_reset_competency()
+
+
+def check_numeric_non_answer_is_refused_not_recorded():
+	"""Text, or two numbers, is not an answer: refused before an Attempt exists, so the ladder does not move."""
+	_reset_competency()
+	original = _author(ACTIVITY_1, evaluation_mode="Numeric validation", expected_value="72.5", tolerance=0.5)
+	try:
+		before = _attempt_count(LEARNER, ACTIVITY_1)
+		for response in ("abc", "120/80"):
+			_raises(
+				lambda: _submit(ACTIVITY_1, response),
+				f"{response!r} was graded on an activity that asked for one number",
+				expect="expects a single number",
+			)
+		_assert(
+			_attempt_count(LEARNER, ACTIVITY_1) == before,
+			f"A refused response was recorded as an attempt: {before} -> {_attempt_count(LEARNER, ACTIVITY_1)}",
+		)
+
+		wrong = _submit(ACTIVITY_1, "80")
+		frappe.db.commit()
+		_assert(wrong["outcome"] == "Fail", f"A wrong number was {wrong['outcome']}")
+		_assert(
+			frappe.db.get_value("Sparsh Attempt", wrong["attempt"], "hint_level_used") == 0,
+			"The refused responses climbed the hint ladder for the answer that followed",
+		)
+		_assert(
+			frappe.db.get_value("Sparsh Attempt", wrong["attempt"], "retry_index") == 0,
+			"The refused responses counted as retries",
+		)
+	finally:
+		_author(ACTIVITY_1, **original)
+		_reset_competency()
+
+
+def _link_rule(status):
+	rule = _new_rule(1, status=status)
+	competency = frappe.get_doc("Sparsh Competency", COMPETENCY)
+	competency.set("linked_rules", [])
+	competency.append("linked_rules", {"rule": rule.name})
+	competency.save(ignore_permissions=True)
+	frappe.db.commit()
+	return rule
+
+
+def check_numeric_obeys_the_rule_gate():
+	"""Under a Draft rule the arithmetic does not run: nothing scores, and nothing is refused either."""
+	_reset_competency()
+	rule = _link_rule("Draft")
+	original = _author(ACTIVITY_1, evaluation_mode="Numeric validation", expected_value="72.5", tolerance=0.5)
+	try:
+		gated = _submit(ACTIVITY_1, "72.5")
+		_assert(gated["outcome"] == "Not Evaluated", f"A Draft rule let the arithmetic score: {gated['outcome']}")
+		_assert("evidence" not in gated, "A Draft rule let a numeric pass become evidence")
+
+		text = _submit(ACTIVITY_1, "abc")
+		frappe.db.commit()
+		_assert(
+			text["outcome"] == "Not Evaluated"
+			and frappe.db.get_value("Sparsh Attempt", text["attempt"], "outcome") == "Not Evaluated",
+			f"Under a Draft rule a non-numeric response was not simply recorded for a person: {text}",
+		)
+
+		# Positive control: the same activity scores once the rule is Validated.
+		frappe.db.set_value("Sparsh Source of Truth Rule", rule.name, "status", "Validated")
+		frappe.db.commit()
+		scored = _submit(ACTIVITY_1, "72.5")
+		_assert(scored["outcome"] == "Pass", f"A Validated rule did not let the arithmetic score: {scored['outcome']}")
+	finally:
+		_author(ACTIVITY_1, **original)
+		_reset_competency()
+
+
+def check_numeric_critical_marker_still_bites():
+	"""A declared critical error is judged before the arithmetic, number or no number."""
+	_reset_competency()
+	original = _author(
+		ACTIVITY_1,
+		evaluation_mode="Numeric validation",
+		expected_value="72.5",
+		tolerance=0.5,
+		critical_markers="stop the medicine",
+	)
+	try:
+		unsafe = _submit(ACTIVITY_1, "I would stop the medicine")
+		frappe.db.commit()
+		_assert(
+			unsafe["outcome"] == "Fail" and unsafe["critical_error"] == 1,
+			f"A critical marker in a non-numeric response was not a critical Fail: {unsafe}",
+		)
+		_assert(unsafe.get("escalation"), "A critical numeric response reached no person")
+		_assert(
+			frappe.db.get_value("Sparsh Evidence", unsafe["evidence"], "critical_error") == 1,
+			"The critical error was not written to evidence",
+		)
+		_assert(
+			frappe.db.get_value("Sparsh Escalation Question", unsafe["escalation"], "escalation_reason")
+			== "Safety critical",
+			"The escalation does not say it is a safety matter",
+		)
+
+		# With a passing number beside the marker: safety outranks a correct value.
+		numbered = _submit(ACTIVITY_1, "72.5 and stop the medicine")
+		_assert(
+			numbered["outcome"] == "Fail" and numbered["critical_error"] == 1,
+			f"A correct number beside a critical marker was scored on the number: {numbered}",
+		)
+	finally:
+		_author(ACTIVITY_1, **original)
+		_reset_competency()
+
+
+# ------------------------------------------------------- phase 3: rubric evaluator
+def check_rubric_aggregates_to_partial():
+	"""All met is a Pass, none a Fail, anything between a Partial; a criterion that does not exist is refused."""
+	from sparsh_los import review
+
+	_make_learner(TEST_LEARNER)
+	_reset_competency()
+	original = _author(ACTIVITY_2, evaluation_mode="Rubric", rubric_criteria=RUBRIC_CRITERIA)
+	criteria = [line for line in RUBRIC_CRITERIA.splitlines() if line.strip()]
+	try:
+		attempts = [
+			_submit(ACTIVITY_2, f"zzv rubric answer {i}", as_user=TEST_LEARNER)["attempt"] for i in range(4)
+		]
+		frappe.db.commit()
+		for name in attempts:
+			_assert(
+				frappe.db.get_value("Sparsh Attempt", name, "outcome") == "Not Evaluated",
+				"A Rubric attempt was scored at submission",
+			)
+
+		partial = review.score_rubric(attempts[0], [1, 3])
+		full = review.score_rubric(attempts[1], "[1, 2, 3]")
+		none = review.score_rubric(attempts[2], [])
+		frappe.db.commit()
+		_assert(partial["outcome"] == "Partial", f"Two of three met aggregated to {partial['outcome']}")
+		_assert(full["outcome"] == "Pass", f"Three of three met aggregated to {full['outcome']}")
+		_assert(none["outcome"] == "Fail", f"None met aggregated to {none['outcome']}")
+		_assert(
+			partial["criteria_met"] == [1, 3] and partial["criteria_total"] == 3,
+			f"The verdict does not report which criteria were met: {partial}",
+		)
+		_raises(
+			lambda: review.score_rubric(attempts[3], [4]),
+			"A criterion beyond the rubric was accepted",
+			expect="does not exist",
+		)
+		_assert(
+			not frappe.db.exists("Sparsh Evidence", {"attempt": attempts[3]}),
+			"The refused verdict left evidence behind",
+		)
+
+		for verdict, attempt in ((partial, attempts[0]), (full, attempts[1]), (none, attempts[2])):
+			evidence = frappe.get_doc("Sparsh Evidence", verdict["evidence"])
+			recorded = frappe.db.get_value("Sparsh Attempt", attempt, "hint_level_used")
+			_assert(
+				evidence.assistance_level == recorded,
+				f"Evidence assistance {evidence.assistance_level} differs from the attempt's {recorded}",
+			)
+			_assert(evidence.outcome == verdict["outcome"], "The evidence outcome differs from the verdict")
+			_assert(evidence.human_review_status == "Approved", "A rubric verdict is not marked as a person's review")
+			_assert(evidence.attempt == attempt, "The evidence does not cite the attempt it judged")
+
+		summary = frappe.db.get_value("Sparsh Evidence", partial["evidence"], "ai_feedback_summary") or ""
+		_assert("2 of 3" in summary, f"The summary does not say how many criteria were met: {summary!r}")
+		_assert("(1, 3)" in summary, f"The summary does not say which criteria were met: {summary!r}")
+		for line in criteria:
+			_assert(line not in summary, f"Criterion text reached the learner-readable summary: {summary!r}")
+		_assert(
+			full["state"] == DEMONSTRATED,
+			f"An unaided rubric Pass did not demonstrate the competency: {full['state']}",
+		)
+	finally:
+		_author(ACTIVITY_2, **original)
+		_reset_competency()
+
+
+def check_rubric_verdict_issues_a_hint_and_counts_as_assistance():
+	"""A Partial from a person is a failure the ladder counts: `start` hands back the hint, the next answer is assisted."""
+	from sparsh_los import review, runner
+
+	_make_learner(TEST_LEARNER)
+	_reset_competency()
+	original = _author(ACTIVITY_2, evaluation_mode="Rubric", rubric_criteria=RUBRIC_CRITERIA)
+	try:
+		first = _submit(ACTIVITY_2, "zzv first rubric answer", as_user=TEST_LEARNER)
+		frappe.db.commit()
+		_assert(
+			frappe.db.get_value("Sparsh Attempt", first["attempt"], "hint_level_used") == 0,
+			"The first attempt was already assisted, so the verdict cannot be shown to add assistance",
+		)
+
+		verdict = review.score_rubric(first["attempt"], [1])
+		frappe.db.commit()
+		_assert(verdict["outcome"] == "Partial", f"The fixture verdict is {verdict['outcome']}")
+		_assert(
+			verdict.get("hint_level") == 1 and verdict.get("hint") == "First hint.",
+			f"A Partial verdict did not issue the first hint: {verdict}",
+		)
+		_assert(verdict.get("can_retry") is True, "A retry was not offered after a Partial")
+
+		original_user = frappe.session.user
+		try:
+			frappe.set_user(TEST_LEARNER)
+			opened = runner.start(ACTIVITY_2)
+		finally:
+			frappe.set_user(original_user)
+		_assert(
+			opened["hint_level"] == 1 and opened["hint"] == verdict["hint"],
+			f"start() did not hand the reviewer's hint to the learner: {opened}",
+		)
+		_assert(opened["retry_index"] == 1, f"start() does not report the one attempt already made: {opened}")
+
+		second = _submit(ACTIVITY_2, "zzv second rubric answer", as_user=TEST_LEARNER)
+		frappe.db.commit()
+		_assert(
+			frappe.db.get_value("Sparsh Attempt", second["attempt"], "hint_level_used") == 1,
+			"The answer after a reviewer's hint was recorded as unaided",
+		)
+		_assert(second["hint_level"] == 1 and second["retry_index"] == 1, f"The runner reported another position: {second}")
+		_assert(
+			frappe.db.exists(
+				"Sparsh Event",
+				{"event_type": "hint_shown", "learner": TEST_LEARNER, "activity": ACTIVITY_2, "detail": "level=1 via=review"},
+			),
+			"The hint a verdict issued was not logged",
+		)
+	finally:
+		_author(ACTIVITY_2, **original)
+		_reset_competency()
+
+
+def check_rubric_refuses_self_review_and_wrong_mode():
+	"""Nobody scores their own rubric, and a rubric verdict lands only on a Rubric activity."""
+	from sparsh_los import review
+
+	dual = _make_learner(DUAL_LEARNER)
+	if "Sparsh Reviewer" not in [r.role for r in dual.roles]:
+		dual.append("roles", {"role": "Sparsh Reviewer"})
+		dual.save(ignore_permissions=True)
+	_make_learner(TEST_LEARNER)
+	_reset_competency()
+	original_two = _author(ACTIVITY_2, evaluation_mode="Rubric", rubric_criteria=RUBRIC_CRITERIA)
+	# Criteria on the Deterministic activity too, so the mode test is the only thing
+	# between it and a verdict -- an empty rubric would refuse for another reason.
+	original_one = _author(
+		ACTIVITY_1, evaluation_mode="Deterministic", expected_response=None, rubric_criteria=RUBRIC_CRITERIA
+	)
+	_ensure_activity(REFLECTION_ACTIVITY, evaluation_mode="Reflection", rubric_criteria=RUBRIC_CRITERIA)
+	try:
+		own = _submit(ACTIVITY_2, "zzv my own rubric work", as_user=DUAL_LEARNER)
+		frappe.db.commit()
+		original_user = frappe.session.user
+		try:
+			frappe.set_user(DUAL_LEARNER)
+			_refused(
+				lambda: review.score_rubric(own["attempt"], [1, 2, 3]),
+				"A learner-reviewer scored their own rubric attempt",
+				expect="your own attempt",
+			)
+		finally:
+			frappe.set_user(original_user)
+		_assert(not frappe.db.exists("Sparsh Evidence", {"attempt": own["attempt"]}), "Self-scoring left evidence")
+
+		deterministic = _submit(ACTIVITY_1, "zzv an answer with no key to match", as_user=TEST_LEARNER)
+		frappe.db.commit()
+		_assert(deterministic["outcome"] == "Not Evaluated", "The Deterministic control attempt was scored")
+		_raises(
+			lambda: review.score_rubric(deterministic["attempt"], [1, 2, 3]),
+			"A rubric verdict was written on a Deterministic activity",
+			expect="applies only to a rubric activity",
+		)
+
+		reflection = _submit(REFLECTION_ACTIVITY, "zzv a private reflection", as_user=TEST_LEARNER)
+		frappe.db.commit()
+		_raises(
+			lambda: review.score_rubric(reflection["attempt"], [1, 2, 3]),
+			"A rubric verdict was written on a Reflection",
+			expect="not turned into evidence",
+		)
+		for attempt in (deterministic["attempt"], reflection["attempt"]):
+			_assert(not frappe.db.exists("Sparsh Evidence", {"attempt": attempt}), "A refused verdict left evidence")
+	finally:
+		_author(ACTIVITY_2, **original_two)
+		_author(ACTIVITY_1, **original_one)
+		_delete_all("Sparsh Attempt", {"activity": REFLECTION_ACTIVITY})
+		_delete_all("Sparsh Activity", {"name": REFLECTION_ACTIVITY})
+		_reset_competency()
+
+
+def check_rubric_is_never_auto_scored():
+	"""Rubric is outside the allow-list, so an answer matching the key is still Not Evaluated."""
+	from sparsh_los import runner
+
+	_reset_competency()
+	original = _author(
+		ACTIVITY_2, evaluation_mode="Rubric", rubric_criteria=RUBRIC_CRITERIA, expected_response="level two"
+	)
+	try:
+		_assert(runner.RUBRIC_MODE == "Rubric", f"RUBRIC_MODE is {runner.RUBRIC_MODE!r}")
+		_assert(
+			"Rubric" not in runner.AUTO_SCORED_MODES,
+			f"Rubric is in AUTO_SCORED_MODES: {runner.AUTO_SCORED_MODES}",
+		)
+		outcome, critical = runner.evaluate(frappe.get_doc("Sparsh Activity", ACTIVITY_2), "level two")
+		_assert(
+			(outcome, critical) == ("Not Evaluated", 0),
+			f"A Rubric activity scored an answer matching its key: {outcome}/{critical}",
+		)
+		result = _submit(ACTIVITY_2, "level two")
+		_assert(result["outcome"] == "Not Evaluated" and "evidence" not in result, f"The runner scored a Rubric attempt: {result}")
+		_assert("reviewed by a person" in result["message"].lower(), f"The learner was told: {result['message']}")
+	finally:
+		_author(ACTIVITY_2, **original)
+		_reset_competency()
+
+
+def check_learner_cannot_read_rubric_or_numeric_key():
+	"""The rubric and the numeric key sit at permlevel 1, behind a DocType a learner cannot list at all."""
+	_make_learner(TEST_LEARNER)
+	original = _author(ACTIVITY_2, expected_value="72.5", rubric_criteria=RUBRIC_CRITERIA)
+	meta = frappe.get_meta("Sparsh Activity")
+	try:
+		for field in ("rubric_criteria", "expected_value", "tolerance"):
+			_assert(
+				meta.get_field(field).permlevel == 1,
+				f"{field} is at permlevel {meta.get_field(field).permlevel}: an answer key at the document's own level",
+			)
+
+		original_user = frappe.session.user
+		try:
+			frappe.set_user(TEST_LEARNER)
+			for field, pattern in (("rubric_criteria", "Names%"), ("expected_value", "72%")):
+				_refused(
+					lambda: frappe.client.get_list(
+						"Sparsh Activity", filters={field: ("like", pattern)}, fields=["name"], limit_page_length=1
+					),
+					f"A learner could filter Activity on {field}",
+					expect="insufficient permission",
+				)
+			levels = meta.get_permlevel_access("read", user=TEST_LEARNER)
+			_assert(1 not in levels, f"A learner holds permlevel-1 read on Activity: {levels}")
+
+			doc = frappe.get_doc("Sparsh Activity", ACTIVITY_2)
+			doc.apply_fieldlevel_read_permissions()
+			_assert(not doc.get("rubric_criteria"), "A learner could read the rubric criteria")
+			_assert(not doc.get("expected_value"), "A learner could read the numeric key")
+		finally:
+			frappe.set_user(original_user)
+	finally:
+		_author(ACTIVITY_2, **original)
+
+
+def check_ai_assisted_awaits_implementation():
+	"""The one model-backed mode is declared, dispatched by nothing, and never falls through to the key."""
+	from sparsh_los import dashboard, review, runner
+
+	_assert(
+		runner.AWAITING_IMPLEMENTATION_MODES == ("AI-assisted",),
+		f"AWAITING_IMPLEMENTATION_MODES is {runner.AWAITING_IMPLEMENTATION_MODES}",
+	)
+	_assert("AI-assisted" not in runner.AUTO_SCORED_MODES, "AI-assisted is auto-scored")
+	_assert(dashboard.MODEL_MODES == ("AI-assisted",), f"MODEL_MODES is {dashboard.MODEL_MODES}")
+
+	_reset_competency()
+	_link_rule("Validated")
+	original = _author(ACTIVITY_1, evaluation_mode="AI-assisted", expected_response="level two")
+	try:
+		outcome, critical = runner.evaluate(frappe.get_doc("Sparsh Activity", ACTIVITY_1), "level two")
+		_assert(
+			(outcome, critical) == ("Not Evaluated", 0),
+			f"AI-assisted under a Validated rule scored a matching answer: {outcome}/{critical}",
+		)
+		result = _submit(ACTIVITY_1, "level two")
+		frappe.db.commit()
+		_assert(result["outcome"] == "Not Evaluated" and "evidence" not in result, f"The runner scored it: {result}")
+		_assert(
+			result["attempt"] in {w["name"] for w in review.pending(competency=COMPETENCY)},
+			"An AI-assisted attempt is not waiting for a person",
+		)
+
+		# Positive control under the same Validated rule.
+		_author(ACTIVITY_1, evaluation_mode="Deterministic")
+		scored = _submit(ACTIVITY_1, "level two")
+		_assert(scored["outcome"] == "Pass", f"The Deterministic control did not score: {scored['outcome']}")
+	finally:
+		_author(ACTIVITY_1, **original)
+		_reset_competency()
+
+
+# ------------------------------------------ phase 3: certification and compliance
+def _certify(learner, renewal_due=None, competency=COMPETENCY, version=None):
+	doc = frappe.new_doc("Sparsh Certification Record")
+	doc.learner = learner
+	doc.competency = competency
+	doc.certification_status = "Full"
+	if renewal_due is not None:
+		doc.renewal_due = renewal_due
+	if version is not None:
+		doc.certificate_version = version
+	doc.insert(ignore_permissions=True)
+	doc.submit()
+	frappe.db.commit()
+	return doc
+
+
+def _revoke(certificate):
+	doc = frappe.new_doc("Sparsh Certification Record")
+	doc.learner = certificate.learner
+	doc.competency = certificate.competency
+	doc.certification_status = "Revoked"
+	doc.revokes = certificate.name
+	doc.insert(ignore_permissions=True)
+	doc.submit()
+	frappe.db.commit()
+	return doc
+
+
+def _stored_version(name):
+	return frappe.db.get_value("Sparsh Certification Record", name, "certificate_version")
+
+
+def check_certificate_version_increments_across_revocation():
+	"""The first certificate is v1, the one after a revocation v2, and a revocation has no version."""
+	from sparsh_los import certification
+
+	_reset_competency()
+	_new_evidence(ACTIVITY_1, "Pass")
+	first = _certify(LEARNER)
+	_assert(_stored_version(first.name) == 1, f"The first certificate is version {_stored_version(first.name)}")
+
+	revocation = _revoke(first)
+	# Crafted at 7: the ordinal is assigned at submission, whatever the draft carried.
+	second = _certify(LEARNER, version=7)
+	_assert(_stored_version(second.name) == 2, f"The certificate after a revocation is version {_stored_version(second.name)}")
+
+	history = {row["name"]: row for row in certification.readiness(COMPETENCY, LEARNER)["certifications"]}
+	for name in (first.name, revocation.name, second.name):
+		_assert(name in history, f"{name} is missing from the learner's certification history")
+	_assert(history[first.name]["certificate_version"] == 1, f"History reports v{history[first.name]['certificate_version']} for the first")
+	_assert(history[second.name]["certificate_version"] == 2, f"History reports v{history[second.name]['certificate_version']} for the second")
+	_assert(
+		history[revocation.name]["certificate_version"] is None,
+		f"A revocation record carries a version: {history[revocation.name]['certificate_version']}",
+	)
+	_assert(
+		certification.certificate_detail(second.name)["certificate_version"] == 2,
+		"certificate_detail reports another version for the second certificate",
+	)
+	_assert(
+		certification.certificate_detail(revocation.name)["certificate_version"] is None,
+		"certificate_detail gives a revocation a version",
+	)
+	frappe.db.commit()
+
+
+def check_next_version_places_after_unnumbered_legacy():
+	"""Records that predate the column hold 0; a new certificate is still placed after all of them."""
+	from sparsh_los.sparsh_los.doctype.sparsh_certification_record.sparsh_certification_record import (
+		_next_version,
+	)
+
+	_reset_competency()
+	_new_evidence(ACTIVITY_1, "Pass")
+	first = _certify(LEARNER)
+	_revoke(first)
+	second = _certify(LEARNER)
+	_revoke(second)
+	frappe.db.sql(
+		"update `tabSparsh Certification Record` set certificate_version = 0 where name in (%s, %s)",
+		(first.name, second.name),
+	)
+	frappe.db.commit()
+	_assert(
+		_stored_version(first.name) == 0 and _stored_version(second.name) == 0,
+		"The fixture rows are still numbered, so there is nothing legacy to place after",
+	)
+
+	_assert(
+		_next_version(LEARNER, COMPETENCY, "not-a-record") == 3,
+		f"After two unnumbered issue records the next version is {_next_version(LEARNER, COMPETENCY, 'not-a-record')}, not 3",
+	)
+	third = _certify(LEARNER)
+	_assert(_stored_version(third.name) == 3, f"The third certificate was issued as version {_stored_version(third.name)}")
+
+	# A legacy row numbered above the count still wins: the sequence never reuses a number.
+	frappe.db.sql("update `tabSparsh Certification Record` set certificate_version = 5 where name = %s", first.name)
+	frappe.db.commit()
+	_assert(
+		_next_version(LEARNER, COMPETENCY, "not-a-record") == 6,
+		f"With a legacy v5 on file the next version is {_next_version(LEARNER, COMPETENCY, 'not-a-record')}, not 6",
+	)
+	frappe.db.commit()
+
+
+def check_backfill_certificate_versions():
+	"""The patch numbers a lone legacy certificate 1 and refuses to order a pair, naming both."""
+	import contextlib
+	import io
+
+	from sparsh_los.patches.v1_0 import backfill_certificate_versions as patch
+
+	_make_learner(TEST_LEARNER)
+	_reset_competency()
+	_new_evidence(ACTIVITY_1, "Pass")
+	_new_evidence(ACTIVITY_1, "Pass", learner=TEST_LEARNER)
+	lone = _certify(LEARNER)
+	older = _certify(TEST_LEARNER)
+	revocation = _revoke(older)
+	newer = _certify(TEST_LEARNER)
+	frappe.db.sql(
+		"update `tabSparsh Certification Record` set certificate_version = 0 where name in (%s, %s, %s)",
+		(lone.name, older.name, newer.name),
+	)
+	frappe.db.commit()
+	_assert(
+		all(_stored_version(n) == 0 for n in (lone.name, older.name, newer.name)),
+		"The fixture rows are still numbered; the patch has nothing to do",
+	)
+
+	report = io.StringIO()
+	with contextlib.redirect_stdout(report):
+		patch.execute()
+	frappe.db.commit()
+	report = report.getvalue()
+
+	_assert(_stored_version(lone.name) == 1, f"The patch left the lone legacy certificate at {_stored_version(lone.name)}")
+	_assert(
+		_stored_version(older.name) == 0 and _stored_version(newer.name) == 0,
+		f"The patch ordered a pair it cannot order: {_stored_version(older.name)}, {_stored_version(newer.name)}",
+	)
+	_assert(
+		older.name in report and newer.name in report and "undecided" in report,
+		f"The patch did not report the undecided pair by name: {report!r}",
+	)
+	_assert(TEST_LEARNER not in report and LEARNER not in report, f"The patch printed a learner id: {report!r}")
+	_assert(_stored_version(revocation.name) in (0, None), "The patch numbered a revocation record")
+
+	with contextlib.redirect_stdout(io.StringIO()):
+		patch.execute()
+	frappe.db.commit()
+	_assert(_stored_version(lone.name) == 1, "A second run disturbed the numbered certificate")
+	_assert(
+		_stored_version(older.name) == 0 and _stored_version(newer.name) == 0,
+		"A second run numbered a row the first run declined",
+	)
+
+
+def _compliance_rows(**kwargs):
+	from sparsh_los import certification
+
+	view = certification.compliance_view(**kwargs)
+	return view, {row["learner"]: row for row in view["rows"]}
+
+
+def check_compliance_view_buckets():
+	"""Pending sign-off, Certified, Renewal due, Not yet ready -- and a safety block outranks a lapsed renewal."""
+	from sparsh_los import certification
+
+	_reset_competency()
+	_, rows = _compliance_rows(competency=COMPETENCY)
+	_assert(LEARNER not in rows, "A learner with no state and no certificate is in the compliance view")
+
+	_new_evidence(ACTIVITY_1, "Pass")
+	view, rows = _compliance_rows(competency=COMPETENCY)
+	row = rows.get(LEARNER)
+	_assert(row and row["compliance_status"] == certification.PENDING_SIGN_OFF, f"Demonstrated and uncertified reads as {row}")
+	_assert(row["verdict"] == certification.READY and row["sign_off"] is None, f"Pending sign-off carries another verdict: {row}")
+	month = frappe.utils.getdate().strftime("%Y-%m")
+	issued_before = view["by_period"].get(month, {}).get("issued", 0)
+
+	certificate = _certify(LEARNER, renewal_due=frappe.utils.add_days(frappe.utils.getdate(), 30))
+	view, rows = _compliance_rows(competency=COMPETENCY)
+	row = rows[LEARNER]
+	_assert(row["compliance_status"] == certification.CERTIFIED, f"A standing certificate reads as {row['compliance_status']}")
+	_assert(
+		row["sign_off"]["certificate"] == certificate.name
+		and row["sign_off"]["certificate_version"] == 1
+		and row["sign_off"]["version_known"] is True,
+		f"The sign-off does not describe the certificate: {row['sign_off']}",
+	)
+	_assert(
+		row["renewal_policy"] == str(certificate.renewal_due),
+		f"A set renewal date is not reported as the policy: {row['renewal_policy']!r}",
+	)
+	_assert(
+		view["by_period"].get(month, {}).get("issued", 0) - issued_before == 1,
+		f"The certificate was not counted in its month: {view['by_period']}",
+	)
+
+	yesterday = frappe.utils.add_days(frappe.utils.getdate(), -1)
+	frappe.db.set_value("Sparsh Certification Record", certificate.name, "renewal_due", yesterday)
+	frappe.db.commit()
+	_, rows = _compliance_rows(competency=COMPETENCY)
+	row = rows[LEARNER]
+	_assert(row["compliance_status"] == certification.RENEWAL_DUE, f"A lapsed renewal date reads as {row['compliance_status']}")
+	_assert(frappe.utils.getdate(row["renewal_due"]) == yesterday, f"The row does not carry the renewal date: {row['renewal_due']}")
+
+	_new_evidence(ACTIVITY_2, "Fail", critical_error=1)
+	view, rows = _compliance_rows(competency=COMPETENCY)
+	row = rows[LEARNER]
+	_assert(row["verdict"] == certification.BLOCKED, f"The fixture did not block: {row['verdict']}")
+	_assert(
+		row["compliance_status"] == certification.NOT_YET_READY,
+		f"A blocked learner with a lapsed renewal reads as {row['compliance_status']!r}; a safety block must "
+		"never read as merely 'Renewal due'",
+	)
+	_assert(row["blocking_evidence"], "The blocking evidence is not named on the compliance row")
+	_assert(
+		row["sign_off"]["certification_state"] == "Suspended",
+		f"The certificate was not suspended under the block: {row['sign_off']}",
+	)
+	tally = {bucket: 0 for bucket in certification.COMPLIANCE_BUCKETS}
+	for each in view["rows"]:
+		tally[each["compliance_status"]] += 1
+	_assert(view["counts"] == tally, f"counts {view['counts']} do not tally the rows {tally}")
+	frappe.db.commit()
+
+
+def check_compliance_view_reuses_readiness():
+	"""Every row's verdict and reason are readiness()'s own, verbatim."""
+	from sparsh_los import certification
+
+	_make_learner(TEST_LEARNER)
+	_reset_competency()
+	_new_evidence(ACTIVITY_1, "Pass")
+	_new_evidence(ACTIVITY_1, "Pass", learner=TEST_LEARNER)
+	_new_evidence(ACTIVITY_2, "Fail", critical_error=1, learner=TEST_LEARNER)
+	frappe.db.commit()
+
+	view, rows = _compliance_rows(competency=COMPETENCY)
+	_assert(LEARNER in rows and TEST_LEARNER in rows, f"The fixture learners are not both in the view: {sorted(rows)}")
+	for row in view["rows"]:
+		expected = certification.readiness(row["competency"], row["learner"])
+		for key in ("verdict", "reason", "state"):
+			_assert(
+				row[key] == expected[key],
+				f"{row['learner']}: compliance {key} {row[key]!r} differs from readiness {expected[key]!r}",
+			)
+	_assert(
+		rows[LEARNER]["reason"] != rows[TEST_LEARNER]["reason"],
+		"The two fixture rows share one reason, so a literal could satisfy both",
+	)
+	frappe.db.commit()
+
+
+def check_compliance_renewal_null_reads_as_no_policy():
+	"""No renewal date means no policy has been set -- not that renewal is due today."""
+	from sparsh_los import certification
+
+	_reset_competency()
+	_assert(
+		not frappe.get_meta("Sparsh Certification Record").get_field("renewal_due").default,
+		"renewal_due carries a default, so every certificate is born with a renewal policy nobody set",
+	)
+	_new_evidence(ACTIVITY_1, "Pass")
+	certificate = _certify(LEARNER)
+	_assert(
+		frappe.db.get_value("Sparsh Certification Record", certificate.name, "renewal_due") is None,
+		"A certificate issued with no renewal date was stored with one",
+	)
+	_, rows = _compliance_rows(competency=COMPETENCY)
+	row = rows[LEARNER]
+	_assert(row["renewal_due"] is None, f"renewal_due is {row['renewal_due']!r}")
+	_assert(
+		row["renewal_policy"] == certification.NO_RENEWAL_POLICY,
+		f"renewal_policy is {row['renewal_policy']!r}, not {certification.NO_RENEWAL_POLICY!r}",
+	)
+	_assert(
+		row["compliance_status"] == certification.CERTIFIED,
+		f"A certificate with no renewal policy reads as {row['compliance_status']!r}",
+	)
+	frappe.db.commit()
+
+
+def check_compliance_view_is_reviewer_gated():
+	from sparsh_los import certification
+
+	_make_learner(TEST_LEARNER)
+	frappe.db.commit()
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+		_refused(lambda: certification.compliance_view(), "A learner read the compliance view", expect="reviewer action")
+		_refused(
+			lambda: certification.compliance_view(competency=COMPETENCY),
+			"A learner read the compliance view for a competency",
+			expect="reviewer action",
+		)
+	finally:
+		frappe.set_user(original_user)
+	_raises(
+		lambda: certification.compliance_view(competency=PREFIX + "NOPE"),
+		"An unknown competency was reported on rather than refused",
+		expect="no such competency",
+	)
+
+
+def check_compliance_cohort_rate_counts_non_starters():
+	"""A cohort member with no evidence is in the denominator: two members, one certified, rate 0.5."""
+	from sparsh_los import certification
+
+	_make_learner(TEST_LEARNER)
+	_make_learner(OTHER_LEARNER)
+	_reset_competency()
+	_clear_cohorts()
+	try:
+		_new_evidence(ACTIVITY_1, "Pass", learner=TEST_LEARNER)
+		_certify(TEST_LEARNER)
+		_new_cohort(COHORT_A, [TEST_LEARNER, OTHER_LEARNER], status="Active")
+		frappe.db.commit()
+		_assert(
+			not frappe.db.exists("Sparsh Mastery State", {"learner": OTHER_LEARNER, "competency": COMPETENCY}),
+			"The non-starter already has a state, so the cohort loop is not what includes them",
+		)
+
+		view, rows = _compliance_rows(competency=COMPETENCY, cohort=COHORT_A)
+		_assert(set(rows) == {TEST_LEARNER, OTHER_LEARNER}, f"The cohort view covers {sorted(rows)}")
+		_assert(
+			rows[OTHER_LEARNER]["compliance_status"] == certification.NOT_YET_READY
+			and rows[OTHER_LEARNER]["state"] == "Not Started",
+			f"The non-starter is misreported: {rows[OTHER_LEARNER]}",
+		)
+		_assert(rows[TEST_LEARNER]["compliance_status"] == certification.CERTIFIED, "The certified member is not Certified")
+		cohort = view["by_cohort"].get(COHORT_A)
+		_assert(cohort, f"The cohort has no aggregate row: {view['by_cohort']}")
+		_assert(cohort["pairs"] == 2, f"The cohort denominator is {cohort['pairs']}, not 2")
+		_assert(cohort[certification.CERTIFIED] == 1, f"The cohort counts {cohort[certification.CERTIFIED]} certified")
+		_assert(cohort["certified_rate"] == 0.5, f"The certified rate is {cohort['certified_rate']}, not 0.5")
+		_assert(view["counts"][certification.CERTIFIED] == 1 and view["counts"][certification.NOT_YET_READY] == 1, f"counts: {view['counts']}")
+	finally:
+		_clear_cohorts()
+		_reset_competency()
+
+
+# --------------------------------------------------------------- phase 3: source
+LIFECYCLE_HOOKS = {
+	"validate",
+	"before_insert",
+	"before_save",
+	"before_submit",
+	"on_update",
+	"on_update_after_submit",
+	"on_submit",
+	"on_cancel",
+	"on_trash",
+	"after_insert",
+	"after_delete",
+}
+
+
+def check_controller_hooks_are_on_the_class():
+	"""Every lifecycle hook in a controller module is a method of its Document class.
+
+	A method pasted at the wrong indentation, or a module-level helper inserted between
+	two methods, silently turns every method after it into a module-level or nested
+	function. `ast.parse` accepts the file, the import succeeds, and the DocType simply
+	stops running those hooks -- twice here: `on_update` on the rule controller, and
+	`on_update_after_submit`/`on_cancel`/`on_submit` on the certification record.
+	Two shapes are flagged: a hook name defined anywhere other than directly in a class
+	body, and a function taking `self` that is not directly in a class body.
+	"""
+	import ast
+	import pathlib
+
+	root = pathlib.Path(frappe.get_app_path("sparsh_los")) / "sparsh_los" / "doctype"
+	offenders = []
+	controllers = 0
+	hooks_on_classes = 0
+
+	def is_document_base(base):
+		return (isinstance(base, ast.Name) and base.id == "Document") or (
+			isinstance(base, ast.Attribute) and base.attr == "Document"
+		)
+
+	def visit(node, parent, path, tally):
+		"""Walk with the parent in hand, so "directly in a class body" is decidable."""
+		for child in ast.iter_child_nodes(node):
+			if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+				in_class = isinstance(parent, ast.ClassDef)
+				takes_self = bool(child.args.args) and child.args.args[0].arg == "self"
+				if in_class and child.name in LIFECYCLE_HOOKS:
+					tally.append(child.name)
+				if not in_class and (child.name in LIFECYCLE_HOOKS or takes_self):
+					where = (
+						"module level"
+						if isinstance(parent, ast.Module)
+						else f"nested in {getattr(parent, 'name', type(parent).__name__)}()"
+					)
+					offenders.append(f"{path.relative_to(root.parent.parent)}:{child.lineno} {child.name} at {where}")
+			visit(child, child, path, tally)
+
+	for path in sorted(root.rglob("*.py")):
+		if "__pycache__" in path.parts or path.name.startswith("._") or path.name == "__init__.py":
+			continue
+		tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+		if not any(
+			isinstance(node, ast.ClassDef) and any(is_document_base(b) for b in node.bases) for node in tree.body
+		):
+			continue
+		controllers += 1
+		tally = []
+		visit(tree, tree, path, tally)
+		hooks_on_classes += len(tally)
+
+	_assert(controllers >= 10, f"Only {controllers} controller module(s) were scanned; the scan is not finding them")
+	_assert(hooks_on_classes >= 20, f"Only {hooks_on_classes} lifecycle hooks were found on classes; the scan is not finding methods")
+	_assert(
+		not offenders,
+		"Lifecycle hook or method defined outside its Document class -- the DocType has silently "
+		f"stopped running it: {'; '.join(offenders)}",
+	)
+
+
 CHECKS = (
 	("partial_only_history_is_named_accurately", check_partial_only_history_is_named_accurately),
 	("queue_shows_work_that_is_actually_waiting", check_queue_shows_work_that_is_actually_waiting),
@@ -6472,6 +7963,38 @@ CHECKS = (
 	("awaiting_a_person_excludes_reflections", check_awaiting_a_person_excludes_reflections),
 	("reflection_does_not_swallow_waiting_work", check_reflection_does_not_swallow_waiting_work),
 	("translations_are_imported", check_translations_are_imported),
+	("inactive_reconciles", check_inactive_reconciles),
+	("last_activity_date_from_event", check_last_activity_date_from_event),
+	("refresher_repeated", check_refresher_repeated),
+	("refresher_overdue_is_undefined", check_refresher_overdue_is_undefined),
+	("escalation_turnaround_median", check_escalation_turnaround_median),
+	("state_change_parsed", check_state_change_parsed),
+	("attempts_by_competency_sum", check_attempts_by_competency_sum),
+	("pathway_completion", check_pathway_completion),
+	("rejected_pass_does_not_complete_a_step", check_rejected_pass_does_not_complete_a_step),
+	("no_model_share", check_no_model_share),
+	("numeric_scores_within_tolerance", check_numeric_scores_within_tolerance),
+	("numeric_zero_is_an_answer", check_numeric_zero_is_an_answer),
+	("numeric_non_answer_is_refused_not_recorded", check_numeric_non_answer_is_refused_not_recorded),
+	("numeric_obeys_the_rule_gate", check_numeric_obeys_the_rule_gate),
+	("numeric_critical_marker_still_bites", check_numeric_critical_marker_still_bites),
+	("rubric_aggregates_to_partial", check_rubric_aggregates_to_partial),
+	("rubric_verdict_issues_a_hint_and_counts_as_assistance",
+	 check_rubric_verdict_issues_a_hint_and_counts_as_assistance),
+	("rubric_refuses_self_review_and_wrong_mode", check_rubric_refuses_self_review_and_wrong_mode),
+	("rubric_is_never_auto_scored", check_rubric_is_never_auto_scored),
+	("learner_cannot_read_rubric_or_numeric_key", check_learner_cannot_read_rubric_or_numeric_key),
+	("ai_assisted_awaits_implementation", check_ai_assisted_awaits_implementation),
+	("certificate_version_increments_across_revocation",
+	 check_certificate_version_increments_across_revocation),
+	("next_version_places_after_unnumbered_legacy", check_next_version_places_after_unnumbered_legacy),
+	("backfill_certificate_versions", check_backfill_certificate_versions),
+	("compliance_view_buckets", check_compliance_view_buckets),
+	("compliance_view_reuses_readiness", check_compliance_view_reuses_readiness),
+	("compliance_renewal_null_reads_as_no_policy", check_compliance_renewal_null_reads_as_no_policy),
+	("compliance_view_is_reviewer_gated", check_compliance_view_is_reviewer_gated),
+	("compliance_cohort_rate_counts_non_starters", check_compliance_cohort_rate_counts_non_starters),
+	("controller_hooks_are_on_the_class", check_controller_hooks_are_on_the_class),
 	("cleanup", check_cleanup),
 )
 

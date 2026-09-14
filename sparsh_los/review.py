@@ -15,8 +15,9 @@ reviewer's judgement exactly as they apply to the engine's.
 import frappe
 from frappe import _
 
+from sparsh_los import events
 from sparsh_los.permissions import require_reviewer
-from sparsh_los.runner import NOT_SCORED_MODES
+from sparsh_los.runner import MAX_HINT_LEVEL, NOT_SCORED_MODES, RUBRIC_MODE, _hint_for, _lines
 
 REVIEWABLE_OUTCOMES = ("Pass", "Partial", "Fail")
 
@@ -56,10 +57,16 @@ def pending(competency=None, limit=50):
 	# activity's *current* mode -- the attempt does not record the mode it was made
 	# under -- so re-authoring an activity into or out of Reflection moves its old
 	# attempts with it.
+	# `validation_required` and `source_status` travel with the row on purpose. Every
+	# seeded case is "Needs review", and the reviewer is the last person who can notice
+	# that the rule behind the case they are judging has not been approved. Leaving it
+	# in the DocType and not in the queue means it is visible only to somebody who
+	# thinks to go and look.
 	waiting = frappe.db.sql(
 		"""
 		select a.name, a.learner, a.activity, a.response, a.hint_level_used, a.attempted_at,
-		       act.competency, act.title
+		       act.competency, act.title, act.evaluation_mode, act.rubric_criteria,
+		       act.validation_required, act.source_status
 		from `tabSparsh Attempt` a
 		inner join `tabSparsh Activity` act on act.name = a.activity
 		where a.outcome = 'Not Evaluated'
@@ -78,17 +85,14 @@ def pending(competency=None, limit=50):
 	return waiting
 
 
-@frappe.whitelist()
-def record_evidence(attempt, outcome, assistance_level=None, critical_error=0, comments=None):
-	"""A reviewer decides what a recorded attempt was worth.
+def _attempt_for_review(attempt):
+	"""The attempt a reviewer may judge, or a refusal.
 
-	Assistance defaults to what the attempt actually recorded rather than to zero: a
-	reviewer should have to state deliberately that a learner worked unaided.
+	Who is acting is `frappe.session.user`, never anything in the payload. The
+	self-review refusal is a permission error, not a validation error: the caller
+	is not allowed to do this, whatever they send.
 	"""
 	_require_reviewer()
-
-	if outcome not in REVIEWABLE_OUTCOMES:
-		frappe.throw(_("{0} is not a reviewable outcome").format(outcome))
 
 	doc = frappe.get_doc("Sparsh Attempt", attempt)
 	if doc.learner == frappe.session.user:
@@ -97,24 +101,33 @@ def record_evidence(attempt, outcome, assistance_level=None, critical_error=0, c
 	if frappe.db.exists("Sparsh Evidence", {"attempt": doc.name}):
 		frappe.throw(_("This attempt has already been turned into evidence"))
 
-	competency = frappe.db.get_value("Sparsh Activity", doc.activity, "competency")
-	version = frappe.db.get_value("Sparsh Activity", doc.activity, "version")
+	activity = frappe.get_doc("Sparsh Activity", doc.activity)
 
-	# Keeping a Reflection out of `pending` is not enough: this endpoint takes an
+	# Keeping a Reflection out of `pending` is not enough: these endpoints take an
 	# attempt by name, so a reviewer could still turn one into Evidence and move
 	# mastery on the strength of a learner's private reflection.
-	if (frappe.db.get_value("Sparsh Activity", doc.activity, "evaluation_mode") or "") in NOT_SCORED_MODES:
+	if (activity.evaluation_mode or "") in NOT_SCORED_MODES:
 		frappe.throw(_("A reflection is stored for the learner's record and is not turned into evidence"))
 
-	critical_error = int(critical_error or 0) or int(doc.critical_error or 0)
-	if assistance_level is None:
-		assistance_level = doc.hint_level_used or 0
+	return doc, activity
 
+
+def _write_verdict(doc, activity, outcome, assistance_level, critical_error, comments):
+	"""One Evidence record from a reviewer's verdict, then the hint that verdict earns.
+
+	On Partial or Fail the next rung of the activity's ladder comes back with the
+	result. This is how free-text work gets a graded hint and a retry: the runner
+	could not return one at submit time because it had no verdict, and the
+	assistance it implies is counted into the learner's next attempt by
+	`runner._session_position`, which reads these verdicts. The hint itself reaches
+	the learner through `runner.start`, which returns the strongest rung already
+	issued.
+	"""
 	evidence = frappe.new_doc("Sparsh Evidence")
 	evidence.learner = doc.learner
-	evidence.competency = competency
+	evidence.competency = activity.competency
 	evidence.activity = doc.activity
-	evidence.activity_version = version
+	evidence.activity_version = activity.version
 	evidence.attempt = doc.name
 	evidence.outcome = outcome
 	evidence.assistance_level = int(assistance_level)
@@ -133,10 +146,132 @@ def record_evidence(attempt, outcome, assistance_level=None, critical_error=0, c
 	# verdict is a separate fact. "Has this been judged?" is answered by whether
 	# Evidence cites the attempt, which is how pending() already asks it.
 
-	return {
+	result = {
 		"evidence": evidence.name,
 		"attempt": doc.name,
+		"outcome": outcome,
 		"state": frappe.db.get_value(
-			"Sparsh Mastery State", {"learner": doc.learner, "competency": competency}, "state"
+			"Sparsh Mastery State", {"learner": doc.learner, "competency": activity.competency}, "state"
 		),
 	}
+
+	if outcome in ("Partial", "Fail") and not critical_error:
+		next_level = min((doc.hint_level_used or 0) + 1, MAX_HINT_LEVEL)
+		result["hint"] = _hint_for(activity, next_level)
+		result["hint_level"] = next_level
+		# A retry is always open after a person's verdict; whether the ladder has
+		# another rung to offer is a separate fact, reported as `hint`.
+		result["can_retry"] = True
+		if result["hint"]:
+			events.emit(
+				events.HINT_SHOWN,
+				learner=doc.learner,
+				competency=activity.competency,
+				activity=doc.activity,
+				detail=f"level={next_level} via=review",
+			)
+
+	return result
+
+
+@frappe.whitelist()
+def record_evidence(attempt, outcome, assistance_level=None, critical_error=0, comments=None):
+	"""A reviewer decides what a recorded attempt was worth.
+
+	Assistance defaults to what the attempt actually recorded rather than to zero: a
+	reviewer should have to state deliberately that a learner worked unaided.
+	"""
+	if outcome not in REVIEWABLE_OUTCOMES:
+		frappe.throw(_("{0} is not a reviewable outcome").format(outcome))
+
+	doc, activity = _attempt_for_review(attempt)
+
+	critical_error = int(critical_error or 0) or int(doc.critical_error or 0)
+	if assistance_level is None:
+		assistance_level = doc.hint_level_used or 0
+
+	return _write_verdict(doc, activity, outcome, assistance_level, critical_error, comments)
+
+
+def aggregate_rubric(total, met):
+	"""Pass when every criterion is met, Fail when none is, Partial between.
+
+	Deterministic and strict on purpose. Any threshold below "all" says which
+	criterion a learner may miss and still pass -- a judgement about the content,
+	which belongs to the activity's author and the programme owner, not to the
+	engine. If one is ever wanted it is a permlevel-1 field beside the criteria, and
+	this function is where it would be read.
+	"""
+	if total and met == total:
+		return "Pass"
+	if met == 0:
+		return "Fail"
+	return "Partial"
+
+
+@frappe.whitelist()
+def score_rubric(attempt, criteria_met, comments=None):
+	"""A reviewer says which rubric criteria were met; the engine decides what that is worth.
+
+	`criteria_met` is a list of 1-based line numbers into the activity's
+	`rubric_criteria` -- line 1 is criterion 1, the same shape as the hint ladder.
+	The reviewer never sends an outcome and never sends an assistance level: the
+	outcome is aggregated here and assistance is what the attempt recorded, so a
+	rubric verdict can neither inflate a result nor claim the work was less assisted
+	than it was.
+
+	The criteria are permlevel-1 text on the Activity, not a child table, for the
+	same reason the hint ladder is: a child table is a separately queryable DocType,
+	and the person being assessed could read the answer key through it.
+	"""
+	doc, activity = _attempt_for_review(attempt)
+
+	if (activity.evaluation_mode or "") != RUBRIC_MODE:
+		frappe.throw(
+			_("{0} is a {1} activity; a rubric verdict applies only to a Rubric activity").format(
+				activity.name, activity.evaluation_mode or "blank-mode"
+			)
+		)
+
+	criteria = _lines(activity.rubric_criteria)
+	if not criteria:
+		# A content gap, not a verdict: nothing was authored to judge against.
+		frappe.throw(_("{0} has no rubric criteria to score against").format(activity.name))
+
+	if isinstance(criteria_met, str):
+		criteria_met = frappe.parse_json(criteria_met)
+	if criteria_met is None:
+		criteria_met = []
+	if not isinstance(criteria_met, (list, tuple)):
+		frappe.throw(_("criteria_met must be a list of criterion numbers"))
+
+	met = set()
+	for item in criteria_met:
+		try:
+			index = int(item)
+		except (TypeError, ValueError):
+			frappe.throw(_("{0} is not a criterion number").format(item))
+		if index < 1 or index > len(criteria):
+			frappe.throw(
+				_("Criterion {0} does not exist; this activity has {1}").format(index, len(criteria))
+			)
+		met.add(index)
+
+	outcome = aggregate_rubric(len(criteria), len(met))
+
+	# Indices only, never the criteria text: the learner can read their own Evidence.
+	summary = _("Rubric: {0} of {1} criteria met").format(len(met), len(criteria))
+	if met:
+		summary += " (" + ", ".join(str(i) for i in sorted(met)) + ")"
+	if comments:
+		summary += "\n" + comments
+
+	# A rubric verdict does not decide safety; the attempt's own flag is inherited,
+	# exactly as `record_evidence` inherits it. A reviewer who sees a scope breach
+	# the markers missed records it through `record_evidence` with critical_error=1.
+	critical_error = int(doc.critical_error or 0)
+
+	result = _write_verdict(doc, activity, outcome, doc.hint_level_used or 0, critical_error, summary)
+	result["criteria_met"] = sorted(met)
+	result["criteria_total"] = len(criteria)
+	return result

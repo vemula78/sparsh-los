@@ -190,7 +190,19 @@ def load_case_pack():
 		activity.competency = mapping[0]
 		activity.activity_type = "Short case"
 		activity.instruction = f"{case['scenario']}\n\n{case['task']}"
-		activity.expected_evidence = case["engine"]
+		# `expected_evidence` is what the learner must demonstrate, and the case pack
+		# states it for no case. It used to be filled with the pack's "suggested engine
+		# behaviour" -- developer guidance like "Short case -> decision -> brief
+		# reasoning -> graded hint" -- which a reviewer opening the activity reads as the
+		# standard they are judging against. Left empty: missing is missing.
+		activity.expected_evidence = None
+		activity.engine_guidance = case["engine"]
+		# Carried across rather than dropped. A reviewer judging this case needs to know
+		# the programme has not validated the rule behind it, and what specifically is
+		# outstanding -- for SC-06 that is "use programme-approved red-flag/referral
+		# rules only", which is the difference between judging a learner and guessing.
+		activity.validation_required = case.get("validation")
+		activity.source_status = case.get("status")
 		activity.version = 1
 		# Human review, always. No rule behind these cases is validated yet.
 		activity.evaluation_mode = "Human review"

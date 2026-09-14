@@ -17,6 +17,7 @@ them on the Attempt.
 
 import re
 import unicodedata
+from decimal import Decimal, InvalidOperation
 
 import frappe
 from frappe import _
@@ -137,14 +138,94 @@ def _is_critical(activity, response):
 # `AUTO_SCORED_MODES` is an allow-list, not a denylist: anything outside it -- an unbuilt
 # mode, an empty field, a value written straight to the column -- goes to a person. Declaring a mode the engine cannot perform and silently scoring it
 # with the deterministic comparison would be the worst of both.
+#
+# The tuple names the modes the *string comparison* may score. Numeric validation is
+# built and scores itself, but through its own arithmetic branch below, never through
+# the comparison -- so it stays out of this tuple, and the harness check that iterates
+# every declared mode outside it keeps proving that nothing falls through to
+# `expected_response`.
 AUTO_SCORED_MODES = ("Deterministic",)
+# Scored by arithmetic against `expected_value` and `tolerance`, under the same rule
+# gate as Deterministic. Not language: a response that holds no single number is not
+# an answer, and `evaluate` refuses it rather than grading it (see `NotAnAnswer`).
+NUMERIC_MODE = "Numeric validation"
+# Judged by a person, aggregated by the engine: the reviewer names which of the
+# activity's `rubric_criteria` were met and `review.score_rubric` turns that into
+# Pass / Partial / Fail. `evaluate` never scores it; the attempt waits for a person.
+RUBRIC_MODE = "Rubric"
 # A Reflection is the learner's own written thinking, stored for their record. It is
 # not work awaiting a verdict, so it produces no Evidence and never reaches the review
 # queue -- `review.pending` and `review.record_evidence` both consult this tuple. It
 # was declared and read by nothing, so a Reflection fell through the same path as an
 # unbuilt evaluator and sat in front of a reviewer as if it needed judging.
 NOT_SCORED_MODES = ("Reflection",)
-AWAITING_IMPLEMENTATION_MODES = ("Numeric validation", "Rubric", "AI-assisted")
+# Declared in the Select, dispatched by nothing yet. `evaluate` returns Not Evaluated
+# for these and a person judges the attempt through `review.record_evidence`.
+AWAITING_IMPLEMENTATION_MODES = ("AI-assisted",)
+
+
+class NotAnAnswer(frappe.ValidationError):
+	"""A response to a Numeric activity that holds no single number.
+
+	Not a wrong answer -- not an answer. It is refused before an Attempt exists, so it
+	neither climbs the hint ladder nor counts as a retry, and it never sits in front of
+	a reviewer as free text on an activity that asked for a number.
+	"""
+
+
+# One number, optionally signed, optionally with a decimal part. Thousands separators
+# are deliberately not understood: "1,200" is two numbers here, and "1,5" would be a
+# European decimal that the same rule would misread as one thousand five hundred.
+# Whatever else the response carries -- a unit, a word -- is ignored, so the activity
+# instruction must name the unit it wants and `expected_value` must be in that unit.
+_NUMBER = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)")
+
+
+def _numeric_value(response):
+	"""The one number in a response as a Decimal, or None when there is not exactly one.
+
+	Decimal rather than float: 2.7 - 2.5 in binary floating point is a shade over 0.2,
+	so a tolerance of 0.2 would refuse a response the author meant to accept.
+	"""
+	found = _NUMBER.findall(unicodedata.normalize("NFKC", response or ""))
+	if len(found) != 1:
+		return None
+
+	try:
+		return Decimal(found[0])
+	except InvalidOperation:
+		return None
+
+
+def _evaluate_numeric(activity, response):
+	"""Absolute tolerance: |response - expected| <= tolerance, in the instruction's unit.
+
+	Absolute rather than relative because the values an activity asks for -- a
+	weight, a count, a reading, a dose -- are stated in a unit, and an author thinks
+	of "within 0.5 kg", not "within 2 percent". A relative tolerance is also
+	meaningless at an expected value of zero, which is a legitimate answer. If an
+	activity ever needs a relative band it is one more permlevel-1 field, not a
+	change to this rule.
+
+	`expected_value` is Data, not Float, for two reasons: a Float column stores blank
+	as 0, so "no answer agreed yet" and "the answer is zero" would be the same row;
+	and the text the author typed parses exactly, where a float would not.
+	"""
+	expected = _numeric_value(activity.expected_value)
+	if expected is None:
+		# Nothing to compare against is a content gap, not a learner failure --
+		# the same rule Deterministic applies to an empty `expected_response`.
+		return "Not Evaluated", 0
+
+	value = _numeric_value(response)
+	if value is None:
+		frappe.throw(
+			_("This activity expects a single number. Enter one number in the unit the instruction names."),
+			NotAnAnswer,
+		)
+
+	tolerance = Decimal(str(activity.tolerance or 0))
+	return ("Pass", 0) if abs(value - expected) <= tolerance else ("Fail", 0)
 
 
 def _rule_is_validated(competency):
@@ -176,11 +257,13 @@ def _rule_is_validated(competency):
 def evaluate(activity, response):
 	"""Return (outcome, critical_error). Deterministic; no model call.
 
-	Every mode except Deterministic returns Not Evaluated and waits for a reviewer.
-	That is the right answer for judgement-heavy work, and for the modes not yet
-	built it is the only safe one: the alternative is falling through to the
-	string comparison, which would score a rubric activity as though it were a
-	multiple-choice question.
+	Deterministic scores by string comparison and Numeric validation by arithmetic;
+	every other mode returns Not Evaluated and waits for a reviewer. That is the right
+	answer for judgement-heavy work -- a Rubric attempt is scored by
+	`review.score_rubric` once a person has said which criteria were met -- and for
+	the modes not yet built it is the only safe one: the alternative is falling
+	through to the string comparison, which would score a free-text answer as though
+	it were a multiple-choice question.
 	"""
 	# The rule gate comes first, ahead of anything the engine might conclude -- the
 	# safety branch included. Critical markers used to be checked before it, so an
@@ -206,6 +289,11 @@ def evaluate(activity, response):
 		return "Fail", 1
 
 	mode = activity.evaluation_mode or "Human review"
+	if mode == NUMERIC_MODE:
+		# Its own branch, ahead of the allow-list: arithmetic, not the string
+		# comparison, and it may refuse the response outright (`NotAnAnswer`).
+		return _evaluate_numeric(activity, response)
+
 	if mode not in AUTO_SCORED_MODES:
 		return "Not Evaluated", 0
 
@@ -219,7 +307,13 @@ def evaluate(activity, response):
 
 @frappe.whitelist()
 def start(activity):
-	"""Open a session on one activity. Returns the instruction and nothing more."""
+	"""Open a session on one activity, with the learner's position on the ladder.
+
+	It returned "the instruction and nothing more" until a reviewer's Rubric verdict
+	became able to issue a hint; the docstring is kept honest because nine defects in
+	this project were first described accurately by a comment beside code that did not
+	do it.
+	"""
 	_require_enrolment()
 	doc = _activity(activity)
 	events.emit(
@@ -228,13 +322,19 @@ def start(activity):
 		competency=doc.competency,
 		activity=doc.name,
 	)
+	# The learner's real position, not a placeholder: a hint issued when a reviewer
+	# scored a Rubric attempt has no other way to reach them, because the verdict
+	# arrives after the session that produced the attempt has closed. `hint` is the
+	# strongest rung already shown -- never the next one.
+	hint_level, retry_index = _session_position(frappe.session.user, doc.name)
 	return {
 		"activity": doc.name,
 		"title": doc.title,
 		"instruction": doc.instruction,
 		"competency": doc.competency,
-		"hint_level": 0,
-		"retry_index": 0,
+		"hint_level": hint_level,
+		"retry_index": retry_index,
+		"hint": _hint_for(doc, hint_level),
 	}
 
 
@@ -256,12 +356,28 @@ def _session_position(learner, activity):
 	attempts = frappe.get_all(
 		"Sparsh Attempt",
 		filters={"learner": learner, "activity": activity},
-		fields=["outcome", "hint_level_used"],
+		fields=["name", "outcome", "hint_level_used"],
 		order_by="creation asc",
 	)
 
 	failures = sum(1 for row in attempts if row.outcome not in ("Pass", "Not Evaluated"))
 	seen = max((row.hint_level_used or 0) for row in attempts) if attempts else 0
+
+	# A verdict a person gave on a Not Evaluated attempt is a failure the attempt
+	# itself does not record -- attempts are immutable, and the engine returned the
+	# next hint when the verdict was written (`review.score_rubric`,
+	# `review.record_evidence`). Without this a Rubric learner could be handed hint
+	# after hint and still submit each new answer as unaided.
+	waiting = [row.name for row in attempts if row.outcome == "Not Evaluated"]
+	if waiting:
+		failures += frappe.db.count(
+			"Sparsh Evidence",
+			{
+				"attempt": ("in", waiting),
+				"outcome": ("in", ("Partial", "Fail")),
+				"docstatus": 1,
+			},
+		)
 
 	return min(max(failures, seen), MAX_HINT_LEVEL), len(attempts)
 
