@@ -73,6 +73,13 @@ def _ensure_user(email, full_name, role):
 		# Website User, like the programme owner: nothing in this engine is worked in
 		# the desk, and a demo account has no business holding desk access.
 		user.user_type = "Website User"
+		# Frappe emails a welcome message with a password-reset link to every new user.
+		# It tried for all ten of these and filled the Error Log with delivery failures.
+		# The `.invalid` addresses meant nothing could actually be delivered -- but a
+		# demonstration loader must not be in the business of sending mail at all, and
+		# relying on the domain to stop it is relying on the second line of defence.
+		user.flags.no_welcome_mail = True
+		user.send_welcome_email = 0
 		user.insert(ignore_permissions=True)
 	if role not in [row.role for row in user.roles]:
 		user.append("roles", {"role": role})

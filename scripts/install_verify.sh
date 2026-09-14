@@ -137,6 +137,24 @@ host_cmd "docker exec ${CONTAINER} tar -C ${APP_DIR}/sparsh_los -cf - public" \
 		rm -rf /tmp/_sparsh_assets
 	'"
 
+echo "==> Reloading the application workers"
+# Without this the deploy is not finished, however green the harness is.
+#
+# gunicorn workers are long-lived processes. They hold the modules they imported at
+# boot and the website route map they built then, so a `www` page added by this deploy
+# resolves to its template while its controller module is never imported. Jinja then
+# renders the template against an empty context and the page 500s on the first variable
+# it touches -- `'branding' is undefined` -- with nothing written to the Error Log.
+#
+# The harness cannot catch it. `run_verify.py` starts a fresh interpreter, where the
+# import always succeeds, so a page that is dead on the server verifies perfectly. Two
+# new pages were served broken while 158 checks passed.
+#
+# HUP, not a container restart: the master re-execs its workers and the container keeps
+# running, so the other seventeen apps on this bench are not interrupted.
+host_cmd "docker kill -s HUP ${CONTAINER}" >/dev/null
+sleep 5
+
 echo "==> Clearing cache"
 host_cmd "docker exec -u frappe ${CONTAINER} bash -lc 'cd ${BENCH_DIR} && bench --site ${SITE} clear-cache'"
 
