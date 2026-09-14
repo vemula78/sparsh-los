@@ -14,6 +14,8 @@ RULE_ID_PATTERN = re.compile(r"^[A-Z0-9-]+$")
 # lowercase "of". The odd casing is required: renaming it breaks controller loading.
 class SparshSourceofTruthRule(Document):
 	def validate(self):
+		self._validated_means_somebody_validated_it()
+
 		if not RULE_ID_PATTERN.match(self.rule_id or ""):
 			frappe.throw(_("Rule ID must contain only A-Z, 0-9 and hyphen"))
 
@@ -41,6 +43,43 @@ class SparshSourceofTruthRule(Document):
 			before = frappe.db.get_value(self.doctype, self.name, "status")
 			if before == "Superseded" and self.status != "Superseded":
 				frappe.throw(_("A superseded rule cannot be reverted to an active status"))
+
+	def _validated_means_somebody_validated_it(self):
+		"""Validated is a claim about a person, so the person has to be on the record.
+
+		`status = "Validated"` is the single switch that lets the engine score against a
+		rule automatically. Nothing guarded the transition: any writer could set it, on a
+		rule still carrying the *candidate* wording, with no owner and no effective date
+		-- and the engine would then treat unapproved text as programme policy. Section 8
+		of the build guide marks owner, effective date and source Required, and the
+		matrix's own instructions say "Use Validated only after explicit programme-owner /
+		clinical sign-off" and "Enter the approved current rule in exact wording when
+		confirmed".
+
+		`rule_statement` holds the *candidate* -- what was proposed. `approved_statement`
+		holds what the programme owner actually approved. Keeping both means a reader can
+		always see what changed between the proposal and the decision; overwriting the
+		candidate would destroy that, and it is the only evidence of what the engine was
+		nearly configured to do.
+		"""
+		if self.status != "Validated":
+			return
+
+		missing = [
+			label
+			for label, value in (
+				("the approved wording", (self.approved_statement or "").strip()),
+				("a rule owner", self.rule_owner),
+				("an effective date", self.effective_date),
+			)
+			if not value
+		]
+		if missing:
+			frappe.throw(
+				_("A rule cannot be Validated without {0}. Validated means a named person "
+				  "approved this wording on a date; without that the engine would score "
+				  "against text nobody signed.").format(", ".join(missing))
+			)
 
 	def on_update(self):
 		if not self.supersedes:

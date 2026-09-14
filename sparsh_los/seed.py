@@ -65,6 +65,20 @@ def load_matrix(force=False):
 		rule.criticality = row["criticality"]
 		rule.automation_status = row["automation_status"]
 		rule.notes = row["notes"]
+		# The programme owner's own words for the same three columns, kept verbatim
+		# beside the values we had to map onto our Selects. The mapping is lossy in both
+		# directions: the matrix distinguishes "Medium" from "Normal" and "High" from
+		# "High-risk", and its automation values carry the condition under which
+		# automation becomes permissible -- "Do not automate *until validated*",
+		# "deterministic *once validated*" -- which our four-option Select cannot hold.
+		# Without these the loaded rules cannot be reconciled against his spreadsheet by
+		# eye, and one row loaded stricter than he had authorised with nothing to show it.
+		rule.source_criticality = row.get("source_criticality")
+		rule.source_status = row.get("source_status")
+		rule.source_automation_status = row.get("source_automation_status")
+		# His approved wording, if the matrix's Programme Owner Decision column is filled.
+		# Empty on every row today; the candidate in `rule_statement` is not an answer.
+		rule.approved_statement = row.get("approved_statement")
 		# Draft, always. A rule becomes Validated when a person says so.
 		rule.status = "Draft"
 		rule.insert(ignore_permissions=True)

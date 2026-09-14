@@ -298,6 +298,14 @@ def _new_rule(version, supersedes=None, status="Validated"):
 	rule.version = version
 	rule.rule_statement = "Verification rule statement."
 	rule.status = status
+	if status == "Validated":
+		# Validated now requires the three things that make it a claim about a person:
+		# approved wording, a named owner and a date. The fixture supplies them so the
+		# checks exercise the engine rather than the new guard -- and so that a fixture
+		# can never accidentally create the state the guard exists to prevent.
+		rule.approved_statement = "Verification approved wording."
+		rule.rule_owner = "Administrator"
+		rule.effective_date = frappe.utils.today()
 	rule.supersedes = supersedes
 	rule.insert(ignore_permissions=True)
 	return rule
@@ -7850,6 +7858,106 @@ def check_controller_hooks_are_on_the_class():
 	)
 
 
+def check_validated_means_somebody_validated_it():
+	"""Validated is the switch that lets the engine score automatically, so it is guarded.
+
+	Nothing guarded the transition: any writer could set `status = "Validated"` on a rule
+	still carrying the *candidate* wording, with no owner and no date, and the engine
+	would then treat unapproved text as programme policy. The candidate and the approved
+	wording are separate fields so a reader can always see what changed between what was
+	proposed and what was decided.
+	"""
+	_delete_all("Sparsh Source of Truth Rule", {"rule_id": PREFIX + "VAL"})
+	frappe.db.commit()
+
+	def _rule(**values):
+		rule = frappe.new_doc("Sparsh Source of Truth Rule")
+		rule.rule_id = PREFIX + "VAL"
+		rule.version = 1
+		rule.rule_statement = "A candidate somebody proposed."
+		for field, value in values.items():
+			rule.set(field, value)
+		rule.insert(ignore_permissions=True)
+		return rule
+
+	try:
+		# Each of the three missing in turn, and the message must name what is missing.
+		for missing, values in (
+			("the approved wording", {"rule_owner": "Administrator",
+									  "effective_date": frappe.utils.today()}),
+			("a rule owner", {"approved_statement": "The owner's wording.",
+							  "effective_date": frappe.utils.today()}),
+			("an effective date", {"approved_statement": "The owner's wording.",
+								   "rule_owner": "Administrator"}),
+		):
+			_raises(
+				lambda v=values: _rule(status="Validated", **v),
+				f"A rule was Validated without {missing}",
+				expect=missing,
+			)
+
+		# With all three it is allowed, and the candidate survives alongside the answer.
+		rule = _rule(
+			status="Validated",
+			approved_statement="The owner's wording.",
+			rule_owner="Administrator",
+			effective_date=frappe.utils.today(),
+		)
+		frappe.db.commit()
+		stored = frappe.db.get_value(
+			"Sparsh Source of Truth Rule", rule.name,
+			["rule_statement", "approved_statement"], as_dict=True,
+		)
+		_assert(
+			stored.rule_statement == "A candidate somebody proposed.",
+			"Approving the rule overwrote the candidate, so what changed cannot be seen",
+		)
+		_assert(
+			stored.approved_statement == "The owner's wording.",
+			"The approved wording was not stored",
+		)
+	finally:
+		_delete_all("Sparsh Source of Truth Rule", {"rule_id": PREFIX + "VAL"})
+		frappe.db.commit()
+
+
+def check_matrix_keeps_the_owners_own_words():
+	"""His three matrix columns are stored verbatim beside the values we map them onto.
+
+	Our Selects cannot hold what his spreadsheet says: the matrix distinguishes "Medium"
+	from "Normal" and "High" from "High-risk", and its automation values carry the
+	condition under which automation becomes permissible -- "Do not automate *until
+	validated*" -- which a four-option Select drops. One row loaded stricter than he had
+	authorised with nothing on the record to show it.
+	"""
+	rows = frappe.get_all(
+		"Sparsh Source of Truth Rule",
+		filters={"rule_id": ("in", ("BP-HANDLING-AND-ESCALATION", "70-CONFIDENCE-RULE"))},
+		fields=["rule_id", "criticality", "source_criticality", "source_status",
+				"source_automation_status"],
+	)
+	_assert(len(rows) == 2, f"The matrix fixtures are not loaded: {rows}")
+
+	for row in rows:
+		_assert(
+			(row.source_status or "").strip(),
+			f"{row.rule_id} lost the status its matrix row carried",
+		)
+		_assert(
+			(row.source_automation_status or "").strip(),
+			f"{row.rule_id} lost the automation wording its matrix row carried",
+		)
+
+	confidence = next(r for r in rows if r.rule_id == "70-CONFIDENCE-RULE")
+	# The matrix says Medium; our Select has no Medium, so it maps to Normal. Both must
+	# be visible or the two documents cannot be reconciled by eye.
+	_assert(
+		confidence.criticality == "Normal" and confidence.source_criticality == "Medium",
+		f"The mapped and original criticality are not both recorded: "
+		f"{confidence.criticality} / {confidence.source_criticality}",
+	)
+
+
 CHECKS = (
 	("partial_only_history_is_named_accurately", check_partial_only_history_is_named_accurately),
 	("queue_shows_work_that_is_actually_waiting", check_queue_shows_work_that_is_actually_waiting),
@@ -7995,6 +8103,8 @@ CHECKS = (
 	("compliance_view_is_reviewer_gated", check_compliance_view_is_reviewer_gated),
 	("compliance_cohort_rate_counts_non_starters", check_compliance_cohort_rate_counts_non_starters),
 	("controller_hooks_are_on_the_class", check_controller_hooks_are_on_the_class),
+	("validated_means_somebody_validated_it", check_validated_means_somebody_validated_it),
+	("matrix_keeps_the_owners_own_words", check_matrix_keeps_the_owners_own_words),
 	("cleanup", check_cleanup),
 )
 

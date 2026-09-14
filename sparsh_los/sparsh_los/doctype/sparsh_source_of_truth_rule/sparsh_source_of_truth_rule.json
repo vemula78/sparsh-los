@@ -9,6 +9,7 @@
   "rule_id",
   "version",
   "rule_statement",
+  "approved_statement",
   "applies_to",
   "column_break_core",
   "status",
@@ -20,7 +21,11 @@
   "automation_status",
   "column_break_governance",
   "supersedes",
-  "notes"
+  "notes",
+  "section_break_provenance",
+  "source_status",
+  "source_criticality",
+  "source_automation_status"
  ],
  "fields": [
   {
@@ -115,11 +120,41 @@
    "fieldname": "notes",
    "fieldtype": "Text",
    "label": "Notes"
+  },
+  {
+   "fieldname": "approved_statement",
+   "fieldtype": "Text",
+   "label": "Approved Statement",
+   "description": "The programme owner's own wording, entered verbatim when they confirm the rule. Required before the rule may be Validated."
+  },
+  {
+   "fieldname": "section_break_provenance",
+   "fieldtype": "Section Break",
+   "label": "As the programme owner wrote it"
+  },
+  {
+   "fieldname": "source_status",
+   "fieldtype": "Data",
+   "label": "Source Status",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_criticality",
+   "fieldtype": "Data",
+   "label": "Source Criticality",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source_automation_status",
+   "fieldtype": "Small Text",
+   "label": "Source Automation Status",
+   "read_only": 1,
+   "description": "Verbatim from the matrix, including the condition under which automation becomes permissible."
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-14 10:00:00.000000",
+ "modified": "2026-09-14 13:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Source of Truth Rule",

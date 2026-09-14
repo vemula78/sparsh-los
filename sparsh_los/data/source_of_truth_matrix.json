@@ -6,7 +6,11 @@
   "source": "Approved programme rule / curriculum input",
   "criticality": "High-risk",
   "automation_status": "Do not automate",
-  "notes": "Confirm current criteria and examples."
+  "notes": "Confirm current criteria and examples.",
+  "source_criticality": "High-risk",
+  "source_status": "Needs review",
+  "source_automation_status": "Do not automate until validated",
+  "approved_statement": null
  },
  {
   "rule_id": "RISK-LEVEL-2-DEFINITION",
@@ -15,7 +19,11 @@
   "source": "Approved programme rule / curriculum input",
   "criticality": "High-risk",
   "automation_status": "Do not automate",
-  "notes": "Particularly important for pre-disease/risk-factor cases."
+  "notes": "Particularly important for pre-disease/risk-factor cases.",
+  "source_criticality": "High-risk",
+  "source_status": "Needs review",
+  "source_automation_status": "Do not automate until validated",
+  "approved_statement": null
  },
  {
   "rule_id": "RISK-LEVEL-3-DEFINITION",
@@ -24,7 +32,11 @@
   "source": "Approved programme rule / curriculum input",
   "criticality": "High-risk",
   "automation_status": "Do not automate",
-  "notes": "Confirm how controlled disease is classified."
+  "notes": "Confirm how controlled disease is classified.",
+  "source_criticality": "High-risk",
+  "source_status": "Needs review",
+  "source_automation_status": "Do not automate until validated",
+  "approved_statement": null
  },
  {
   "rule_id": "RISK-LEVEL-4-DEFINITION",
@@ -33,7 +45,11 @@
   "source": "Approved programme rule / curriculum input",
   "criticality": "Safety-critical",
   "automation_status": "Do not automate",
-  "notes": "Confirm whether Level 4 is temporary and transition rules."
+  "notes": "Confirm whether Level 4 is temporary and transition rules.",
+  "source_criticality": "Safety-critical",
+  "source_status": "Needs review",
+  "source_automation_status": "Do not automate until validated",
+  "approved_statement": null
  },
  {
   "rule_id": "S-MODIFIER",
@@ -42,7 +58,11 @@
   "source": "Programme rule / field-query input",
   "criticality": "High-risk",
   "automation_status": "Do not automate",
-  "notes": "Confirm which histories qualify and whether all surgeries do."
+  "notes": "Confirm which histories qualify and whether all surgeries do.",
+  "source_criticality": "High-risk",
+  "source_status": "Needs review",
+  "source_automation_status": "Do not automate until validated",
+  "approved_statement": null
  },
  {
   "rule_id": "RED-FLAG-SYMPTOMS-AND-REFERRAL",
@@ -51,7 +71,11 @@
   "source": "Programme safety rule",
   "criticality": "Safety-critical",
   "automation_status": "Human review required",
-  "notes": "Insert only approved symptom list and urgency rules."
+  "notes": "Insert only approved symptom list and urgency rules.",
+  "source_criticality": "Safety-critical",
+  "source_status": "Needs review",
+  "source_automation_status": "Human escalation required; deterministic once validated",
+  "approved_statement": null
  },
  {
   "rule_id": "BP-HANDLING-AND-ESCALATION",
@@ -60,7 +84,11 @@
   "source": "Programme safety rule",
   "criticality": "Safety-critical",
   "automation_status": "Do not automate",
-  "notes": "Separate measurement technique from clinical escalation."
+  "notes": "Separate measurement technique from clinical escalation.",
+  "source_criticality": "Safety-critical",
+  "source_status": "Needs review",
+  "source_automation_status": "Do not automate until validated",
+  "approved_statement": null
  },
  {
   "rule_id": "HYPOGLYCAEMIA-RESPONSE-SCOPE",
@@ -69,7 +97,11 @@
   "source": "Programme safety rule",
   "criticality": "Safety-critical",
   "automation_status": "Do not automate",
-  "notes": "Clarify when to treat, refer, or call emergency services."
+  "notes": "Clarify when to treat, refer, or call emergency services.",
+  "source_criticality": "Safety-critical",
+  "source_status": "Needs review",
+  "source_automation_status": "Do not automate until validated",
+  "approved_statement": null
  },
  {
   "rule_id": "70-CONFIDENCE-RULE",
@@ -78,7 +110,11 @@
   "source": "Coaching framework / field experience",
   "criticality": "Normal",
   "automation_status": "AI may advise",
-  "notes": "Do not block progression solely on an unvalidated numeric cut-off."
+  "notes": "Do not block progression solely on an unvalidated numeric cut-off.",
+  "source_criticality": "Medium",
+  "source_status": "Needs review",
+  "source_automation_status": "AI may advise within approved coaching rule",
+  "approved_statement": null
  },
  {
   "rule_id": "IMMUTABLE-BASELINE",
@@ -87,7 +123,11 @@
   "source": "Programme data rule",
   "criticality": "High-risk",
   "automation_status": "Safe as fixed logic",
-  "notes": "Align with existing SAI SPARSH database policy."
+  "notes": "Align with existing SAI SPARSH database policy.",
+  "source_criticality": "High",
+  "source_status": "Needs review",
+  "source_automation_status": "Safe as fixed logic once confirmed",
+  "approved_statement": null
  },
  {
   "rule_id": "MISSING-DATA",
@@ -96,7 +136,11 @@
   "source": "Programme data rule / field-query input",
   "criticality": "High-risk",
   "automation_status": "Safe as fixed logic",
-  "notes": "Confirm official missing-value and denominator treatment."
+  "notes": "Confirm official missing-value and denominator treatment.",
+  "source_criticality": "High",
+  "source_status": "Needs review",
+  "source_automation_status": "Safe as fixed logic once confirmed",
+  "approved_statement": null
  },
  {
   "rule_id": "PARTIAL-ACHIEVEMENT",
@@ -105,7 +149,11 @@
   "source": "Programme coaching/data rule",
   "criticality": "Normal",
   "automation_status": "Safe as fixed logic",
-  "notes": "Confirm categories such as Partially Achieved / Self-Modified."
+  "notes": "Confirm categories such as Partially Achieved / Self-Modified.",
+  "source_criticality": "Medium",
+  "source_status": "Needs review",
+  "source_automation_status": "Safe as fixed logic once confirmed",
+  "approved_statement": null
  },
  {
   "rule_id": "MEDICATION-QUESTIONS",
@@ -114,7 +162,11 @@
   "source": "Scope-of-practice rule",
   "criticality": "Safety-critical",
   "automation_status": "Human review required",
-  "notes": "Keep medication adjustment outside volunteer scope unless explicitly authorised."
+  "notes": "Keep medication adjustment outside volunteer scope unless explicitly authorised.",
+  "source_criticality": "Safety-critical",
+  "source_status": "Needs review",
+  "source_automation_status": "Human escalation required",
+  "approved_statement": null
  },
  {
   "rule_id": "OILS-FATS-RULES",
@@ -123,7 +175,11 @@
   "source": "Curriculum input",
   "criticality": "Normal",
   "automation_status": "Human review required",
-  "notes": "Version with date because evidence/guidance may change."
+  "notes": "Version with date because evidence/guidance may change.",
+  "source_criticality": "Medium",
+  "source_status": "Needs review",
+  "source_automation_status": "Reference content only until validated",
+  "approved_statement": null
  },
  {
   "rule_id": "RISK-STRATIFICATION-MVP-COMPETENCY",
@@ -132,7 +188,11 @@
   "source": "Curriculum/competency analysis",
   "criticality": "High-risk",
   "automation_status": "Human review required",
-  "notes": "Keep core engine generic."
+  "notes": "Keep core engine generic.",
+  "source_criticality": "High",
+  "source_status": "Context-dependent",
+  "source_automation_status": "Can implement with placeholder logic; production scoring only after validation",
+  "approved_statement": null
  },
  {
   "rule_id": "PLEDGE-CO-CREATION-MVP-COMPETENCY",
@@ -141,7 +201,11 @@
   "source": "Curriculum/competency analysis + field queries",
   "criticality": "Normal",
   "automation_status": "Human review required",
-  "notes": "Use de-identified scenarios."
+  "notes": "Use de-identified scenarios.",
+  "source_criticality": "Medium",
+  "source_status": "Context-dependent",
+  "source_automation_status": "AI-assisted coaching allowed within approved guardrails",
+  "approved_statement": null
  },
  {
   "rule_id": "SCOPE-ESCALATION-MVP-COMPETENCY",
@@ -150,6 +214,10 @@
   "source": "Curriculum/competency analysis + field queries",
   "criticality": "Safety-critical",
   "automation_status": "Human review required",
-  "notes": "Human escalation workflow is required."
+  "notes": "Human escalation workflow is required.",
+  "source_criticality": "Safety-critical",
+  "source_status": "Context-dependent",
+  "source_automation_status": "Deterministic critical-error logic after validation",
+  "approved_statement": null
  }
 ]
