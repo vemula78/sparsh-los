@@ -10,7 +10,7 @@ set -euo pipefail
 
 TARGET="${TARGET:-local}"
 SKIP_VERIFY="${SKIP_VERIFY:-0}"
-MIN_CHECKS="${MIN_CHECKS:-150}"
+MIN_CHECKS="${MIN_CHECKS:-154}"
 
 case "${TARGET}" in
 local)

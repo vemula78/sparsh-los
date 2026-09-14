@@ -137,8 +137,7 @@
    "fieldname": "activities_for_mastery",
    "fieldtype": "Int",
    "label": "Distinct Activities For Mastery",
-   "default": "2",
-   "description": "Independent passes on this many distinct activities before Mastered. The default of 2 is a placeholder the programme owner has not calibrated; set it per competency when they do."
+   "description": "Independent passes on this many distinct activities before Mastered. Zero means nobody has calibrated this competency and the engine uses its own documented default; Frappe cannot store an empty Int, so zero is the sentinel. A stored 2 would be indistinguishable from a 2 somebody chose."
   },
   {
    "fieldname": "unaided_passes_required",
@@ -171,7 +170,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-14 14:00:00.000000",
+ "modified": "2026-09-14 16:05:00.000000",
  "modified_by": "Administrator",
  "module": "Sparsh LOS",
  "name": "Sparsh Competency",

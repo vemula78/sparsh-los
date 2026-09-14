@@ -55,6 +55,12 @@ def _sort_key(row):
 # Evidence a reviewer has explicitly rejected is not evidence of competence.
 REJECTED = "Rejected"
 
+# The number of distinct unaided activities that constitute mastery where nobody has
+# calibrated one. Named rather than left as a literal precisely because §16 singles it
+# out: it is what the engine has always done, not a figure anyone chose, and
+# `calibration.observed` reports which competencies are still sitting on it.
+DEFAULT_ACTIVITIES_FOR_MASTERY = 2
+
 
 def _independent_passes(rows):
 	"""Unaided passes that cite the activity they were earned on.
@@ -108,7 +114,7 @@ def derive_state(learner, competency) -> str:
 	# has calibrated it; a competency the owner has ruled on carries their number, and
 	# `threshold_source` carries their words beside it.
 	required = frappe.db.get_value("Sparsh Competency", competency, "activities_for_mastery")
-	required = required if (required or 0) >= 1 else 2
+	required = required if (required or 0) >= 1 else DEFAULT_ACTIVITIES_FOR_MASTERY
 
 	# Mastery requires independent passes across the required number of distinct
 	# activities. Passes with no activity recorded cannot establish it: provenance

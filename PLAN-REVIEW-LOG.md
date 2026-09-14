@@ -1858,3 +1858,78 @@ threshold calibration**, and §16 requires it be *"empirically calibrated using 
 currently certified volunteers"* — data that cannot exist until Phase 6 runs. The one piece of
 Phase 7 that could be done is done: `derive_state` reads the competency's own threshold, set from
 his five-case assessment rule, instead of the hardcoded two.
+
+---
+
+## Phases 6 and 7 — everything except the people and the data
+
+Neither phase can be *completed* by writing code: Phase 6 is the pilot itself and needs the 8–10
+certified volunteers and two reviewers he named; Phase 7 is threshold calibration and §16 requires
+it be done on "performance of currently certified volunteers", which cannot exist until Phase 6
+has run. What was outstanding, and is now done, is the machinery — so that each phase executes the
+day its input arrives rather than being rebuilt then.
+
+### Phase 6 — `pilot.prepare(volunteers, reviewers)`
+
+One command turns a roster into a running pilot: enrols the volunteers, grants the reviewer role,
+seeds the pathway if absent, and puts the cohort on it. Demonstrated end to end with a fixture
+roster of eight: `can_begin: True`, and the first volunteer's first step is `SC-01`.
+
+**It does not activate the pathway unless asked.** `next_in_pathway` refuses work from a pathway
+that is not Active, so activation is the act that begins the pilot — and that belongs to the
+programme owner, not to whoever runs a command. A script that activated on its own would start a
+clinical training programme because somebody typed something.
+
+It refuses precisely rather than half-building: no volunteers, no reviewer, or one person named as
+both. The last is not refused by the engine's self-judgement guards — those key on the subject,
+not the role — but on a cohort of eight it means somebody's only available reviewer is themselves
+and the queue simply stalls.
+
+It also fixed a stale blocker: `pilot.status` still reported "a named owner" as missing from
+answered rules, from the guard requirement removed earlier that day. The report was naming a
+blocker that no longer existed.
+
+### Phase 7 — `calibration.observed()`
+
+Reads what learners actually did — distinct activities passed **unaided**, per learner, per
+competency — and reports the distribution against the threshold in force. It writes nothing.
+
+Two refusals are deliberate and both are asserted:
+
+- **It proposes and never applies.** A number a script derived and the same script applied has
+  been approved by nobody and would be indistinguishable in the database from one he chose.
+- **It does not declare the data sufficient.** Any cut-off for "enough learners" would itself be
+  an invented threshold — the exact thing the module exists to avoid. It reports the count and the
+  spread; whether that supports a change is a programme judgement.
+
+### What the report found on its first run
+
+`activities_for_mastery` carried a **DocType default of 2**. Every competency therefore arrived
+holding a number, and the report dutifully called all four calibrated when none was — a stored 2
+being indistinguishable from a 2 somebody chose, which is precisely what §16 warns against.
+
+Default removed, and `clear_uncalibrated_mastery_default` returns existing rows to uncalibrated —
+but only where no `threshold_source` records a person's reason, because a competency deliberately
+set to 2 cannot be told from one that drifted there, and guessing is not a migration's job.
+
+The patch first tried to write NULL and failed: Frappe creates an Int column `NOT NULL DEFAULT 0`,
+so the field cannot hold "unset". **Third time this exact limit has shaped a design here** — after
+`expected_value` (made a Data field for it) and `certificate_version` (0 as the sentinel). Zero is
+the sentinel, and `derive_state` already read anything below 1 as uncalibrated.
+
+`DEFAULT_ACTIVITIES_FOR_MASTERY` is now a named constant rather than a bare literal, because §16
+singles that number out specifically.
+
+### Acceptance check
+
+`./scripts/install_verify.sh`: exit 0, `RESULT passed=154 failed=0`. Each new check proved by
+reverting its fix — prepare activating on its own, calibration writing the median it derived, and
+the uncalibrated default being reported as calibrated.
+
+### What genuinely remains, and it is not code
+
+- The roster: 8–10 certified volunteers and the two reviewers he named.
+- His activation of `SSP-PILOT`, which is the act that starts the pilot.
+- Confirmation on SC-01 and SC-02, which he approved conditionally on their being corrected to the
+  validated framework.
+- Whether the S Modifier data model belongs in the caregiver database rather than this engine.

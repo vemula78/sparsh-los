@@ -50,14 +50,19 @@ def _rules_holding_an_answer():
 	"""Rules carrying the programme owner's wording but not yet Validated.
 
 	This is the gap between a decision being *made* and a decision being *in force*. A
-	rule may only be Validated with a named owner, so a decision arriving by spreadsheet
-	sits here until somebody with an account records it.
+	rule may only be Validated when the record behind it is complete: who approved the
+	wording, the document that says so, and the date it took effect.
+
+	The reasons below used to say "a named owner", from an earlier version of the guard
+	that required a `User`. That requirement was wrong and is gone -- it made approving a
+	rule clinically depend on holding a Frappe login -- but the reason string outlived
+	it, so this report named a blocker that no longer existed.
 	"""
 	rows = frappe.get_all(
 		"Sparsh Source of Truth Rule",
 		filters={"status": ("!=", "Superseded")},
-		fields=["name", "rule_id", "status", "approved_statement", "rule_owner",
-				"effective_date", "criticality"],
+		fields=["name", "rule_id", "status", "approved_statement", "approved_by_name",
+				"approval_source", "effective_date", "criticality"],
 	)
 	answered_not_in_force, in_force, no_answer = [], [], []
 	for row in rows:
@@ -66,8 +71,10 @@ def _rules_holding_an_answer():
 			in_force.append(row.rule_id)
 		elif has_answer:
 			missing = []
-			if not row.rule_owner:
-				missing.append("a named owner")
+			if not (row.approved_by_name or "").strip():
+				missing.append("the name of the person who approved it")
+			if not (row.approval_source or "").strip():
+				missing.append("the document the approval comes from")
 			if not row.effective_date:
 				missing.append("an effective date")
 			answered_not_in_force.append(
@@ -163,3 +170,122 @@ def status():
 			"blocking": readiness.get("blocking"),
 		},
 	}
+
+
+@frappe.whitelist()
+def prepare(volunteers, reviewers, cohort_id="PILOT-1", activate=0):
+	"""Stand the pilot up from a roster, or say precisely why it cannot.
+
+	Everything Phase 6 needs is built; what is missing is names. This is the one command
+	that turns a roster into a running pilot: it enrols the volunteers, gives the
+	reviewers the reviewer role, seeds the pathway if it is absent, and puts the cohort
+	on it.
+
+	It does **not** activate the pathway unless asked. `next_in_pathway` refuses work
+	from a pathway that is not Active, so activation is the act that actually starts the
+	pilot, and that belongs to the programme owner rather than to whoever runs a script.
+	Pass `activate=1` only when he has said to begin.
+
+	Accounts are created only for addresses that do not already exist, and never with a
+	password: they are enrolment records, and the people sign in through whatever the
+	site already uses. If an address is wrong, the wrong person is enrolled, so the
+	roster is echoed back in the result for checking.
+	"""
+	require_reviewer()
+
+	volunteers = frappe.parse_json(volunteers) if isinstance(volunteers, str) else volunteers
+	reviewers = frappe.parse_json(reviewers) if isinstance(reviewers, str) else reviewers
+
+	volunteers = [str(v).strip() for v in (volunteers or []) if str(v).strip()]
+	reviewers = [str(r).strip() for r in (reviewers or []) if str(r).strip()]
+
+	refusals = []
+	if not volunteers:
+		refusals.append("no volunteers were named")
+	if not reviewers:
+		refusals.append("no reviewer was named, so no attempt could be judged")
+	overlap = sorted(set(volunteers) & set(reviewers))
+	if overlap:
+		# Not fatal in the engine -- every self-judgement guard keys on the subject, not
+		# the role -- but on a pilot of eight it means somebody is likely to be the only
+		# available reviewer for their own work, and the queue will simply stall.
+		refusals.append(
+			f"these are named as both volunteer and reviewer: {', '.join(overlap)}"
+		)
+	if refusals:
+		frappe.throw(_("The pilot cannot be prepared: {0}.").format("; ".join(refusals)))
+
+	from sparsh_los import seed
+
+	# The pathway first: a cohort pointing at a pathway that does not exist assigns
+	# nobody anything, and the cohort would look configured.
+	pathway = seed.PILOT_PATHWAY
+	pathway_result = seed.load_pilot_pathway()
+
+	created_accounts, existing_accounts = [], []
+	for email in volunteers + reviewers:
+		if frappe.db.exists("User", email):
+			existing_accounts.append(email)
+			continue
+		user = frappe.new_doc("User")
+		user.email = email
+		user.first_name = email.split("@")[0]
+		user.enabled = 1
+		user.user_type = "System User"
+		user.insert(ignore_permissions=True)
+		created_accounts.append(email)
+
+	for email in volunteers:
+		_grant(email, "Sparsh Learner")
+	for email in reviewers:
+		_grant(email, "Sparsh Reviewer")
+
+	cohort = _ensure_cohort(cohort_id, pathway, volunteers)
+
+	if frappe.utils.cint(activate):
+		frappe.db.set_value("Sparsh Pathway", pathway, "status", "Active")
+	frappe.db.commit()
+
+	return {
+		"cohort": cohort,
+		"pathway": pathway,
+		"pathway_steps": pathway_result.get("steps"),
+		"pathway_status": frappe.db.get_value("Sparsh Pathway", pathway, "status"),
+		"volunteers": volunteers,
+		"reviewers": reviewers,
+		"accounts_created": created_accounts,
+		"accounts_already_present": existing_accounts,
+		"cohort_size_against_his_suggestion": (
+			f"{len(volunteers)} named; he suggested "
+			f"{SUGGESTED_COHORT_MIN}-{SUGGESTED_COHORT_MAX}"
+		),
+		# The verdict, recomputed from what now exists rather than assumed from what
+		# this function just did.
+		"status": status(),
+	}
+
+
+def _grant(email, role):
+	user = frappe.get_doc("User", email)
+	if role not in [row.role for row in user.roles]:
+		user.append("roles", {"role": role})
+		user.save(ignore_permissions=True)
+
+
+def _ensure_cohort(cohort_id, pathway, volunteers):
+	"""One cohort on the pilot pathway, holding exactly the named volunteers."""
+	name = frappe.db.get_value("Sparsh Cohort", {"cohort_id": cohort_id}, "name")
+	doc = frappe.get_doc("Sparsh Cohort", name) if name else frappe.new_doc("Sparsh Cohort")
+	if not name:
+		doc.cohort_id = cohort_id
+		doc.title = "Pilot cohort"
+	doc.pathway = pathway
+	doc.status = "Active"
+	doc.started_on = doc.started_on or frappe.utils.today()
+
+	held = {row.learner for row in (doc.members or [])}
+	for email in volunteers:
+		if email not in held:
+			doc.append("members", {"learner": email})
+	doc.save(ignore_permissions=True)
+	return doc.name

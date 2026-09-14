@@ -8421,6 +8421,174 @@ def check_assessment_event_cannot_be_deleted():
 		frappe.db.commit()
 
 
+def check_calibration_reports_the_uncalibrated_as_uncalibrated():
+	"""A competency nobody has calibrated must say so.
+
+	`activities_for_mastery` carried a DocType default of 2, so every competency arrived
+	holding a number and the calibration report called them all calibrated. A stored 2
+	is indistinguishable from a 2 somebody chose, which is exactly what §16 warns
+	against. Frappe cannot store an empty Int, so zero is the sentinel.
+	"""
+	from sparsh_los import calibration
+	from sparsh_los.mastery import DEFAULT_ACTIVITIES_FOR_MASTERY
+
+	original = frappe.db.get_value("Sparsh Competency", COMPETENCY,
+								   ["activities_for_mastery", "threshold_source"], as_dict=True)
+	try:
+		frappe.db.set_value("Sparsh Competency", COMPETENCY,
+							{"activities_for_mastery": 0, "threshold_source": None},
+							update_modified=False)
+		frappe.db.commit()
+
+		row = _calibration_row(calibration.observed(competency=COMPETENCY), COMPETENCY)
+		_assert(
+			row["on_the_uncalibrated_default"],
+			"A competency with no threshold set was reported as calibrated",
+		)
+		_assert(
+			row["threshold_in_force"] == DEFAULT_ACTIVITIES_FOR_MASTERY,
+			f"The engine's documented default is not what is reported in force: {row}",
+		)
+		_assert(row["threshold_was_chosen_by"] is None, "A threshold nobody set names a chooser")
+
+		# And a competency somebody did calibrate must not be reported as defaulted.
+		frappe.db.set_value("Sparsh Competency", COMPETENCY,
+							{"activities_for_mastery": 3,
+							 "threshold_source": "zzv a person wrote this down"},
+							update_modified=False)
+		frappe.db.commit()
+		row = _calibration_row(calibration.observed(competency=COMPETENCY), COMPETENCY)
+		_assert(
+			not row["on_the_uncalibrated_default"],
+			"A calibrated competency was reported as sitting on the default",
+		)
+		_assert(row["threshold_in_force"] == 3, f"The chosen threshold is not in force: {row}")
+	finally:
+		frappe.db.set_value("Sparsh Competency", COMPETENCY,
+							{"activities_for_mastery": original.activities_for_mastery,
+							 "threshold_source": original.threshold_source},
+							update_modified=False)
+		frappe.db.commit()
+
+
+def _calibration_row(report, competency):
+	for row in report["competencies"]:
+		if row["competency"] == competency:
+			return row
+	raise AssertionError(f"{competency} is absent from the calibration report")
+
+
+def check_calibration_writes_nothing():
+	"""The report proposes and never applies.
+
+	A number a script derived and the same script applied has been approved by nobody,
+	and would be indistinguishable in the database from one the programme owner chose.
+	"""
+	from sparsh_los import calibration
+
+	before = {
+		row.name: (row.activities_for_mastery, row.threshold_source)
+		for row in frappe.get_all(
+			"Sparsh Competency", fields=["name", "activities_for_mastery", "threshold_source"]
+		)
+	}
+	calibration.observed()
+	after = {
+		row.name: (row.activities_for_mastery, row.threshold_source)
+		for row in frappe.get_all(
+			"Sparsh Competency", fields=["name", "activities_for_mastery", "threshold_source"]
+		)
+	}
+	_assert(before == after, "Running the calibration report changed a threshold")
+
+
+def check_pilot_prepare_refuses_an_incomplete_roster():
+	"""Standing a pilot up needs volunteers and somebody to judge them."""
+	from sparsh_los import pilot
+
+	_raises(
+		lambda: pilot.prepare(volunteers=[], reviewers=["zzv-rev@example.invalid"]),
+		"A pilot was prepared with no volunteers",
+		expect="no volunteers were named",
+	)
+	_raises(
+		lambda: pilot.prepare(volunteers=["zzv-vol@example.invalid"], reviewers=[]),
+		"A pilot was prepared with nobody to judge it",
+		expect="no reviewer was named",
+	)
+	# One person as both is not refused by the engine's self-judgement guards -- those
+	# key on the subject, not the role -- but on a cohort of eight it means the only
+	# available reviewer for somebody's work is themselves, and the queue stalls.
+	_raises(
+		lambda: pilot.prepare(volunteers=["zzv-both@example.invalid"],
+							  reviewers=["zzv-both@example.invalid"]),
+		"One person was accepted as both volunteer and reviewer",
+		expect="both volunteer and reviewer",
+	)
+
+
+def check_pilot_prepare_leaves_activation_to_a_person():
+	"""Preparing a pilot must not start one.
+
+	`next_in_pathway` refuses work from a pathway that is not Active, so activation is
+	the act that begins the pilot. A script that activated on its own would have started
+	a clinical training programme because somebody ran a command.
+	"""
+	from sparsh_los import cohort, pilot
+
+	volunteers = [f"zzv-pilot{i}@example.invalid" for i in (1, 2)]
+	reviewers = ["zzv-pilot-rev@example.invalid"]
+	cohort_id = PREFIX + "PILOT"
+	original_status = frappe.db.get_value("Sparsh Pathway", "SSP-PILOT", "status")
+
+	try:
+		result = pilot.prepare(volunteers=volunteers, reviewers=reviewers, cohort_id=cohort_id)
+		_assert(
+			result["pathway_status"] != "Active",
+			"Preparing the pilot activated the pathway without anybody deciding to begin",
+		)
+		_assert(
+			any("Draft" in line or "Active" in line for line in result["status"]["blocking"]),
+			f"The pathway is not Active and nothing said so: {result['status']['blocking']}",
+		)
+		# The learners are enrolled and assigned even so -- the roster is real, only the
+		# start is withheld.
+		_assert(
+			cohort.pathway_for(volunteers[0]) == "SSP-PILOT",
+			"A prepared volunteer is not on the pilot pathway",
+		)
+
+		# With the decision taken, nothing else stands in the way.
+		result = pilot.prepare(volunteers=volunteers, reviewers=reviewers,
+							   cohort_id=cohort_id, activate=1)
+		_assert(result["pathway_status"] == "Active", "Activation did not take effect")
+		# Asserted on the pathway blocker specifically, not on `can_begin`. This bench
+		# carries the harness's own fixture competencies, which have no rules and
+		# sometimes no activities, so programme readiness legitimately refuses here for
+		# reasons that have nothing to do with the pilot. Asserting `can_begin` would
+		# make this check fail for somebody else's fixture.
+		remaining = " ".join(result["status"]["blocking"])
+		_assert(
+			"Draft" not in remaining,
+			f"The pathway is Active and still reported Draft: {result['status']['blocking']}",
+		)
+		_assert(
+			"no learner is assigned anything" not in remaining,
+			f"The cohort is on an Active pathway and still reported unassigned: "
+			f"{result['status']['blocking']}",
+		)
+	finally:
+		frappe.db.set_value("Sparsh Pathway", "SSP-PILOT", "status", original_status,
+							update_modified=False)
+		name = frappe.db.get_value("Sparsh Cohort", {"cohort_id": cohort_id}, "name")
+		if name:
+			frappe.delete_doc("Sparsh Cohort", name, force=True, ignore_permissions=True)
+		for email in volunteers + reviewers:
+			if frappe.db.exists("User", email):
+				frappe.delete_doc("User", email, force=True, ignore_permissions=True)
+		frappe.db.commit()
+
+
 CHECKS = (
 	("partial_only_history_is_named_accurately", check_partial_only_history_is_named_accurately),
 	("queue_shows_work_that_is_actually_waiting", check_queue_shows_work_that_is_actually_waiting),
@@ -8578,6 +8746,13 @@ CHECKS = (
 	 check_diagnostic_assigns_a_refresher_only_where_weak),
 	("refresher_sends_the_learner_to_the_gap", check_refresher_sends_the_learner_to_the_gap),
 	("assessment_event_cannot_be_deleted", check_assessment_event_cannot_be_deleted),
+	("calibration_reports_the_uncalibrated_as_uncalibrated",
+	 check_calibration_reports_the_uncalibrated_as_uncalibrated),
+	("calibration_writes_nothing", check_calibration_writes_nothing),
+	("pilot_prepare_refuses_an_incomplete_roster",
+	 check_pilot_prepare_refuses_an_incomplete_roster),
+	("pilot_prepare_leaves_activation_to_a_person",
+	 check_pilot_prepare_leaves_activation_to_a_person),
 	("cleanup", check_cleanup),
 )
 

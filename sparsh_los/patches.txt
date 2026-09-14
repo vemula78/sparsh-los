@@ -6,3 +6,4 @@ sparsh_los.patches.v1_0.backfill_resource_current_keys
 sparsh_los.patches.v1_0.backfill_certificate_versions
 sparsh_los.patches.v1_0.restore_case_pack_provenance
 sparsh_los.patches.v1_0.restore_matrix_source_wording
+sparsh_los.patches.v1_0.clear_uncalibrated_mastery_default

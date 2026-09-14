@@ -69,8 +69,8 @@ schema work — run it after touching any DocType JSON.
 
 ## Architecture
 
-Twenty-one modules over 18 top-level DocTypes and 8 child tables, all prefixed `Sparsh `.
-The acceptance harness is **150 checks**; raise `MIN_CHECKS` in `install_verify.sh` with it, or an
+Twenty-three modules over 18 top-level DocTypes and 8 child tables, all prefixed `Sparsh `.
+The acceptance harness is **154 checks**; raise `MIN_CHECKS` in `install_verify.sh` with it, or an
 empty `CHECKS` tuple reads as success.
 
 | Module | Role |
