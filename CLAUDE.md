@@ -18,8 +18,12 @@ way.
 Development happens on the **local bench** on this Mac (`frappe_docker`, container
 `frappe_docker-backend-1`, site `sparsh.localhost`). The live hospital bench at
 `erp.sssihms.org` is not a development environment — the programme owner made that a condition
-of approval. Both scripts default to local; reaching the remote needs `TARGET=remote`, set
-deliberately.
+of approval. Both scripts default to local. The remote has **no defaults at all** — its address,
+user and key are not in version control — so reaching it means supplying them deliberately:
+
+```bash
+SSH_HOST=user@host SSH_KEY=~/path/key.pem SITE=<site> TARGET=remote ./scripts/install_verify.sh
+```
 
 Push local edits and run the full check:
 
@@ -34,11 +38,30 @@ nothing — raise it whenever you add checks, or an empty `CHECKS` tuple reads a
 Run the harness alone, or a single check:
 
 ```bash
+# All of it. Not `bench execute` -- see below.
 docker exec -u frappe frappe_docker-backend-1 bash -lc \
-  'cd /home/frappe/frappe-bench && bench --site sparsh.localhost execute sparsh_los.verify.run'
+  'cd /home/frappe/frappe-bench/sites && ../env/bin/python \
+   /home/frappe/frappe-bench/apps/sparsh_los/scripts/run_verify.py sparsh.localhost'
+
+# One check, with setup and teardown around it.
 docker exec -u frappe frappe_docker-backend-1 bash -lc \
-  'cd /home/frappe/frappe-bench && bench --site sparsh.localhost execute sparsh_los.verify.check_critical_error_blocks'
+  'cd /home/frappe/frappe-bench && bench --site sparsh.localhost \
+   execute sparsh_los.verify.run_one --args "[\'critical_error_blocks\']"'
 ```
+
+Two traps here, both of which have cost hours:
+
+- **Never run the harness through `bench execute`.** It falls back to `eval()` on the method
+  string, so *any* error — an import failure, a `QueueOverloaded`, a genuine assertion — is
+  reported as `NameError: name 'sparsh_los' is not defined` and the real one never appears.
+  `scripts/run_verify.py` exists for this and is what `install_verify.sh` uses.
+- **Use `run_one`, not the bare check name.** `execute sparsh_los.verify.check_x` runs against a
+  bench the last teardown emptied, so the check fails for want of fixtures rather than for its own
+  reason. `run_one` brackets it with `setup()` and `teardown()`.
+
+Flush the job queue before any run: the local stack has no rq worker, so a 154-check run reaches
+the 700-job cap on its own. `install_verify.sh` does it for you; by hand it is
+`docker exec frappe_docker-redis-queue-1 redis-cli flushall`. Never on the hospital bench.
 
 Tear down: `./scripts/uninstall.sh`. A clean uninstall-then-install is the real regression test for
 schema work — run it after touching any DocType JSON.
@@ -69,7 +92,8 @@ schema work — run it after touching any DocType JSON.
 
 ## Architecture
 
-Twenty-three modules over 18 top-level DocTypes and 8 child tables, all prefixed `Sparsh `.
+Twenty Python modules under `sparsh_los/`, plus `www/`, `patches/` and the DocType package, over
+18 top-level DocTypes and 8 child tables, all prefixed `Sparsh `.
 The acceptance harness is **154 checks**; raise `MIN_CHECKS` in `install_verify.sh` with it, or an
 empty `CHECKS` tuple reads as success.
 
@@ -285,14 +309,53 @@ value — if something is missing, the output says missing.
   `errors="ignore"` they counted as scanned files and met its floor with junk. `COPYFILE_DISABLE=1`
   plus `--exclude '._*'`.
 
+## Where this stands
+
+All seven phases of the build plan are built. What remains is not code.
+
+**Governance.** The programme owner returned his decisions on 14-Sep-2026: ten matrix rows carry
+his wording, **seven are Validated and in force** (Risk Level 4, S modifier, Red flag, BP handling,
+Hypoglycaemia scope, Medication questions, S Modifier data model). Eight rows are still
+`Needs review` — Levels 1–3, the 70% confidence rule, Immutable baseline, Missing data, Partial
+achievement, Oils/fats. His approved wording is stored verbatim in `approved_statement`, beside the
+candidate in `rule_statement`, so what changed between proposal and decision is always visible.
+
+His answers live in `../answers-2026-09-14/` and are **outside the repository** — `.gitignore`
+excludes `.docx`/`.xlsx`, deliberately.
+
+**Waiting on him, and not inferable:**
+
+- The pilot roster: 8–10 currently-certified volunteers and the two reviewers he named.
+- Activating `SSP-PILOT`. It is seeded **Draft** on purpose — `next_in_pathway` refuses work from a
+  pathway that is not Active, so activation is the act that starts the pilot and belongs to him,
+  not to a script. `pilot.prepare(volunteers, reviewers)` does everything else in one call.
+- **SC-01 and SC-02 need revising.** He approved all nine cases *conditionally* on those two being
+  corrected: they were written assuming the Level 3/4 boundary concerns acute states, and he has
+  ruled that acute states go to the Red Flag pathway and **never** change the Level.
+- **Whether the S Modifier data model belongs here at all.** His eight fields describe a *caregiver
+  record*; this engine holds no caregiver data, which §21 and acceptance criterion 12 require and
+  the code enforces. Probably the SAI SPARSH caregiver database, but do not infer it.
+
+**Also open:** three items he names as governing rules have no matrix row — *Preservation of S
+episode history*, *Approved pledge co-creation principles*, and topic-specific guidance. They are
+reported by `seed.link_competency_rules` under `named_but_not_in_the_matrix` and **must not be
+invented as rules**.
+
+`pilot.status()` answers "can we begin on Monday" and names what is blocking. `seed.programme_readiness()`
+answers the narrower safety question — is anything configured such that the engine would score
+against a rule nobody validated. They are deliberately separate reports.
+
 ## History
 
 `PLAN.md` holds the original plan and the decisions taken against it. `PLAN-REVIEW-LOG.md` is an
-append-only record of twenty review rounds — five of them genuinely independent, run outside this
-toolchain — and the disposition of every finding, including the ones rejected with evidence. The
-independent rounds found what the in-house ones could not: the blocker that Draft rules did not
-prevent automatic scoring, then, twice running, that a fix had survived its own new check, and
-then that three guarantees held on the save path and nowhere else.
+append-only record of twenty-three audit rounds — seven of them genuinely independent, run outside
+this toolchain — and the disposition of every finding, including the ones rejected with evidence.
+The independent rounds found what the in-house ones could not: the blocker that Draft rules did not
+prevent automatic scoring; then, twice running, that a fix had survived its own new check; then
+that three guarantees held on the save path and nowhere else; and finally, reading the programme's
+four original documents against the build, that the seed had been quietly **rewriting the
+programme's own content on the way in** — a class of defect invisible to anyone auditing the code
+against itself, because the code was perfectly self-consistent.
 **Their most valuable findings have been about the harness, not the app, in every round.** Read the log before re-litigating a design decision — several
 obvious-looking "improvements" were tried and rejected there for reasons that are not obvious from
 the code.
