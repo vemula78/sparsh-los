@@ -414,12 +414,20 @@ def _inactivity(learners, active, since):
 			as_dict=True,
 		)
 	}
+	# Only what the learner did. Every event type carries `learner`, including the ones a
+	# reviewer or the engine causes -- human_review_completed, mastery_state_changed,
+	# refresher_assigned, certification_state_changed -- so an unfiltered max() reported
+	# a learner as last seen on the day somebody else acted about them.
+	from sparsh_los import events
+
 	last_event = {
 		row.learner: row.last
 		for row in frappe.db.sql(
 			"""select learner, max(occurred_at) as last from `tabSparsh Event`
-			   where learner in %(learners)s group by learner""",
-			{"learners": inactive},
+			   where learner in %(learners)s
+			     and event_type in %(learner_initiated)s
+			   group by learner""",
+			{"learners": inactive, "learner_initiated": events.LEARNER_INITIATED},
 			as_dict=True,
 		)
 	}

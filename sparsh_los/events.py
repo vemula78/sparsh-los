@@ -35,6 +35,22 @@ REFRESHER_ASSIGNED = "refresher_assigned"
 REFRESHER_COMPLETED = "refresher_completed"
 CERTIFICATION_STATE_CHANGED = "certification_state_changed"
 
+# The events a learner causes by doing something. The rest of the list is the engine or
+# a reviewer acting *about* a learner -- a review completed, a mastery state recomputed,
+# a refresher assigned, a certificate suspended. "When was this learner last active?"
+# must not be answered by somebody else's activity: a reviewer working through a backlog
+# would otherwise make every dormant learner in it look like they had just come back,
+# and the drop-off figure the programme is meant to act on would quietly empty itself.
+LEARNER_INITIATED = (
+	SESSION_STARTED,
+	ACTIVITY_STARTED,
+	ACTIVITY_COMPLETED,
+	HINT_SHOWN,
+	RETRY_MADE,
+	CRITICAL_ERROR_RECORDED,
+	ESCALATION_OPENED,
+)
+
 
 def emit(
 	event_type,

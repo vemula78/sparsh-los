@@ -1564,3 +1564,66 @@ Phases 4–7 remain blocked on the programme owner. Added to that list by this a
 candidate-versus-approved wording schema gap, the matrix vocabulary remapping, the invented fourth
 competency, and the absent critical markers on the two safety cases — the last three are all
 questions for him rather than defects we may fix ourselves.
+
+---
+
+## Rule governance, and the defects the harness agent found in the builders' code
+
+### Somewhere to put his answer
+
+The audit's most important finding was not a bug but an absence: `Sparsh Source of Truth Rule`
+held one `rule_statement`, containing the **candidate** wording, and the matrix's own Instructions
+sheet says *"Enter the approved current rule in exact wording when confirmed"* — a separate
+column. Entering his answer would have meant overwriting the proposal, destroying the only record
+of what the engine was nearly configured to do.
+
+- `approved_statement` now holds his wording; `rule_statement` keeps the candidate.
+- **`Validated` is guarded.** Nothing guarded it before: any writer could flip the one switch that
+  lets the engine auto-score, on candidate text, with no owner and no date. It now requires
+  approved wording, a named owner and an effective date — the three §8 marks Required — and the
+  message names which are missing.
+- His matrix `criticality`, `status` and `automation_status` are stored **verbatim** beside the
+  values we map onto our Selects, which cannot express `Medium`, `Needs review`, or
+  *"do not automate **until validated**"*. One row had loaded stricter than he authorised with
+  nothing on the record to show it. A patch carries both onto rules already seeded.
+
+Adding the guard immediately failed ten checks, every one of which marked a fixture rule Validated
+without those fields. The guard was right; the fixture now supplies them, which also means a
+fixture can no longer create the state the guard exists to prevent.
+
+### What the harness agent found in the three builders' code
+
+It was asked to find their defects and did. None was fixed by it; two were worth fixing now.
+
+| Finding | Disposition |
+|---|---|
+| **`_inactivity` took last-seen from any event carrying `learner`** — including `human_review_completed`, `mastery_state_changed`, `refresher_assigned`, `certification_state_changed`. A reviewer working through a backlog made every dormant learner in it look like they had just come back, and the drop-off figure the programme is meant to act on would quietly empty itself | **Confirmed, fixed.** `events.LEARNER_INITIATED` names the seven a learner causes; the query filters on it |
+| **A critical verdict counted as a rung of the hint ladder.** A verdict carrying a critical error issues no hint — the response went to a reviewer and the learner was told nothing — yet it raised their assistance level. An unaided pass wrongly marked assisted is a volunteer denied credit for competence they demonstrated | **Confirmed, fixed** (`critical_error: 0` on the Evidence count) |
+| `expected_value` validation accepts `1e3`, `NaN`, `Infinity`, which the runner then cannot read, so every attempt silently returns Not Evaluated | **Deferred** — low, and the failure is safe (routes to a person) |
+| `_pathway_completion` ignores `is_mandatory`, so the orchestrator can call a pathway complete while completion reports the step outstanding | **Deferred** — low; the docstring promises only the other direction |
+| `_next_version` counts cancelled issue records, so cancel-and-amend produces v2 while the patch refuses to decide the same case | **Deferred** — low, but the two disagree and should not |
+
+### A methodological caveat worth more than the defects
+
+The agent reports that `state_change_parsed` **passed on the first attempt with its fix reverted**,
+and failed only when re-run with the loaded module's constant printed back. Its own reading: the
+revert was a same-size edit (`"3"` → `"2"`) and it suspects stale bytecode. Not proven, but the
+implication is serious for this project's central rule — *a fix is not verified until its check
+fails with the fix reverted*. **A same-size revert may not invalidate `.pyc`**, so a revert proof
+that passes should be re-run with the loaded value printed before it is believed. A revert proof
+that silently does nothing is worse than no revert proof, because it certifies the check.
+
+Two related traps it hit: `bench execute --kwargs` evaluates Python, not JSON, so `null`/`true`
+fail; and one full run died with the masked `NameError` despite a preceding flush, which is part of
+why the masking has now been removed at source.
+
+### Also fixed at the root
+
+`_delete_each` now runs its deletes inline. Every `delete_doc` enqueues a job, and the 141-check
+run queued **785** of them — the harness was exhausting this stack's 700-job cap by itself and
+dying in `cleanup` after every check had passed. Post-run queue depth is now 16–31.
+
+### Acceptance check
+
+`./scripts/install_verify.sh`, full path including `migrate` and five patches: exit 0,
+`RESULT passed=143 failed=0`.

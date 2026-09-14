@@ -370,11 +370,18 @@ def _session_position(learner, activity):
 	# after hint and still submit each new answer as unaided.
 	waiting = [row.name for row in attempts if row.outcome == "Not Evaluated"]
 	if waiting:
+		# `critical_error: 0` matters. A verdict carrying a critical error issues no
+		# hint -- the response went to a reviewer and the learner was told nothing about
+		# how to do better -- so counting it here raised the assistance level for help
+		# that was never given. Assistance must never fall, but it must also record what
+		# the learner was actually shown: an unaided pass wrongly marked assisted is a
+		# volunteer denied credit for competence they demonstrated.
 		failures += frappe.db.count(
 			"Sparsh Evidence",
 			{
 				"attempt": ("in", waiting),
 				"outcome": ("in", ("Partial", "Fail")),
+				"critical_error": 0,
 				"docstatus": 1,
 			},
 		)
