@@ -730,3 +730,111 @@ def programme_readiness():
 		# able to grade the rest of the answer.
 		"critical_markers_with_no_rule_linked": critical_without_rule,
 	}
+
+
+@frappe.whitelist()
+def governance_view():
+	"""Every matrix rule as the engine now holds it, for the governance page.
+
+	The programme owner's review turns on one question the dashboards cannot answer:
+	is the wording the engine will judge people against the wording he actually signed?
+	So each rule is returned with his approved statement beside the statement we
+	originally proposed, and with the provenance that lets `status` be Validated at all
+	-- who approved it, which document, and from what date. A rule whose two statements
+	differ is the interesting case; a page that showed only the approved one would hide
+	what changed.
+
+	Reviewer-gated for the same reason `matrix_status` is: the rule inventory is
+	programme internals, and a read model left ungated is a way round the page.
+
+	Nothing is computed here that the engine does not already hold, and nothing is
+	invented: rules he named that have no matrix row are reported under their own key
+	rather than given wording of our own.
+	"""
+	from sparsh_los.permissions import require_reviewer
+
+	require_reviewer()
+
+	source = {row["rule_id"]: row for row in _rows()}
+	rule_to_competency = {}
+	for competency, rule_ids in COMPETENCY_RULES.items():
+		for rule_id in rule_ids:
+			rule_to_competency.setdefault(rule_id, []).append(competency)
+
+	held = frappe.get_all(
+		"Sparsh Source of Truth Rule",
+		filters={"rule_id": ("in", list(source))},
+		fields=[
+			"name", "rule_id", "version", "status", "rule_statement", "approved_statement",
+			"applies_to", "source", "criticality", "automation_status", "effective_date",
+			"approved_by_name", "approval_source", "notes",
+		],
+		order_by="rule_id asc, version asc",
+	)
+
+	# The current version of each lineage, exactly as `_matrix_status` picks it: a v1
+	# superseded by a validated v2 must not be reported as the rule in force.
+	current = {}
+	superseded = {}
+	for row in held:
+		if row.status == "Superseded":
+			superseded[row.rule_id] = superseded.get(row.rule_id, 0) + 1
+			continue
+		existing = current.get(row.rule_id)
+		if not existing or (row.version or 0) > (existing.version or 0):
+			current[row.rule_id] = row
+
+	rules = []
+	for rule_id in source:
+		row = current.get(rule_id)
+		if not row:
+			# Named in the matrix and absent from this site. Reported, not skipped: a
+			# rule silently missing from the page reads as a rule that does not exist.
+			rules.append({
+				"rule_id": rule_id,
+				"present": False,
+				"status": None,
+				"competencies": rule_to_competency.get(rule_id, []),
+			})
+			continue
+
+		approved = (row.approved_statement or "").strip()
+		proposed = (row.rule_statement or "").strip()
+		rules.append({
+			"rule_id": rule_id,
+			"present": True,
+			"version": row.version,
+			"status": row.status,
+			"in_force": row.status == "Validated",
+			"proposed_statement": proposed,
+			"approved_statement": approved,
+			"wording_changed": bool(approved) and approved != proposed,
+			"applies_to": row.applies_to,
+			"source": row.source,
+			"criticality": row.criticality,
+			"automation_status": row.automation_status,
+			"effective_date": row.effective_date,
+			"approved_by_name": row.approved_by_name,
+			"approval_source": row.approval_source,
+			"notes": row.notes,
+			"competencies": rule_to_competency.get(rule_id, []),
+			"earlier_versions": superseded.get(rule_id, 0),
+		})
+
+	rules.sort(key=lambda r: (r.get("status") != "Validated", r["rule_id"]))
+
+	approval = _approval()
+	return {
+		"rules": rules,
+		"counts": {
+			"total": len(rules),
+			"in_force": len([r for r in rules if r.get("in_force")]),
+			"awaiting_decision": len([r for r in rules if r.get("present") and not r.get("in_force")]),
+			"not_on_this_site": len([r for r in rules if not r.get("present")]),
+		},
+		"approved_by": approval.get("approved_by_name"),
+		"approval_source": approval.get("approval_source"),
+		# Named by the programme owner as governing, with no row in the matrix to carry
+		# them. They are listed so he can supply the wording; they are never invented.
+		"named_but_not_in_the_matrix": COMPETENCY_RULES_UNMATCHED,
+	}

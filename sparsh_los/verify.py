@@ -46,6 +46,20 @@ PII_PATTERN = re.compile(r"patient|mrn|uhid|dob|aadhaar|phone|address", re.IGNOR
 DOMAIN_STRING_PATTERN = re.compile(r"sparsh|\bsai\b", re.IGNORECASE)
 
 results = []
+# Checks that could not run here, with the reason. Never folded into the pass count.
+skipped = []
+
+
+class Inapplicable(Exception):
+	"""This check cannot be run here, and saying so is not the same as passing.
+
+	Two checks read a whole-window figure and assert its exact value, which is only
+	possible when every attempt in the window is the harness's own. On a site carrying
+	the demonstration cohort that is false, and the honest options are to skip loudly or
+	to report a number that has been quietly contaminated. A skip is counted and named
+	separately from a pass so that coverage lost this way is visible in the output
+	rather than inferred from a total that looks healthy.
+	"""
 
 
 def _check(name, fn):
@@ -53,6 +67,10 @@ def _check(name, fn):
 		fn()
 		results.append((name, True, ""))
 		print(f"PASS {name}")
+	except Inapplicable as exc:
+		frappe.db.rollback()
+		skipped.append((name, str(exc).strip()))
+		print(f"SKIP {name}: {exc}")
 	except Exception as exc:  # noqa: BLE001 - the harness reports, it does not handle
 		frappe.db.rollback()
 		# Some frappe exceptions stringify to nothing, which makes a failure unreadable.
@@ -4612,6 +4630,9 @@ def check_queue_shows_work_that_is_actually_waiting():
 	_reset_competency()
 	rule = _new_rule(1)
 
+	# What this site already has waiting, before any fixture of ours exists.
+	already_waiting = len(review.pending(limit=review.MAX_QUEUE))
+
 	# Two older attempts that are not eligible, because a reviewer has already judged
 	# them, followed by one that is.
 	for _ in range(2):
@@ -4657,10 +4678,17 @@ def check_queue_shows_work_that_is_actually_waiting():
 		"The competency-scoped queue omitted the attempt waiting in that competency",
 	)
 
-	# Four slots, of which the two foreign-competency rows take two: under the old
-	# ordering the two *reviewed* attempts took the earliest slots as well and the one
-	# genuinely waiting was pushed out of the window entirely.
-	queue = review.pending(limit=4)
+	# Four slots beyond whatever was already waiting on this site, of which the two
+	# foreign-competency rows take two: under the old ordering the two *reviewed*
+	# attempts took the earliest slots as well and the one genuinely waiting was pushed
+	# out of the window entirely.
+	#
+	# The four used to be an absolute limit, which silently assumed the site held no
+	# other unreviewed work. It does once the demonstration cohort is loaded -- six
+	# attempts, all older than these fixtures -- and they took every slot, so this check
+	# failed for want of room rather than for the defect it watches. Measured as a delta
+	# from what is already queued, exactly as this project requires of every assertion.
+	queue = review.pending(limit=already_waiting + 4)
 	_assert(
 		any(row["name"] == waiting_attempt.name for row in queue),
 		"An attempt waiting for review was hidden behind older attempts that were "
@@ -6943,14 +6971,21 @@ def check_no_model_share():
 	original_two = _set_mode(ACTIVITY_2, "AI-assisted")
 	try:
 		base = _summary()["no_model_call_share"]
-		_assert(
-			base["attempts"] == 0,
-			f"{base['attempts']} attempt(s) not made by this harness are in the window; the share cannot be isolated",
-		)
-		_assert(
-			base["by_ledger"]["model_interactions_in_period"] == 0,
-			f"{base['by_ledger']['model_interactions_in_period']} ledger row(s) not written by this harness are in the window",
-		)
+		# A whole-window figure asserted to an exact value needs the window to hold only
+		# this harness's work. On a site carrying the demonstration cohort it does not,
+		# and there is no way to scope the summary to one learner. Skipped rather than
+		# failed: nothing is wrong with the engine, the check simply cannot be run here.
+		if base["attempts"]:
+			raise Inapplicable(
+				f"{base['attempts']} attempt(s) in the window were not made by this "
+				f"harness (the demonstration cohort, most likely), so an exact share "
+				f"cannot be isolated"
+			)
+		if base["by_ledger"]["model_interactions_in_period"]:
+			raise Inapplicable(
+				f"{base['by_ledger']['model_interactions_in_period']} ledger row(s) in "
+				f"the window were not written by this harness"
+			)
 		_assert(base["by_mode"]["share"] is None and base["share_undefined_because"], f"An empty window has a share: {base}")
 
 		_submit(ACTIVITY_1, "zzv work for a person", as_user=TEST_LEARNER)
@@ -8707,6 +8742,115 @@ def check_engine_roles_do_not_open_the_desk():
 	)
 
 
+def check_governance_view_shows_the_wording_and_is_gated():
+	"""The rules page's read model is reviewer-only and carries his wording, not ours.
+
+	The dashboards answer how learners are doing; none of them answers the question the
+	programme owner's review actually turns on -- is the wording the engine scores
+	against the wording he signed? Nothing rendered it until this existed, and the
+	letter sent to him described a page that did not show it.
+
+	Gated for the same reason `matrix_status` is: an ungated read model is a way round
+	the page it feeds.
+	"""
+	from sparsh_los import seed
+
+	_make_learner(TEST_LEARNER)
+	original = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+		# `_refused`, not `_raises`: a permission refusal is not a ValidationError on
+		# this version of Frappe, and the wrong helper reports the gate working as the
+		# gate failing.
+		_refused(
+			seed.governance_view,
+			"A learner could read the whole rule inventory through the read model",
+			expect="reviewer",
+		)
+	finally:
+		frappe.set_user(original)
+
+	view = seed.governance_view()
+	_assert(view["rules"], "The governance view holds no rule at all")
+
+	by_id = {r["rule_id"]: r for r in view["rules"]}
+	signed = [
+		row["rule_id"] for row in seed._rows()
+		if row.get("source_status") == "Validated" and row.get("approved_statement")
+	]
+	_assert(signed, "The matrix source carries no signed decision, so nothing is proved here")
+
+	for rule_id in signed:
+		row = by_id.get(rule_id)
+		_assert(row, f"{rule_id} is signed in the matrix and absent from the governance view")
+		if not row.get("present"):
+			continue
+		_assert(
+			row["in_force"] and row["status"] == "Validated",
+			f"{rule_id} is signed but the page would show it as {row['status']}",
+		)
+		_assert(
+			row["approved_statement"],
+			f"{rule_id} would render with no approved wording, which is the one thing "
+			f"the page exists to show",
+		)
+		_assert(
+			row["approved_by_name"] and row["approval_source"] and row["effective_date"],
+			f"{rule_id} would render as in force with no provenance beside it",
+		)
+
+	# Counts must describe the rules actually returned, not be computed a second way.
+	_assert(
+		view["counts"]["total"] == len(view["rules"]),
+		f"The page would print {view['counts']['total']} as the total while listing "
+		f"{len(view['rules'])} rules",
+	)
+	_assert(
+		view["counts"]["in_force"] == len([r for r in view["rules"] if r.get("in_force")]),
+		"The in-force count disagrees with the rules marked in force",
+	)
+	# The three he named with no matrix row are reported, never given wording of ours.
+	_assert(
+		view["named_but_not_in_the_matrix"],
+		"The rules he named without a matrix row are not reported, so they read as "
+		"having been dealt with",
+	)
+
+
+def check_demonstration_data_refuses_without_confirmation():
+	"""Synthetic learner records cannot be created by anything that sounded harmless.
+
+	On every page this data is indistinguishable from the real thing, so the only
+	protection is that making it has to be deliberate. It must also never be the thing
+	that starts the pilot: `SSP-PILOT` is seeded Draft because activating it is the
+	programme owner's act, and the demonstration runs on its own pathway.
+	"""
+	from sparsh_los import demo
+
+	_raises(
+		demo.load,
+		"The demonstration cohort could be loaded without confirming it",
+		expect="confirm",
+	)
+	_raises(
+		demo.remove,
+		"The demonstration cohort could be removed without confirming it",
+		expect="confirm",
+	)
+	_assert(
+		demo.DEMO_PATHWAY != "SSP-PILOT",
+		"The demonstration runs on the pilot pathway, so showing the dashboards would "
+		"start the pilot",
+	)
+	# Every synthetic address must be unroutable: `.invalid` is reserved and can never
+	# receive mail, so no message reaches a real person by accident.
+	for email, _name in demo.VOLUNTEERS + demo.REVIEWERS:
+		_assert(
+			email.endswith(".invalid"),
+			f"{email} is a deliverable address on a synthetic account",
+		)
+
+
 CHECKS = (
 	("partial_only_history_is_named_accurately", check_partial_only_history_is_named_accurately),
 	("queue_shows_work_that_is_actually_waiting", check_queue_shows_work_that_is_actually_waiting),
@@ -8856,6 +9000,8 @@ CHECKS = (
 	("owner_decisions_reach_validated", check_owner_decisions_reach_validated),
 	("decisions_promote_a_rule_whose_wording_arrived_first", check_decisions_promote_a_rule_whose_wording_arrived_first),
 	("engine_roles_do_not_open_the_desk", check_engine_roles_do_not_open_the_desk),
+	("governance_view_shows_the_wording_and_is_gated", check_governance_view_shows_the_wording_and_is_gated),
+	("demonstration_data_refuses_without_confirmation", check_demonstration_data_refuses_without_confirmation),
 	("matrix_keeps_the_owners_own_words", check_matrix_keeps_the_owners_own_words),
 	("mastery_threshold_is_the_owners_not_the_engines",
 	 check_mastery_threshold_is_the_owners_not_the_engines),
@@ -8897,6 +9043,7 @@ def run_one(name):
 
 def run():
 	results.clear()
+	skipped.clear()
 	frappe.flags.in_mastery_recompute = False
 	teardown()
 	setup()
@@ -8910,7 +9057,11 @@ def run():
 
 	passed = sum(1 for _, ok, _ in results if ok)
 	failed = len(results) - passed
-	print(f"RESULT passed={passed} failed={failed}")
+	if skipped:
+		print("SKIPPED, and why:")
+		for name, why in skipped:
+			print(f"  {name}: {why}")
+	print(f"RESULT passed={passed} failed={failed} skipped={len(skipped)}")
 
 	if failed:
 		sys.exit(1)

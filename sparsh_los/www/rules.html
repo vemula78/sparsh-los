@@ -1,0 +1,210 @@
+{% extends "templates/web.html" %}
+
+{% block title %}Source of truth{% endblock %}
+
+{% block head_include %}
+<link rel="stylesheet" href="/assets/sparsh_los/css/sparsh.css">
+{# Fonts are optional: every stack in sparsh.css names a real fallback, and the
+   on-premises server is often offline to this host. #}
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Lato:wght@400;700&family=Roboto+Mono&display=swap">
+{% endblock %}
+
+{% block page_content %}
+<style>
+	/* Page-local layout only. Every colour below is a shared token; none is new. */
+	.rl-stats { display: grid; gap: 1px; background: #E3E3E3; border: var(--sss-line);
+		grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-bottom: var(--sss-gap); }
+	.rl-stat { background: var(--sss-white); padding: 12px 14px; border-left: 4px solid transparent; }
+	.rl-stat--force { border-left-color: var(--sss-success); }
+	.rl-stat--waiting { border-left-color: var(--sss-orange); }
+	.rl-stat__n { font-family: var(--font-mono); font-size: 26px; line-height: 1.1;
+		color: var(--sss-blue-deep); font-variant-numeric: tabular-nums; }
+	.rl-stat__l { font-size: 12px; color: var(--sss-grey-mid); margin-top: 4px; }
+
+	.rl-rule { border: var(--sss-line); border-left: 4px solid var(--sss-grey-light);
+		padding: 14px 16px; margin-bottom: 12px; background: var(--sss-white); }
+	.rl-rule--force { border-left-color: var(--sss-success); }
+	.rl-rule--waiting { border-left-color: var(--sss-orange); }
+	.rl-rule--absent { border-left-color: var(--sss-danger); }
+	.rl-rule__head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline;
+		justify-content: space-between; margin-bottom: 8px; }
+	.rl-id { font-family: var(--font-mono); font-size: 13px; color: var(--sss-blue-deep); font-weight: 700; }
+
+	/* The two statements sit side by side so a change of wording is visible, not asserted. */
+	.rl-words { display: grid; gap: 12px; grid-template-columns: 1fr; }
+	@media (min-width: 800px) { .rl-words--both { grid-template-columns: 1fr 1fr; } }
+	.rl-word { border: var(--sss-line); padding: 10px 12px; background: #FCFCFC; }
+	.rl-word--approved { border-left: 3px solid var(--sss-gold); }
+	.rl-word p { margin: 0; font-size: 14px; line-height: 1.5; }
+
+	.rl-meta { margin: 10px 0 0; display: grid; grid-template-columns: max-content 1fr;
+		gap: 4px 14px; font-size: 13px; }
+	.rl-meta dt { color: var(--sss-grey-mid); }
+	.rl-meta dd { margin: 0; }
+	.rl-section { margin-bottom: var(--sss-gap-lg); }
+	.rl-section > h2 { padding-bottom: 6px; border-bottom: var(--sss-rule); margin-bottom: 12px; }
+	.rl-nav { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; margin: 0 0 var(--sss-gap-lg); }
+	.rl-nav a { color: var(--sss-blue-mid); text-decoration: none; border-bottom: 1px solid var(--sss-gold); }
+	.rl-nav a:hover, .rl-nav a:focus-visible { color: var(--sss-blue-deep); border-bottom-width: 2px; }
+</style>
+
+<div class="sp-page">
+	<div class="sp-masthead">
+		<div class="sp-shell">
+			<div>
+				<div class="sp-institute">{{ branding.institute }}</div>
+				<div class="sp-campus">{{ branding.campus }} &middot; Source of truth</div>
+			</div>
+			<div class="sp-campus">Signed in as {{ viewer }}</div>
+		</div>
+	</div>
+
+	<div class="sp-shell">
+		<div class="sp-eyebrow">Competency training</div>
+		<h1>What the engine judges against</h1>
+		<p class="sp-muted sp-small">
+			Every rule in the source-of-truth matrix, as the engine holds it today. A rule
+			is applied only where it is <strong>in force</strong>; where a decision is still
+			awaited the engine refuses to score against it and a person judges instead.
+		</p>
+
+		<nav class="rl-nav" aria-label="Sections">
+			<a href="#rl-h-rules">The rules</a>
+			<a href="#rl-h-unmatched">Named without a matrix row</a>
+			<a href="/programme">Programme dashboard</a>
+			<a href="/queue">Review queue</a>
+		</nav>
+
+		<div class="rl-stats">
+			<div class="rl-stat rl-stat--force">
+				<div class="rl-stat__n">{{ governance.counts.in_force }}</div>
+				<div class="rl-stat__l">in force</div>
+			</div>
+			<div class="rl-stat rl-stat--waiting">
+				<div class="rl-stat__n">{{ governance.counts.awaiting_decision }}</div>
+				<div class="rl-stat__l">awaiting a decision</div>
+			</div>
+			<div class="rl-stat">
+				<div class="rl-stat__n">{{ governance.counts.total }}</div>
+				<div class="rl-stat__l">rules in the matrix</div>
+			</div>
+			{% if governance.counts.not_on_this_site %}
+			<div class="rl-stat">
+				<div class="rl-stat__n">{{ governance.counts.not_on_this_site }}</div>
+				<div class="rl-stat__l">in the matrix, not loaded here</div>
+			</div>
+			{% endif %}
+		</div>
+
+		{% if governance.approved_by %}
+		<div class="sp-note" role="note">
+			<div class="sp-eyebrow">Approval on record</div>
+			<p class="sp-small" style="margin:4px 0 0">
+				Approved by <strong>{{ governance.approved_by }}</strong>.
+				{{ governance.approval_source }}
+			</p>
+		</div>
+		{% endif %}
+
+		<section class="rl-section">
+			<h2 id="rl-h-rules">The rules</h2>
+			<p class="sp-muted sp-small">
+				In force first, then those awaiting a decision. Where the approved wording
+				differs from what was originally proposed, both are shown — what changed is
+				part of the record.
+			</p>
+
+			{% for rule in governance.rules %}
+			<article class="rl-rule {% if rule.in_force %}rl-rule--force{% elif not rule.present %}rl-rule--absent{% else %}rl-rule--waiting{% endif %}">
+				<div class="rl-rule__head">
+					<span class="rl-id">{{ rule.rule_id }}{% if rule.version %} &middot; v{{ rule.version }}{% endif %}</span>
+					<span>
+						{% if not rule.present %}
+							<span class="sp-pill sp-pill--blocked">not loaded on this site</span>
+						{% else %}
+							<span class="sp-pill {{ pill_for_status.get(rule.status, '') }}">{{ rule.status }}</span>
+							{% if rule.in_force %}<span class="sp-pill sp-pill--mastered">in force</span>
+							{% else %}<span class="sp-pill sp-pill--due">not scored by the engine</span>{% endif %}
+							{% if rule.criticality == "Safety-critical" %}<span class="sp-pill sp-pill--blocked">safety-critical</span>{% endif %}
+							{% if rule.wording_changed %}<span class="sp-pill">wording changed on approval</span>{% endif %}
+						{% endif %}
+					</span>
+				</div>
+
+				{% if not rule.present %}
+					<p class="sp-small sp-muted">
+						This rule is named in the matrix but no record of it exists on this site.
+						It is listed rather than omitted: a rule missing from the page would read
+						as a rule that does not exist.
+					</p>
+				{% else %}
+					<div class="rl-words {% if rule.wording_changed %}rl-words--both{% endif %}">
+						{% if rule.approved_statement %}
+						<div class="rl-word rl-word--approved">
+							<div class="sp-eyebrow">Approved wording</div>
+							<p>{{ rule.approved_statement }}</p>
+						</div>
+						{% endif %}
+						{% if rule.wording_changed or not rule.approved_statement %}
+						<div class="rl-word">
+							<div class="sp-eyebrow">{% if rule.approved_statement %}Originally proposed{% else %}Proposed, awaiting a decision{% endif %}</div>
+							<p>{{ rule.proposed_statement or "—" }}</p>
+						</div>
+						{% endif %}
+					</div>
+
+					<dl class="rl-meta">
+						{% if rule.competencies %}
+						<dt>Governs</dt><dd>{{ rule.competencies | join(", ") }}</dd>
+						{% endif %}
+						{% if rule.applies_to %}<dt>Applies to</dt><dd>{{ rule.applies_to }}</dd>{% endif %}
+						{% if rule.in_force %}
+							<dt>Approved by</dt><dd>{{ rule.approved_by_name or "—" }}</dd>
+							<dt>Source</dt><dd>{{ rule.approval_source or "—" }}</dd>
+							<dt>Effective</dt><dd>{{ fmt_date(rule.effective_date) or "—" }}</dd>
+						{% endif %}
+						{% if rule.automation_status %}<dt>Automation</dt><dd>{{ rule.automation_status }}</dd>{% endif %}
+						{% if rule.earlier_versions %}
+						<dt>Earlier versions</dt><dd>{{ rule.earlier_versions }} superseded</dd>
+						{% endif %}
+					</dl>
+				{% endif %}
+			</article>
+			{% else %}
+			<p class="sp-empty">No rule from the matrix is loaded on this site.</p>
+			{% endfor %}
+		</section>
+
+		<section class="rl-section">
+			<h2 id="rl-h-unmatched">Named as governing, with no matrix row</h2>
+			<p class="sp-muted sp-small">
+				These were named as governing rules but have no row in the matrix to carry
+				their wording. They are listed so the wording can be supplied. The engine
+				does not write a rule of its own wording to fill the gap.
+			</p>
+			{% if governance.named_but_not_in_the_matrix %}
+			<div class="sp-scroll">
+			<table class="sp-table">
+				<thead><tr><th>Competency</th><th>Named rule</th></tr></thead>
+				<tbody>
+				{% for competency, names in governance.named_but_not_in_the_matrix.items() %}
+					{% for name in names %}
+					<tr>
+						<td>{% if loop.first %}{{ competency }}{% endif %}</td>
+						<td>{{ name }}</td>
+					</tr>
+					{% endfor %}
+				{% endfor %}
+				</tbody>
+			</table>
+			</div>
+			{% else %}
+			<p class="sp-empty">Every named rule has a matrix row.</p>
+			{% endif %}
+		</section>
+
+		<p class="sp-caption">Generated {{ generated_at }}.</p>
+	</div>
+</div>
+{% endblock %}

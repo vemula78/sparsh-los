@@ -10,7 +10,7 @@ set -euo pipefail
 
 TARGET="${TARGET:-local}"
 SKIP_VERIFY="${SKIP_VERIFY:-0}"
-MIN_CHECKS="${MIN_CHECKS:-156}"
+MIN_CHECKS="${MIN_CHECKS:-158}"
 
 case "${TARGET}" in
 local)
@@ -177,8 +177,15 @@ if [ "${SKIP_VERIFY}" != "1" ]; then
 	fi
 	# An empty CHECKS tuple would print "passed=0 failed=0" and look like success.
 	PASSED=$(echo "${OUTPUT}" | sed -n 's/.*RESULT passed=\([0-9]*\).*/\1/p')
-	if [ "${PASSED:-0}" -lt "${MIN_CHECKS:-1}" ]; then
-		echo "FAIL: only ${PASSED:-0} checks ran, expected at least ${MIN_CHECKS:-1}" >&2
+	# A check that could not run here is counted, named in the output above, and added
+	# back before comparing against the floor -- otherwise loading the demonstration
+	# cohort, which legitimately makes two window-dependent checks inapplicable, would
+	# read as two checks having gone missing. What must never be tolerated is `failed`,
+	# which is asserted separately below.
+	SKIPPED=$(echo "${OUTPUT}" | sed -n 's/.*RESULT .*skipped=\([0-9]*\).*/\1/p')
+	RAN=$(( ${PASSED:-0} + ${SKIPPED:-0} ))
+	if [ "${RAN}" -lt "${MIN_CHECKS:-1}" ]; then
+		echo "FAIL: only ${RAN} checks accounted for (${PASSED:-0} passed, ${SKIPPED:-0} skipped), expected at least ${MIN_CHECKS:-1}" >&2
 		exit 1
 	fi
 
