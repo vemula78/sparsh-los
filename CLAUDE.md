@@ -98,7 +98,46 @@ state and a learner who has answered it must not stay held by it.
 `Sparsh Evidence.on_submit` / `on_cancel` are the only triggers for `recompute_mastery`, which is
 also the only writer of Mastery State.
 
-### Invariants — do not weaken these to make something pass
+### The pages
+
+Three server-rendered pages under `sparsh_los/www/`, all drawing from one stylesheet at
+`sparsh_los/public/css/sparsh.css`:
+
+- `/practice` — the learner's single task, the hint already issued, their competency states,
+  refreshers, open questions and certification. Carries the "Need expert guidance" control that
+  §17 step 1 and acceptance criterion 9 require.
+- `/queue` — the reviewer's work queue, oldest first. Every card carries the case's
+  `validation_required` text, because the reviewer is the last person who can notice the rule
+  behind the case they are judging has not been approved.
+- `/programme` — the supervisor and programme views, and the pilot readiness banner.
+
+Conventions the pages must keep:
+
+- **Define no colour.** Every value comes from a `--sss-*` token in the shared sheet, so the
+  identity is one edit rather than four. A page-only hex is a bug.
+- **Every font stack names a real fallback** (Georgia / Arial / Courier New). The on-prem server is
+  often offline to the public internet and a page that needs a font CDN to stay readable fails in
+  the hospital.
+- **Never render an answer key.** `expected_response`, `expected_value`, `tolerance`,
+  `rubric_criteria`, `critical_markers` and unissued `hints` are permlevel 1. The learner page may
+  show only the hint the engine has already issued. The reviewer page may show criteria — it is
+  reviewer-gated — but must never put one in a URL.
+- **Render the engine's refusals, never a zero.** Several figures are deliberately `None` with a
+  sibling key explaining why. A dashboard showing `0` where the truth is "nobody has decided" is
+  the worst thing these pages could do.
+- **Do not reimplement an engine rule in JavaScript.** The queue previewed `aggregate_rubric` in JS
+  and would have started lying the day a threshold was added; the server now passes the outcome for
+  every possible number of ticks and the page looks it up.
+- The institute's name and campus come from `branding.masthead()`, overridable with
+  `sparsh_branding` in `site_config.json` — not written into templates.
+- `install_verify.sh` links `sites/assets/sparsh_los`. Nothing in `install-app` or `migrate` creates
+  it, and without it every page 404s its stylesheet and renders unstyled in silence. `bench build`
+  would also create it and then exits non-zero here because node is absent.
+
+Frappe's own navbar and "Powered by ERPNext" footer wrap these pages; both are Website Settings on
+the site, not app code, and are a deployment step rather than something the app overrides.
+
+## Invariants — do not weaken these to make something pass
 
 Each is covered by a check in `verify.py`. If a change makes one fail, the change is wrong until
 proven otherwise.

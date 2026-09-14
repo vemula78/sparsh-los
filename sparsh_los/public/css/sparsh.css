@@ -1,0 +1,200 @@
+/* Copyright (c) 2026, SSSIHMS and contributors
+ *
+ * The institute's visual identity, as tokens. Every page in this app draws from here
+ * and defines no colour of its own, so a brand change is one edit rather than four.
+ *
+ * White ground, Playfair Display for display type, Lato for everything else. The
+ * hospital is a charitable institution and its materials are formal and restrained:
+ * no gradients, no pure black, no dark-console styling.
+ *
+ * Typefaces are linked from Google Fonts by the page, and every stack names a real
+ * fallback. The on-premises server is frequently offline to the public internet, and a
+ * page that becomes unreadable without a font CDN is a page that fails in the hospital.
+ */
+
+:root {
+	--sss-blue-deep:  #003366;
+	--sss-orange:     #E07B39;
+	--sss-gold:       #C8A84B;
+	--sss-blue-mid:   #1A5276;
+	--sss-blue-light: #D6E8F7;
+	--sss-white:      #FFFFFF;
+	--sss-grey-dark:  #2C2C2C;
+	--sss-grey-mid:   #6C6C6C;
+	--sss-grey-light: #F4F4F4;
+	--sss-success:    #1E8449;
+	--sss-warning:    #D4AC0D;
+	--sss-danger:     #C0392B;
+
+	--font-display: 'Playfair Display', Georgia, 'Times New Roman', serif;
+	--font-body:    'Lato', Arial, Helvetica, sans-serif;
+	--font-mono:    'Roboto Mono', 'Courier New', monospace;
+
+	--sss-radius: 3px;
+	--sss-rule:   1px solid var(--sss-gold);
+	--sss-line:   1px solid #E3E3E3;
+
+	--sss-gap:    16px;
+	--sss-gap-lg: 28px;
+}
+
+/* ---------------------------------------------------------------- foundations */
+
+.sp-page {
+	font-family: var(--font-body);
+	color: var(--sss-grey-dark);
+	background: var(--sss-white);
+	line-height: 1.5;
+	font-size: 16px;
+}
+
+.sp-page h1, .sp-page h2 {
+	font-family: var(--font-display);
+	color: var(--sss-blue-deep);
+	line-height: 1.15;
+	margin: 0 0 8px;
+	text-wrap: balance;
+}
+.sp-page h1 { font-size: 32px; font-weight: 700; }
+.sp-page h2 { font-size: 24px; font-weight: 700; }
+
+.sp-page h3, .sp-page h4 {
+	font-family: var(--font-body);
+	color: var(--sss-blue-mid);
+	font-weight: 600;
+	line-height: 1.2;
+	margin: 0 0 6px;
+}
+.sp-page h3 { font-size: 19px; }
+.sp-page h4 { font-size: 16px; }
+
+.sp-shell { max-width: 940px; margin: 0 auto; padding: 0 20px 56px; }
+
+/* ------------------------------------------------------------------- masthead */
+
+.sp-masthead {
+	background: var(--sss-blue-deep);
+	color: var(--sss-white);
+	padding: 18px 0;
+	border-bottom: 3px solid var(--sss-gold);
+	margin-bottom: var(--sss-gap-lg);
+}
+.sp-masthead .sp-shell { padding-bottom: 0; display: flex; flex-wrap: wrap;
+	align-items: baseline; justify-content: space-between; gap: 8px; }
+.sp-institute { font-family: var(--font-display); font-size: 17px; font-weight: 700;
+	letter-spacing: .01em; }
+.sp-campus { font-size: 12px; color: var(--sss-blue-light); letter-spacing: .04em; }
+
+/* The programme name belongs to the content pack, never to the engine, so it is set
+   from the template rather than written here. */
+.sp-eyebrow {
+	font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+	color: var(--sss-grey-mid); font-weight: 700; margin-bottom: 4px;
+}
+
+/* ---------------------------------------------------------------------- panels */
+
+.sp-panel {
+	border: var(--sss-line);
+	border-top: 3px solid var(--sss-blue-deep);
+	border-radius: var(--sss-radius);
+	padding: 20px;
+	margin-bottom: var(--sss-gap);
+	background: var(--sss-white);
+}
+.sp-panel--task  { border-top-color: var(--sss-orange); }
+.sp-panel--quiet { border-top-color: #D8D8D8; background: var(--sss-grey-light); }
+
+.sp-note {
+	border-left: 3px solid var(--sss-gold);
+	background: #FBF6E3;
+	padding: 10px 14px;
+	margin-bottom: var(--sss-gap);
+	border-radius: 0 var(--sss-radius) var(--sss-radius) 0;
+}
+.sp-note--info { border-left-color: var(--sss-blue-mid); background: var(--sss-blue-light); }
+.sp-note--stop { border-left-color: var(--sss-danger); background: #FBEAE8; }
+
+/* ---------------------------------------------------------------------- pills */
+
+.sp-pill {
+	display: inline-block; padding: 2px 9px; border-radius: 11px;
+	font-size: 11px; font-weight: 700; letter-spacing: .04em;
+	text-transform: uppercase; white-space: nowrap;
+	background: var(--sss-grey-light); color: var(--sss-grey-dark);
+	border: 1px solid #DDD;
+}
+/* Semantic, and separate from the accent colour: a state must read at a glance
+   without anyone learning a legend. */
+.sp-pill--mastered     { background: #E4F1E9; color: var(--sss-success); border-color: #BFDFCC; }
+.sp-pill--demonstrated { background: var(--sss-blue-light); color: var(--sss-blue-deep); border-color: #B6D4EC; }
+.sp-pill--practising   { background: #FDF3D6; color: #8A6D0B; border-color: #EBD9A1; }
+.sp-pill--due          { background: #FCEFD9; color: #9A5A1C; border-color: #EFD3AE; }
+.sp-pill--blocked      { background: #FBEAE8; color: var(--sss-danger); border-color: #EFC6C1; }
+
+/* --------------------------------------------------------------------- tables */
+
+.sp-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.sp-table thead th {
+	background: var(--sss-blue-deep); color: var(--sss-white);
+	text-align: left; font-weight: 700; padding: 9px 12px;
+	font-size: 12px; letter-spacing: .04em; text-transform: uppercase;
+}
+.sp-table td { padding: 10px 12px; border-bottom: var(--sss-line); vertical-align: top; }
+.sp-table tbody tr:nth-child(even) { background: #FAFCFE; }
+.sp-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* Wide content scrolls inside its own container; the page never scrolls sideways. */
+.sp-scroll { overflow-x: auto; }
+
+/* --------------------------------------------------------------------- forms */
+
+.sp-response {
+	width: 100%; min-height: 132px; padding: 12px;
+	border: 1px solid #C9C9C9; border-radius: var(--sss-radius);
+	font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+	color: var(--sss-grey-dark); background: var(--sss-white); resize: vertical;
+}
+.sp-response:focus { outline: 2px solid var(--sss-blue-mid); outline-offset: 1px; border-color: var(--sss-blue-mid); }
+
+.sp-btn {
+	font-family: var(--font-body); font-size: 14px; font-weight: 700;
+	padding: 9px 20px; border-radius: var(--sss-radius); cursor: pointer;
+	border: 1px solid var(--sss-blue-deep);
+	background: var(--sss-blue-deep); color: var(--sss-white);
+}
+.sp-btn:hover  { background: #00294F; }
+.sp-btn:focus-visible { outline: 2px solid var(--sss-orange); outline-offset: 2px; }
+.sp-btn[disabled] { opacity: .5; cursor: not-allowed; }
+.sp-btn--quiet { background: var(--sss-white); color: var(--sss-blue-deep); }
+.sp-btn--quiet:hover { background: var(--sss-blue-light); }
+
+.sp-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+
+/* --------------------------------------------------------------------- misc */
+
+.sp-muted   { color: var(--sss-grey-mid); }
+.sp-small   { font-size: 13px; }
+.sp-caption { font-size: 12px; color: var(--sss-grey-mid); }
+.sp-rule    { border: 0; border-top: var(--sss-rule); margin: var(--sss-gap-lg) 0; }
+.sp-stack > * + * { margin-top: var(--sss-gap); }
+.sp-grid { display: grid; gap: var(--sss-gap); grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+
+.sp-empty { color: var(--sss-grey-mid); font-style: italic; }
+
+.sp-footer {
+	border-top: var(--sss-rule); margin-top: var(--sss-gap-lg);
+	padding-top: 12px; font-size: 12px; color: var(--sss-grey-mid);
+	display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px;
+}
+
+@media (max-width: 620px) {
+	.sp-page h1 { font-size: 26px; }
+	.sp-shell { padding: 0 14px 40px; }
+	.sp-panel { padding: 16px; }
+}
+
+@media print {
+	.sp-masthead { background: var(--sss-white); color: var(--sss-blue-deep); }
+	.sp-btn, .sp-actions { display: none; }
+}

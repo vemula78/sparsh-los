@@ -2,108 +2,451 @@
 
 {% block title %}Review queue{% endblock %}
 
+{% block head_include %}
+<link rel="stylesheet" href="/assets/sparsh_los/css/sparsh.css">
+{# Fonts are optional: every stack in sparsh.css names a real fallback, and the
+   on-premises server is often offline to this host. #}
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Lato:wght@400;700&family=Roboto+Mono&display=swap">
+{% endblock %}
+
 {% block page_content %}
 <style>
-	.rq-wrap { max-width: 900px; margin: 0 auto; }
-	.rq-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: #e2e5e9; border: 1px solid #e2e5e9; margin: 20px 0 32px; }
-	.rq-tile { background: #fff; padding: 14px 16px; }
-	.rq-tile .n { font-size: 26px; line-height: 1.1; font-variant-numeric: tabular-nums; color: #1A5276; }
-	.rq-tile .n.is-alert { color: #C0392B; }
-	.rq-tile .l { font-size: 12px; color: #6C6C6C; margin-top: 4px; }
-	.rq-section { margin-bottom: 32px; }
-	.rq-section h3 { font-size: 17px; margin-bottom: 4px; }
-	.rq-lede { font-size: 13px; color: #6C6C6C; margin-bottom: 10px; }
-	table.rq { border-collapse: collapse; width: 100%; font-size: 14px; }
-	table.rq th { text-align: left; background: #003366; color: #fff; padding: 8px 12px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
-	table.rq td { padding: 8px 12px; border-top: 1px solid #e2e5e9; vertical-align: top; }
-	table.rq tr.is-critical td { background: #fdf0ee; }
-	.rq-empty { color: #6C6C6C; font-size: 14px; }
+	/* Page-only classes for what the shared sheet has no class for. No colour is
+	   defined here that is not a token from sparsh.css. */
+	.rq-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+		gap: 1px; background: var(--sss-grey-light); border: var(--sss-line); margin: var(--sss-gap) 0 var(--sss-gap-lg); }
+	.rq-tile { background: var(--sss-white); padding: 12px 14px; }
+	.rq-tile .n { font-family: var(--font-mono); font-size: 26px; line-height: 1.1;
+		font-variant-numeric: tabular-nums; color: var(--sss-blue-mid); }
+	.rq-tile .n.is-alert { color: var(--sss-danger); }
+	.rq-tile .l { font-size: 12px; color: var(--sss-grey-mid); margin-top: 3px; }
+
+	.rq-section { margin-bottom: var(--sss-gap-lg); }
+	.rq-section > h2 { font-size: 21px; padding-bottom: 6px; border-bottom: var(--sss-rule); }
+	.rq-lede { font-size: 13px; color: var(--sss-grey-mid); margin: 0 0 12px; }
+
+	/* One attempt = one card, scanned top to bottom: who and how helped, the rule
+	   warning, what they were asked, what they wrote, then the verdict. */
+	.rq-head { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline;
+		margin-bottom: 12px; font-size: 14px; }
+	.rq-head .rq-who { font-weight: 700; color: var(--sss-blue-deep); }
+	.rq-head .rq-when { color: var(--sss-grey-mid); font-family: var(--font-mono); font-size: 13px; }
+	.rq-head .rq-pills { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+
+	.rq-rule { border-left-width: 5px; font-size: 14px; }
+	.rq-rule .rq-rule-label { font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+		font-size: 12px; color: var(--sss-blue-deep); display: block; margin-bottom: 2px; }
+	.rq-rule .rq-rule-text { font-size: 16px; font-weight: 700; color: var(--sss-grey-dark); }
+
+	.rq-instruction { font-size: 14px; color: var(--sss-grey-dark); margin: 0 0 12px; }
+	.rq-response { background: var(--sss-grey-light); border: var(--sss-line);
+		border-radius: var(--sss-radius); padding: 12px 14px; margin: 0 0 var(--sss-gap);
+		white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.55;
+		max-height: 320px; overflow: auto; }
+
+	.rq-verdict { border-top: var(--sss-line); padding-top: 14px; }
+	.rq-verdict fieldset { border: 0; padding: 0; margin: 0 0 10px; min-width: 0; }
+	.rq-verdict legend { font-weight: 700; font-size: 14px; color: var(--sss-blue-mid);
+		padding: 0; margin-bottom: 6px; }
+	.rq-choice { display: flex; gap: 10px; align-items: flex-start; padding: 6px 8px;
+		border-radius: var(--sss-radius); font-size: 15px; line-height: 1.4; }
+	.rq-choice:hover { background: var(--sss-grey-light); }
+	.rq-choice input { margin-top: 4px; flex: none; width: 17px; height: 17px; accent-color: var(--sss-blue-deep); }
+	.rq-choice input:focus-visible { outline: 2px solid var(--sss-orange); outline-offset: 2px; }
+	.rq-choice .rq-idx { font-family: var(--font-mono); color: var(--sss-grey-mid); flex: none; }
+	.rq-inline { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+	.rq-outcome { font-size: 14px; margin: 8px 0 4px; }
+	.rq-outcome strong { font-family: var(--font-mono); }
+	.rq-comments { min-height: 64px; margin-top: 6px; font-size: 14px; }
+	.rq-label { display: block; font-size: 13px; font-weight: 700; color: var(--sss-blue-mid); margin-top: 8px; }
+	.rq-result { margin-top: 12px; }
+	.rq-result:empty { display: none; }
+	.rq-done { opacity: .72; }
+
+	.rq-q { font-size: 16px; line-height: 1.5; margin: 6px 0 var(--sss-gap); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+	@media (max-width: 620px) {
+		.rq-head .rq-pills { margin-left: 0; }
+	}
 </style>
 
-<div class="rq-wrap">
-	<h1>Review queue</h1>
-
-	<div class="rq-tiles">
-		<div class="rq-tile"><div class="n {% if critical %}is-alert{% endif %}">{{ critical|length }}</div><div class="l">Standing critical errors</div></div>
-		<div class="rq-tile"><div class="n">{{ pending_reviews|length }}</div><div class="l">Attempts awaiting judgement</div></div>
-		<div class="rq-tile"><div class="n">{{ escalations|length }}</div><div class="l">Open questions</div></div>
-		<div class="rq-tile"><div class="n">{{ cohort.ready_to_progress|length }}</div><div class="l">Ready to progress</div></div>
-		<div class="rq-tile"><div class="n">{{ cohort.stuck|length }}</div><div class="l">Stuck</div></div>
+<div class="sp-page">
+	<div class="sp-masthead">
+		<div class="sp-shell">
+			<div>
+				<div class="sp-institute">{{ branding.institute }}</div>
+				<div class="sp-campus">{{ branding.campus }} &middot; Reviewer queue</div>
+			</div>
+			<div class="sp-campus">Signed in as {{ reviewer }}</div>
+		</div>
 	</div>
 
-	<div class="rq-section">
-		<h3>Standing critical errors</h3>
-		<p class="rq-lede">A safety error blocks the learner until a reviewer clears it. Nothing else does.</p>
-		{% if critical %}
-		<table class="rq">
-			<thead><tr><th>Learner</th><th>Competency</th><th>Activity</th><th>Recorded</th></tr></thead>
-			<tbody>
-			{% for row in critical %}
-				<tr class="is-critical">
-					<td>{{ row.learner }}</td>
-					<td>{{ row.competency }}</td>
-					<td>{{ row.activity or "—" }}</td>
-					<td>{{ frappe.utils.format_datetime(row.recorded_at, "dd-MMM-yyyy HH:mm") if row.recorded_at else "—" }}</td>
-				</tr>
-			{% endfor %}
-			</tbody>
-		</table>
-		{% else %}<p class="rq-empty">None outstanding.</p>{% endif %}
-	</div>
+	<div class="sp-shell">
+		<div class="sp-eyebrow">Competency training</div>
+		<h1>Review queue</h1>
+		<p class="sp-muted sp-small">Oldest first throughout. A learner waiting on you is blocked; a standing safety error is blocked until you clear it.</p>
 
-	<div class="rq-section">
-		<h3>Awaiting judgement</h3>
-		<p class="rq-lede">Recorded attempts on activities a person has to assess.</p>
-		{% if pending_reviews %}
-		<table class="rq">
-			<thead><tr><th>Learner</th><th>Activity</th><th>Response</th><th>Help used</th></tr></thead>
-			<tbody>
+		<div class="rq-tiles" aria-label="Queue summary">
+			<div class="rq-tile"><div class="n {% if critical %}is-alert{% endif %}">{{ critical|length }}</div><div class="l">Standing critical errors</div></div>
+			<div class="rq-tile"><div class="n" id="rq-count-pending">{{ pending_reviews|length }}</div><div class="l">Attempts awaiting judgement</div></div>
+			<div class="rq-tile"><div class="n" id="rq-count-questions">{{ escalations|length }}</div><div class="l">Open questions</div></div>
+			<div class="rq-tile"><div class="n">{{ cohort.ready_to_progress|length }}</div><div class="l">Ready to progress</div></div>
+			<div class="rq-tile"><div class="n">{{ cohort.stuck|length }}</div><div class="l">Stuck</div></div>
+		</div>
+
+		{# ------------------------------------------------ 1. Safety ------------- #}
+		<section class="rq-section" aria-labelledby="rq-h-critical">
+			<h2 id="rq-h-critical">Standing critical errors</h2>
+			<p class="rq-lede">A safety error blocks the learner until a reviewer clears it through a Human Review. Nothing else does — not a later good performance.</p>
+			{% if critical %}
+			<div class="sp-scroll">
+			<table class="sp-table">
+				<thead><tr><th scope="col">Learner</th><th scope="col">Competency</th><th scope="col">Activity</th><th scope="col">Recorded</th><th scope="col">Evidence</th></tr></thead>
+				<tbody>
+				{% for row in critical %}
+					<tr>
+						<td>{{ row.learner }}</td>
+						<td>{{ row.competency }}</td>
+						<td>{{ row.activity or "—" }}</td>
+						<td class="sp-num">{{ frappe.utils.format_datetime(row.recorded_at, "dd-MMM-yyyy HH:mm") if row.recorded_at else "—" }}</td>
+						<td><a href="/app/sparsh-evidence/{{ row.name }}">{{ row.name }}</a></td>
+					</tr>
+				{% endfor %}
+				</tbody>
+			</table>
+			</div>
+			{% else %}<p class="sp-empty">None outstanding.</p>{% endif %}
+		</section>
+
+		{# ------------------------------------------------ 2. Judgement ---------- #}
+		<section class="rq-section" aria-labelledby="rq-h-pending">
+			<h2 id="rq-h-pending">Awaiting judgement</h2>
+			<p class="rq-lede">Recorded attempts on activities a person has to assess. Your verdict becomes Evidence and moves the learner's mastery state.</p>
+
+			{% if pending_reviews %}
 			{% for row in pending_reviews %}
-				<tr>
-					<td>{{ row.learner }}</td>
-					<td>{{ row.title or row.activity }}</td>
-					<td>{{ row.response or "—" }}</td>
-					<td>{{ row.hint_level_used or 0 }}</td>
-				</tr>
-			{% endfor %}
-			</tbody>
-		</table>
-		{% else %}<p class="rq-empty">Nothing waiting.</p>{% endif %}
-	</div>
+			<article class="sp-panel sp-panel--task rq-attempt" id="rq-attempt-{{ loop.index }}" data-attempt="{{ row.name }}" aria-labelledby="rq-attempt-title-{{ loop.index }}">
+				<div class="rq-head">
+					<span class="rq-who">{{ row.learner }}</span>
+					<span id="rq-attempt-title-{{ loop.index }}">{{ row.competency }} &rsaquo; {{ row.title or row.activity }}</span>
+					<span class="rq-when">{{ frappe.utils.format_datetime(row.attempted_at, "dd-MMM-yyyy HH:mm") if row.attempted_at else "—" }}</span>
+					<span class="rq-pills">
+						<span class="sp-pill">{{ row.evaluation_mode or "blank mode" }}</span>
+						{% if row.hint_level_used %}
+						<span class="sp-pill sp-pill--due" title="A hint was shown before this answer. A pass here is an assisted pass, not an independent one.">Assisted &middot; hint level {{ row.hint_level_used }}</span>
+						{% else %}
+						<span class="sp-pill sp-pill--demonstrated" title="No hint had been shown on this activity when the learner answered.">Unaided</span>
+						{% endif %}
+					</span>
+				</div>
 
-	<div class="rq-section">
-		<h3>Open questions</h3>
-		<p class="rq-lede">Oldest first — a learner with an unanswered question is blocked.</p>
-		{% if escalations %}
-		<table class="rq">
-			<thead><tr><th>Learner</th><th>Reason</th><th>Question</th><th>Status</th></tr></thead>
-			<tbody>
+				{# The rule behind the case. Every seeded case is "Needs review": the
+				   reviewer is the last person who can notice they are judging against an
+				   unapproved rule, so this sits above the response, not below it. #}
+				{% if row.source_status == "Validated" and not row.validation_required %}
+				<p class="sp-small"><span class="sp-pill sp-pill--mastered">Rule validated</span></p>
+				{% else %}
+				<div class="sp-note rq-rule" role="note">
+					<span class="rq-rule-label">Rule not approved &middot; source status: {{ row.source_status or "not recorded" }}</span>
+					<span class="rq-rule-text">{{ row.validation_required or "No validation note was recorded for this case. Treat the rule behind it as unvalidated." }}</span>
+					<div class="sp-caption" style="margin-top:4px">Judge against approved programme guidance only. If the case needs a threshold or wording that is not yet approved, do not supply one — leave the attempt and raise it with the programme owner.</div>
+				</div>
+				{% endif %}
+
+				<div class="sp-eyebrow">What the learner was asked</div>
+				<p class="rq-instruction">{{ row.instruction or "No instruction is recorded on this activity." }}</p>
+
+				<div class="sp-eyebrow">Learner's response</div>
+				<div class="rq-response" tabindex="0">{{ row.response or "— (empty response) —" }}</div>
+
+				<div class="rq-verdict">
+				{% if row.is_own %}
+					<div class="sp-note sp-note--stop" role="note">
+						<strong>This is your own attempt.</strong> Nobody judges their own work — the engine refuses this verdict whatever roles you hold. Another reviewer must take it.
+					</div>
+				{% elif row.is_rubric %}
+					{% if row.criteria %}
+					<form class="rq-form rq-form--rubric" data-attempt="{{ row.name }}" data-total="{{ row.criteria|length }}" data-hint="{{ row.hint_level_used or 0 }}" data-outcomes="{{ row.outcome_for_count|tojson }}">
+						<fieldset>
+							<legend>Which criteria did this response meet?</legend>
+							{% for criterion in row.criteria %}
+							<label class="rq-choice" for="rq-c-{{ loop.index }}-{{ row.name }}">
+								<input type="checkbox" id="rq-c-{{ loop.index }}-{{ row.name }}" name="criteria_met" value="{{ loop.index }}">
+								<span class="rq-idx">{{ loop.index }}.</span>
+								<span>{{ criterion }}</span>
+							</label>
+							{% endfor %}
+						</fieldset>
+						<p class="rq-outcome" aria-live="polite">The engine will record: <strong data-role="preview">Fail</strong> <span class="sp-muted">(0 of {{ row.criteria|length }} met)</span></p>
+						<p class="sp-caption">All criteria met = Pass; none = Fail; anything between = Partial. You choose the ticks, the engine decides the outcome, and assistance is taken from the attempt as recorded (hint level {{ row.hint_level_used or 0 }}) — a rubric verdict cannot lower it. On Partial or Fail the learner receives the next hint.</p>
+						<label class="rq-label" for="rq-cm-{{ row.name }}">Comment for the record (optional; the learner can read their own Evidence)</label>
+						<textarea class="sp-response rq-comments" id="rq-cm-{{ row.name }}" name="comments"></textarea>
+						<div class="sp-actions">
+							<button type="submit" class="sp-btn">Record rubric verdict</button>
+						</div>
+					</form>
+					{% else %}
+					<div class="sp-note sp-note--stop" role="note">
+						<strong>No rubric criteria are authored for this activity.</strong> The engine has nothing to score against and will refuse a rubric verdict. This is a content gap for the programme owner, not something to fill in here.
+					</div>
+					{% endif %}
+				{% else %}
+					<form class="rq-form rq-form--outcome" data-attempt="{{ row.name }}">
+						<fieldset>
+							<legend>Your verdict</legend>
+							<div class="rq-inline">
+							{% for outcome in outcomes %}
+								<label class="rq-choice" for="rq-o-{{ loop.index }}-{{ row.name }}">
+									<input type="radio" id="rq-o-{{ loop.index }}-{{ row.name }}" name="outcome" value="{{ outcome }}" required>
+									<span>{{ outcome }}</span>
+								</label>
+							{% endfor %}
+							</div>
+						</fieldset>
+						<label class="rq-choice" for="rq-ce-{{ row.name }}">
+							<input type="checkbox" id="rq-ce-{{ row.name }}" name="critical_error" value="1">
+							<span>Critical error — the response was unsafe. This blocks the learner until it is cleared by a Human Review.</span>
+						</label>
+						<p class="sp-caption">Assistance is recorded as the attempt shows it (hint level {{ row.hint_level_used or 0 }}). On Partial or Fail the learner receives the next hint.</p>
+						<label class="rq-label" for="rq-cm-{{ row.name }}">Comment for the record (optional; the learner can read their own Evidence)</label>
+						<textarea class="sp-response rq-comments" id="rq-cm-{{ row.name }}" name="comments"></textarea>
+						<div class="sp-actions">
+							<button type="submit" class="sp-btn">Record verdict</button>
+						</div>
+					</form>
+				{% endif %}
+					<div class="rq-result" role="status" aria-live="polite"></div>
+				</div>
+			</article>
+			{% endfor %}
+			{% else %}
+			<div class="sp-panel sp-panel--quiet">
+				<p class="sp-empty" style="margin:0">Nothing is waiting for a verdict. Every recorded attempt has been judged.</p>
+			</div>
+			{% endif %}
+		</section>
+
+		{# ------------------------------------------------ 3. Questions ---------- #}
+		<section class="rq-section" aria-labelledby="rq-h-questions">
+			<h2 id="rq-h-questions">Open questions</h2>
+			<p class="rq-lede">Escalated by learners or by the engine. Answer, then say what the answer is worth beyond this learner.</p>
+
+			{% if escalations %}
 			{% for row in escalations %}
-				<tr>
-					<td>{{ row.learner }}</td>
-					<td>{{ row.escalation_reason }}</td>
-					<td>{{ row.question_text }}</td>
-					<td>{{ row.status }}</td>
-				</tr>
-			{% endfor %}
-			</tbody>
-		</table>
-		{% else %}<p class="rq-empty">No open questions.</p>{% endif %}
-	</div>
+			<article class="sp-panel rq-question" data-question="{{ row.name }}" aria-labelledby="rq-q-title-{{ loop.index }}">
+				<div class="rq-head">
+					<span class="sp-pill {% if row.urgency == 'Immediate' %}sp-pill--blocked{% elif row.urgency == 'Time-sensitive' %}sp-pill--due{% endif %}">{{ row.urgency }}</span>
+					<span class="sp-pill">{{ row.escalation_reason }}</span>
+					<span class="rq-who">{{ row.learner }}</span>
+					<span id="rq-q-title-{{ loop.index }}">{{ row.activity_title or row.activity or "No activity" }}</span>
+					<span class="rq-when">{{ frappe.utils.format_datetime(row.raised_at, "dd-MMM-yyyy HH:mm") if row.raised_at else "—" }}</span>
+					<span class="rq-pills"><span class="sp-pill">{{ row.status }}</span></span>
+				</div>
 
-	{% if cohort.programme_signals %}
-	<div class="rq-section">
-		<h3>Signals for the programme</h3>
-		<p class="rq-lede">Answers a reviewer classified as needing a rule or curriculum change.</p>
-		<table class="rq">
-			<thead><tr><th>Disposition</th><th>Activity</th><th>Question</th></tr></thead>
-			<tbody>
-			{% for row in cohort.programme_signals %}
-				<tr><td>{{ row.disposition }}</td><td>{{ row.activity or "—" }}</td><td>{{ row.question_text }}</td></tr>
+				<p class="rq-q">{{ row.question_text }}</p>
+
+				<div class="rq-verdict">
+				{% if row.is_own %}
+					<div class="sp-note sp-note--stop" role="note">
+						<strong>This is your own question.</strong> The engine refuses a self-answered escalation; another reviewer must answer it.
+					</div>
+				{% else %}
+					<form class="rq-form rq-form--answer" data-question="{{ row.name }}">
+						<label class="rq-label" for="rq-a-{{ row.name }}">Your answer to the learner</label>
+						<textarea class="sp-response" id="rq-a-{{ row.name }}" name="answer_text" required></textarea>
+						<fieldset>
+							<legend>What is this answer worth beyond this learner?</legend>
+							<div class="rq-inline">
+							{% for disposition in dispositions %}
+								<label class="rq-choice" for="rq-d-{{ loop.index }}-{{ row.name }}">
+									<input type="radio" id="rq-d-{{ loop.index }}-{{ row.name }}" name="disposition" value="{{ disposition }}" required>
+									<span>{{ disposition }}</span>
+								</label>
+							{% endfor %}
+							</div>
+						</fieldset>
+						<p class="sp-caption">"Source-of-truth update" and "Curriculum change" flag the programme, not the learner: they appear under Signals below for the programme owner to act on.</p>
+						<div class="sp-actions">
+							<button type="submit" class="sp-btn">Send answer</button>
+						</div>
+					</form>
+				{% endif %}
+					<div class="rq-result" role="status" aria-live="polite"></div>
+				</div>
+			</article>
 			{% endfor %}
-			</tbody>
-		</table>
+			{% else %}
+			<div class="sp-panel sp-panel--quiet">
+				<p class="sp-empty" style="margin:0">No learner is waiting on an answer.</p>
+			</div>
+			{% endif %}
+		</section>
+
+		{# ------------------------------------------------ 4. Signals ------------ #}
+		{% if cohort.programme_signals %}
+		<section class="rq-section" aria-labelledby="rq-h-signals">
+			<h2 id="rq-h-signals">Signals for the programme</h2>
+			<p class="rq-lede">Answers a reviewer classified as needing a rule or curriculum change. Acting on them is a programme decision.</p>
+			<div class="sp-scroll">
+			<table class="sp-table">
+				<thead><tr><th scope="col">Disposition</th><th scope="col">Activity</th><th scope="col">Question</th></tr></thead>
+				<tbody>
+				{% for row in cohort.programme_signals %}
+					<tr><td>{{ row.disposition }}</td><td>{{ row.activity or "—" }}</td><td>{{ row.question_text }}</td></tr>
+				{% endfor %}
+				</tbody>
+			</table>
+			</div>
+		</section>
+		{% endif %}
+
+		<div class="sp-footer">
+			<span>Sparsh Learning OS &middot; reviewer view</span>
+			<span>Verdicts are recorded as Evidence under your name and cannot be edited afterwards.</span>
+		</div>
 	</div>
-	{% endif %}
 </div>
+
+<script>
+frappe.ready(function () {
+	// The preview comes from the server, which computed it with the engine's own
+	// `aggregate_rubric` -- one outcome per possible number of ticks, looked up here.
+	// This used to reimplement the rule in JavaScript. That was correct on the day it
+	// was written and would have become a lie the moment a threshold was introduced,
+	// which `aggregate_rubric`'s docstring says is exactly where one would go: the
+	// reviewer would be told their ticks produce Partial while the engine recorded
+	// something else. The engine's result is still authoritative and is what the card
+	// reports after submitting.
+	function aggregate(form, met) {
+		const outcomes = JSON.parse(form.dataset.outcomes || "[]");
+		return outcomes[met] !== undefined ? outcomes[met] : "";
+	}
+
+	document.querySelectorAll(".rq-form--rubric").forEach(function (form) {
+		const total = parseInt(form.dataset.total, 10);
+		const preview = form.querySelector("[data-role=preview]");
+		const count = preview.nextElementSibling;
+		form.addEventListener("change", function () {
+			const met = form.querySelectorAll("input[name=criteria_met]:checked").length;
+			preview.textContent = aggregate(form, met);
+			count.textContent = "(" + met + " of " + total + " met)";
+		});
+	});
+
+	// Frappe reports a server refusal as JSON-encoded messages; a thrown
+	// PermissionError (self-review) arrives the same way. Shown in place, as a refusal,
+	// never as a blank or a stack trace.
+	function serverMessage(r) {
+		try {
+			const msgs = JSON.parse(r._server_messages || "[]").map(function (m) {
+				try { return JSON.parse(m).message || m; } catch (e) { return m; }
+			});
+			if (msgs.length) return msgs.join(" ");
+		} catch (e) {}
+		return r.exc_type ? r.exc_type : "The server did not accept this.";
+	}
+
+	function note(box, kind, html) {
+		box.innerHTML = '<div class="sp-note ' + kind + '" role="note">' + html + "</div>";
+	}
+
+	function escape(s) {
+		return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+			return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+		});
+	}
+
+	function decrement(id) {
+		const el = document.getElementById(id);
+		if (el) el.textContent = Math.max(0, parseInt(el.textContent, 10) - 1);
+	}
+
+	function submit(form, method, args, onDone) {
+		const button = form.querySelector("button[type=submit]");
+		const box = form.parentElement.querySelector(".rq-result");
+		button.disabled = true;
+		box.innerHTML = "";
+		frappe.call({
+			method: method,
+			args: args,
+			freeze: false,
+			// Named handlers keep Frappe's default popup quiet for the two refusals this
+			// page reports in place; anything else still surfaces the framework's way.
+			error_handlers: { ValidationError: function () {}, PermissionError: function () {} },
+			callback: function (r) { onDone(r.message || {}, box, form); },
+			error: function (r) {
+				button.disabled = false;
+				// A 417 arrives parsed; a 403 arrives as the raw xhr.
+				if (r && r.responseJSON) r = r.responseJSON;
+				const refused = r && r.exc_type === "PermissionError";
+				note(box, "sp-note--stop",
+					"<strong>" + (refused ? "Refused." : "Not recorded.") + "</strong> " + escape(serverMessage(r || {})));
+			}
+		});
+	}
+
+	function verdictRecorded(d, box, form) {
+		let html = "<strong>Recorded as " + escape(d.outcome) + ".</strong>";
+		if (d.criteria_total != null) html += " " + d.criteria_met.length + " of " + d.criteria_total + " criteria met.";
+		if (d.state) html += " Learner's state for this competency is now <strong>" + escape(d.state) + "</strong>.";
+		if (d.hint_level) html += " Hint level " + d.hint_level + (d.hint ? " will be shown to the learner on their next visit." : " — the ladder has no further rung to offer.");
+		html += ' <span class="sp-caption">Evidence ' + escape(d.evidence) + "</span>";
+		note(box, "sp-note--info", html);
+		form.remove();
+		box.closest(".rq-attempt").classList.add("rq-done");
+		decrement("rq-count-pending");
+	}
+
+	document.querySelectorAll(".rq-form--rubric").forEach(function (form) {
+		form.addEventListener("submit", function (ev) {
+			ev.preventDefault();
+			const met = Array.prototype.map.call(
+				form.querySelectorAll("input[name=criteria_met]:checked"), function (i) { return parseInt(i.value, 10); });
+			submit(form, "sparsh_los.review.score_rubric", {
+				attempt: form.dataset.attempt,
+				criteria_met: met,
+				comments: form.querySelector("[name=comments]").value || null
+			}, verdictRecorded);
+		});
+	});
+
+	document.querySelectorAll(".rq-form--outcome").forEach(function (form) {
+		form.addEventListener("submit", function (ev) {
+			ev.preventDefault();
+			const outcome = form.querySelector("input[name=outcome]:checked");
+			if (!outcome) return;
+			// assistance_level is deliberately not sent: the engine defaults it to what
+			// the attempt recorded, so a verdict cannot claim the work was less assisted.
+			submit(form, "sparsh_los.review.record_evidence", {
+				attempt: form.dataset.attempt,
+				outcome: outcome.value,
+				critical_error: form.querySelector("[name=critical_error]").checked ? 1 : 0,
+				comments: form.querySelector("[name=comments]").value || null
+			}, verdictRecorded);
+		});
+	});
+
+	document.querySelectorAll(".rq-form--answer").forEach(function (form) {
+		form.addEventListener("submit", function (ev) {
+			ev.preventDefault();
+			const disposition = form.querySelector("input[name=disposition]:checked");
+			const answer = form.querySelector("[name=answer_text]").value;
+			if (!disposition || !answer.trim()) return;
+			submit(form, "sparsh_los.escalation.answer", {
+				question: form.dataset.question,
+				answer_text: answer,
+				disposition: disposition.value
+			}, function (d, box, form) {
+				let html = "<strong>Answered</strong> and classified as " + escape(d.disposition) + ".";
+				if (d.programme_change_required) html += " This is flagged to the programme owner under Signals.";
+				note(box, "sp-note--info", html);
+				form.remove();
+				box.closest(".rq-question").classList.add("rq-done");
+				decrement("rq-count-questions");
+			});
+		});
+	});
+});
+</script>
 {% endblock %}

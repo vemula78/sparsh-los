@@ -102,6 +102,17 @@ echo "==> Migrating (DocType JSON changes only reach the database through this)"
 # is necessary and was never sufficient on its own.
 host_cmd "docker exec -u frappe ${CONTAINER} bash -lc 'cd ${BENCH_DIR} && bench --site ${SITE} migrate'"
 
+echo "==> Linking public assets"
+# The pages load /assets/sparsh_los/css/sparsh.css, which is served from a symlink under
+# sites/assets. Nothing in install-app or migrate creates it, so a fresh bench served
+# every page unstyled and the CSS 404'd in silence -- a stylesheet that fails to load
+# looks like a page somebody never designed.
+#
+# `bench build --app sparsh_los` would create it, then exit non-zero on this stack because
+# node is not installed, which would fail the whole install for a step that had already
+# succeeded. The link is made directly instead: it needs no toolchain and is idempotent.
+host_cmd "docker exec -u frappe ${CONTAINER} bash -lc 'mkdir -p ${BENCH_DIR}/sites/assets && ln -sfn ${APP_DIR}/sparsh_los/public ${BENCH_DIR}/sites/assets/sparsh_los'"
+
 echo "==> Clearing cache"
 host_cmd "docker exec -u frappe ${CONTAINER} bash -lc 'cd ${BENCH_DIR} && bench --site ${SITE} clear-cache'"
 

@@ -2,151 +2,374 @@
 
 {% block title %}Practice{% endblock %}
 
-{% block page_content %}
+{% block head_include %}
+{# The institute's typefaces. Every stack in sparsh.css names a real fallback, so the
+   page stays readable when the server cannot reach this host -- which on the hospital
+   network is often. #}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Lato:wght@400;700&family=Roboto+Mono&display=swap">
+<link rel="stylesheet" href="/assets/sparsh_los/css/sparsh.css">
+{% endblock %}
+
+{# The masthead runs edge to edge, so the page takes over the container block rather
+   than sitting inside Bootstrap's. #}
+{% block page_container %}
 <style>
-	.sp-wrap { max-width: 720px; margin: 0 auto; }
-	.sp-task { border: 1px solid #d8dde3; border-left: 3px solid #E07B39; padding: 20px 24px; margin-bottom: 28px; }
-	.sp-eyebrow { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: #6C6C6C; margin-bottom: 6px; }
-	.sp-instruction { font-size: 17px; line-height: 1.5; margin: 8px 0 18px; }
-	.sp-response { width: 100%; min-height: 96px; padding: 10px; border: 1px solid #c7ced6; font: inherit; }
-	.sp-actions { margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
-	.sp-feedback { margin-top: 16px; padding: 12px 16px; border-left: 3px solid #1A5276; background: #F4F4F4; display: none; }
-	.sp-feedback.is-critical { border-left-color: #C0392B; }
-	.sp-feedback.is-pass { border-left-color: #1E8449; }
-	.sp-states { border-collapse: collapse; width: 100%; font-size: 14px; }
-	.sp-states th { text-align: left; background: #003366; color: #fff; padding: 8px 12px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
-	.sp-states td { padding: 8px 12px; border-top: 1px solid #e2e5e9; }
-	.sp-badge { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 2px 8px; border-radius: 2px; background: #F4F4F4; }
-	.sp-badge.is-strong { background: #1E8449; color: #fff; }
-	.sp-badge.is-due { background: #D4AC0D; color: #2C2C2C; }
-	.sp-empty { color: #6C6C6C; }
-	.sp-notice { border-left: 3px solid #D4AC0D; padding: 8px 12px; margin-bottom: 16px;
-	             background: #FBF6E3; color: #2C2C2C; }
-	.sp-step { color: #6C6C6C; font-size: 12px; margin-top: 4px; }
-	.sp-hint { border-left: 3px solid #1A5276; padding: 8px 12px; margin: 12px 0;
-	           background: #D6E8F7; color: #2C2C2C; }
-	.sp-hint-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
-	                 color: #1A5276; margin-bottom: 2px; }
+	/* Page-specific only. Colours come from the shared tokens; nothing new is defined. */
+	.sp-page .page-breadcrumbs { display: none; }
+	.sp-task-title { font-size: 22px; margin: 2px 0 4px; }
+	.sp-step { color: var(--sss-grey-mid); font-size: 13px; margin-bottom: 10px; }
+	.sp-instruction { font-size: 17px; line-height: 1.55; margin: 12px 0 18px; white-space: pre-line; }
+	.sp-label { display: block; font-weight: 700; font-size: 14px; margin-bottom: 6px; color: var(--sss-blue-deep); }
+	.sp-select {
+		font-family: var(--font-body); font-size: 15px; padding: 8px 10px;
+		border: 1px solid #C9C9C9; border-radius: var(--sss-radius);
+		background: var(--sss-white); color: var(--sss-grey-dark); max-width: 100%;
+	}
+	.sp-select:focus { outline: 2px solid var(--sss-blue-mid); outline-offset: 1px; }
+	.sp-feedback[hidden] { display: none; }
+	.sp-feedback { margin-top: 16px; margin-bottom: 0; }
+	.sp-feedback--pass { border-left-color: var(--sss-success); background: var(--sss-grey-light); }
+	.sp-guidance { border-top-color: var(--sss-blue-mid); }
+	.sp-guidance[hidden] { display: none; }
+	.sp-list { list-style: none; padding: 0; margin: 0; }
+	.sp-list li { padding: 10px 0; border-bottom: var(--sss-line); }
+	.sp-list li:last-child { border-bottom: 0; }
+	.sp-list .sp-caption { margin-top: 3px; }
+	.sp-quote { margin: 0; color: var(--sss-grey-dark); }
+	.sp-section { margin-top: var(--sss-gap-lg); }
+	.sp-section h2 { font-size: 21px; padding-bottom: 6px; border-bottom: var(--sss-rule); margin-bottom: 14px; }
+	.sp-lede { color: var(--sss-grey-mid); font-size: 14px; margin: -6px 0 12px; }
+	.sp-signed { font-size: 13px; color: var(--sss-grey-mid); margin: 0 0 var(--sss-gap-lg); }
+	.sp-skip { position: absolute; left: -999px; }
+	.sp-skip:focus { position: static; left: auto; }
 </style>
 
-<div class="sp-wrap">
-	<h1>Practice</h1>
+<div class="sp-page">
+	<a class="sp-skip" href="#sp-task-heading">Skip to today's task</a>
 
-	{% if pathway_problem %}
-	{# Set when a learner sits in two Active cohorts: the engine refuses to guess which
-	   programme they are on. Shown rather than swallowed -- it is an administrator's
-	   misconfiguration and somebody has to be told. #}
-	<div class="sp-notice">
-		Your programme assignment needs attention: {{ pathway_problem }}
-		You can still practise below.
-	</div>
-	{% endif %}
-
-	{% if next_up %}
-	<div class="sp-task">
-		<div class="sp-eyebrow">
-			{% if next_up.reason == "remediation" %}Working through an unsafe response
-			{% elif next_up.reason == "refresher" %}Keeping this current
-			{% elif next_up.reason == "consolidation" %}Consolidating
-			{% else %}Today's task{% endif %}
+	<header class="sp-masthead">
+		<div class="sp-shell">
+			<div class="sp-institute">{{ branding.institute }}</div>
+			<div class="sp-campus">WHITEFIELD, BENGALURU &middot; COMPETENCY PRACTICE</div>
 		</div>
-		<strong>{{ next_up.title or next_up.activity }}</strong>
-		{% if pathway and next_up.step %}
-		<div class="sp-step">Step {{ next_up.step }} of your assigned pathway</div>
-		{% endif %}
-		<p class="sp-instruction">{{ next_up.instruction or "" }}</p>
+	</header>
 
-		{% if next_up.hint %}
-		{# The strongest hint already issued -- including one a reviewer's Rubric verdict
-		   produced after the learner's session closed. This page is its only route to
-		   them. #}
-		<div class="sp-hint">
-			<div class="sp-hint-label">Help you have already been given{% if next_up.hint_level %} · hint {{ next_up.hint_level }}{% endif %}</div>
-			{{ next_up.hint }}
+	<main class="sp-shell" id="page-practice">
+		<h1>Practice</h1>
+		<p class="sp-signed">Signed in as {{ learner_name or learner }}. One task at a time; everything you have shown is recorded below.</p>
+
+		{% if pathway_problem %}
+		{# Set when a learner sits in two Active cohorts: the engine refuses to guess which
+		   programme they are on. Shown rather than swallowed -- it is an administrator's
+		   misconfiguration and somebody has to be told. #}
+		<div class="sp-note" role="status">
+			<strong>Your programme assignment needs attention.</strong> {{ pathway_problem }}
+			Please tell your supervisor. You can still practise below.
 		</div>
 		{% endif %}
 
-		<textarea class="sp-response" id="sp-response" placeholder="Your answer"></textarea>
-		<div class="sp-actions">
-			<button class="btn btn-primary btn-sm" id="sp-submit"
-				data-activity="{{ next_up.activity }}">Submit</button>
+		{% if next_up %}
+		<section class="sp-panel sp-panel--task" aria-labelledby="sp-task-heading">
+			<div class="sp-eyebrow">
+				{% if next_up.reason == "remediation" %}Working through an unsafe response
+				{% elif next_up.reason == "refresher" %}Keeping this current
+				{% elif next_up.reason == "consolidation" %}Consolidating
+				{% elif next_up.reason == "prerequisite" %}First, a prerequisite
+				{% else %}Today's task{% endif %}
+				{% if next_up.competency %} &middot; {{ next_up.competency }}{% endif %}
+			</div>
+			<h2 class="sp-task-title" id="sp-task-heading">{{ next_up.title or next_up.activity }}</h2>
+			{% if pathway and next_up.step %}
+			<div class="sp-step">Step {{ next_up.step }} of your assigned pathway</div>
+			{% endif %}
+			{% if next_up.retry_index %}
+			<div class="sp-step">Attempt {{ next_up.retry_index + 1 }} at this task</div>
+			{% endif %}
+
+			<p class="sp-instruction">{{ next_up.instruction or "" }}</p>
+
+			{% if next_up.hint %}
+			{# The strongest hint already issued -- including one a reviewer's Rubric verdict
+			   produced after the learner's session closed. This page is its only route to
+			   them. Nothing beyond the issued rung is ever rendered. #}
+			<div class="sp-note sp-note--info">
+				<div class="sp-eyebrow">Help you have already been given{% if next_up.hint_level %} &middot; hint {{ next_up.hint_level }}{% endif %}</div>
+				{{ next_up.hint }}
+			</div>
+			{% endif %}
+
+			<label class="sp-label" for="sp-response">Your response</label>
+			<textarea class="sp-response" id="sp-response" name="response" rows="6"
+				aria-describedby="sp-response-help"></textarea>
+			<p class="sp-caption" id="sp-response-help">Describe what you would do or say. Do not include any patient's name, number or other identifying detail.</p>
+
+			<div class="sp-actions">
+				<button type="button" class="sp-btn" id="sp-submit" data-activity="{{ next_up.activity }}">Submit response</button>
+				<button type="button" class="sp-btn sp-btn--quiet" id="sp-guidance-open"
+					aria-controls="sp-guidance" aria-expanded="false">Need expert guidance</button>
+			</div>
+
+			<div class="sp-note sp-feedback" id="sp-feedback" role="status" aria-live="polite" hidden></div>
+		</section>
+		{% else %}
+		<section class="sp-panel sp-panel--quiet" aria-labelledby="sp-task-heading">
+			<div class="sp-eyebrow">Today's task</div>
+			<h2 class="sp-task-title" id="sp-task-heading">Nothing is waiting for you right now</h2>
+			<p class="sp-muted">
+				{% if awaiting_review %}Your recent work is with a reviewer; you will see the next task once it has been judged.
+				{% elif view.competencies %}Everything you can be offered today has been recorded.
+				{% else %}No activity has been assigned to you yet. Please check with your supervisor.{% endif %}
+			</p>
+			<div class="sp-actions">
+				<button type="button" class="sp-btn sp-btn--quiet" id="sp-guidance-open"
+					aria-controls="sp-guidance" aria-expanded="false">Need expert guidance</button>
+			</div>
+		</section>
+		{% endif %}
+
+		{# Escalation route (§17 step 1). The question goes to `escalation.raise_question`,
+		   which packages the context itself; the page sends only the learner's words,
+		   their stated urgency and the activity they are looking at. #}
+		<section class="sp-panel sp-guidance" id="sp-guidance" aria-labelledby="sp-guidance-heading" hidden>
+			<div class="sp-eyebrow">Ask a reviewer</div>
+			<h2 class="sp-task-title" id="sp-guidance-heading">Need expert guidance</h2>
+			<p class="sp-lede">A named reviewer will read your question and answer it. If a caregiver is waiting on the answer, say so in the urgency.</p>
+
+			<label class="sp-label" for="sp-question">Your question</label>
+			<textarea class="sp-response" id="sp-question" name="question_text" rows="4"
+				aria-describedby="sp-question-help"></textarea>
+			<p class="sp-caption" id="sp-question-help">Describe the situation in general terms. Do not include any patient's name, number or other identifying detail.</p>
+
+			<label class="sp-label" for="sp-urgency">How soon do you need an answer?</label>
+			<select class="sp-select" id="sp-urgency" name="urgency">
+				{% for level in urgencies %}
+				<option value="{{ level }}"{% if level == default_urgency %} selected{% endif %}>{{ level }}</option>
+				{% endfor %}
+			</select>
+
+			<div class="sp-actions">
+				<button type="button" class="sp-btn" id="sp-guidance-send"
+					data-activity="{{ next_up.activity if next_up else '' }}">Send question</button>
+				<button type="button" class="sp-btn sp-btn--quiet" id="sp-guidance-cancel">Cancel</button>
+			</div>
+
+			<div class="sp-note sp-feedback" id="sp-guidance-feedback" role="status" aria-live="polite" hidden></div>
+		</section>
+
+		<div class="sp-grid sp-section">
+			<section aria-labelledby="sp-waiting-heading">
+				<h2 id="sp-waiting-heading">With a reviewer</h2>
+				{% if awaiting_review %}
+				<p class="sp-lede">Work of yours that a person has yet to judge.</p>
+				<ul class="sp-list">
+					{% for row in awaiting_review %}
+					<li>
+						<strong>{{ row.title or row.competency }}</strong>
+						<div class="sp-caption">{{ row.competency }}{% if row.attempted_at %} &middot; submitted {{ frappe.utils.format_datetime(row.attempted_at, "dd-MMM-yyyy") }}{% endif %}</div>
+					</li>
+					{% endfor %}
+				</ul>
+				{% else %}
+				<p class="sp-empty">Nothing of yours is waiting to be judged.</p>
+				{% endif %}
+			</section>
+
+			<section aria-labelledby="sp-questions-heading">
+				<h2 id="sp-questions-heading">Your open questions</h2>
+				{% if view.open_escalations %}
+				<ul class="sp-list" id="sp-open-questions">
+					{% for q in view.open_escalations %}
+					<li>
+						<p class="sp-quote">{{ q.question_text }}</p>
+						<div class="sp-caption">
+							<span class="sp-pill">{{ q.status }}</span>
+							{% if q.raised_at %} &middot; asked {{ frappe.utils.format_datetime(q.raised_at, "dd-MMM-yyyy") }}{% endif %}
+						</div>
+					</li>
+					{% endfor %}
+				</ul>
+				{% else %}
+				<p class="sp-empty" id="sp-no-questions">You have no question awaiting an answer.</p>
+				{% endif %}
+			</section>
 		</div>
 
-		<div class="sp-feedback" id="sp-feedback"></div>
-	</div>
-	{% else %}
-	<p class="sp-empty">Nothing is waiting for you right now.</p>
-	{% endif %}
+		<section class="sp-section" aria-labelledby="sp-states-heading">
+			<h2 id="sp-states-heading">What you have shown</h2>
+			{% if view.competencies %}
+			{% set pill_for = {
+				"Mastered": "sp-pill--mastered",
+				"Demonstrated": "sp-pill--demonstrated",
+				"Practising": "sp-pill--practising",
+				"Refresh Due": "sp-pill--due",
+			} %}
+			<div class="sp-scroll">
+			<table class="sp-table">
+				<thead><tr><th scope="col">Competency</th><th scope="col">State</th><th scope="col">Evidence</th><th scope="col">Last demonstrated</th></tr></thead>
+				<tbody>
+				{% for row in view.competencies %}
+					<tr>
+						<td>{{ row.competency }}</td>
+						<td><span class="sp-pill {{ pill_for.get(row.state, '') }}">{{ row.state }}</span></td>
+						<td class="sp-num">{{ row.evidence_count or 0 }}</td>
+						<td>{{ frappe.utils.format_datetime(row.last_demonstrated, "dd-MMM-yyyy") if row.last_demonstrated else "—" }}</td>
+					</tr>
+				{% endfor %}
+				</tbody>
+			</table>
+			</div>
+			{% else %}
+			<p class="sp-empty">You have not started a competency yet. Your first task is above.</p>
+			{% endif %}
+		</section>
 
-	{% if view.refreshers %}
-	<h3>Keeping current</h3>
-	<table class="sp-states">
-		<thead><tr><th>Competency</th><th>Why</th><th>Assigned</th></tr></thead>
-		<tbody>
-		{% for row in view.refreshers %}
-			<tr>
-				<td>{{ row.competency }}</td>
-				<td>{{ row.trigger_reason }}</td>
-				<td>{{ frappe.utils.format_datetime(row.assigned_on, "dd-MMM-yyyy") if row.assigned_on else "—" }}</td>
-			</tr>
-		{% endfor %}
-		</tbody>
-	</table>
-	{% endif %}
+		{% if view.refreshers %}
+		<section class="sp-section" aria-labelledby="sp-refreshers-heading">
+			<h2 id="sp-refreshers-heading">Keeping current</h2>
+			<p class="sp-lede">Competencies you have shown before that need to be shown again.</p>
+			<div class="sp-scroll">
+			<table class="sp-table">
+				<thead><tr><th scope="col">Competency</th><th scope="col">Why</th><th scope="col">Assigned</th></tr></thead>
+				<tbody>
+				{% for row in view.refreshers %}
+					<tr>
+						<td>{{ row.competency }}</td>
+						<td>{{ row.trigger_reason }}{% if row.detail %}<div class="sp-caption">{{ row.detail }}</div>{% endif %}</td>
+						<td>{{ frappe.utils.format_datetime(row.assigned_on, "dd-MMM-yyyy") if row.assigned_on else "—" }}</td>
+					</tr>
+				{% endfor %}
+				</tbody>
+			</table>
+			</div>
+		</section>
+		{% endif %}
 
-	<h3>What you have shown</h3>
-	{% if view.competencies %}
-	<table class="sp-states">
-		<thead><tr><th>Competency</th><th>State</th><th>Last demonstrated</th></tr></thead>
-		<tbody>
-		{% for row in view.competencies %}
-			<tr>
-				<td>{{ row.competency }}</td>
-				<td><span class="sp-badge {% if row.state in ('Demonstrated', 'Mastered') %}is-strong{% elif row.state == 'Refresh Due' %}is-due{% endif %}">{{ row.state }}</span></td>
-				<td>{{ frappe.utils.format_datetime(row.last_demonstrated, "dd-MMM-yyyy") if row.last_demonstrated else "—" }}</td>
-			</tr>
-		{% endfor %}
-		</tbody>
-	</table>
-	{% else %}
-	<p class="sp-empty">You have not started a competency yet.</p>
-	{% endif %}
+		<section class="sp-section" aria-labelledby="sp-certs-heading">
+			<h2 id="sp-certs-heading">Certification</h2>
+			{% if view.certifications %}
+			{# certification_state outranks certification_status: a suspended Full
+			   certificate is not a valid one, and the learner must see that. #}
+			{% set cert_pill = {"Active": "sp-pill--mastered", "Suspended": "sp-pill--due", "Revoked": "sp-pill--blocked"} %}
+			<div class="sp-scroll">
+			<table class="sp-table">
+				<thead><tr><th scope="col">Competency</th><th scope="col">Certificate</th><th scope="col">Standing</th><th scope="col">Certified on</th></tr></thead>
+				<tbody>
+				{% for row in view.certifications %}
+					<tr>
+						<td>{{ row.competency }}</td>
+						<td>{{ row.certification_status }}</td>
+						<td><span class="sp-pill {{ cert_pill.get(row.certification_state, '') }}">{{ row.certification_state }}</span></td>
+						<td>{{ frappe.utils.format_datetime(row.certified_on, "dd-MMM-yyyy") if row.certified_on else "—" }}</td>
+					</tr>
+				{% endfor %}
+				</tbody>
+			</table>
+			</div>
+			{% else %}
+			<p class="sp-empty">No certificate has been issued to you yet. A certificate is signed by a named person once a competency has been demonstrated.</p>
+			{% endif %}
+		</section>
+
+		<footer class="sp-footer">
+			<span>All care at the Institute is free of charge. This is a training record, not a clinical record.</span>
+			<span>{{ frappe.utils.format_datetime(frappe.utils.now_datetime(), "dd-MMM-yyyy") }}</span>
+		</footer>
+	</main>
 </div>
 
 <script>
 frappe.ready(function () {
-	const button = document.getElementById("sp-submit");
-	if (!button) return;
+	function show(box, text, kind) {
+		box.className = "sp-note sp-feedback" + (kind ? " " + kind : "");
+		box.textContent = text;
+		box.hidden = false;
+	}
 
-	button.addEventListener("click", function () {
-		const response = document.getElementById("sp-response").value;
-		const box = document.getElementById("sp-feedback");
-		if (!response.trim()) return;
+	// ---- the task -------------------------------------------------------------
+	const submit = document.getElementById("sp-submit");
+	if (submit) {
+		submit.addEventListener("click", function () {
+			const field = document.getElementById("sp-response");
+			const box = document.getElementById("sp-feedback");
+			const response = field.value;
+			if (!response.trim()) {
+				show(box, "Please write your response before submitting.", "");
+				field.focus();
+				return;
+			}
 
-		button.disabled = true;
-		frappe.call({
-			method: "sparsh_los.runner.submit",
-			args: { activity: button.dataset.activity, response: response },
-			callback: function (r) {
-				button.disabled = false;
-				const d = r.message || {};
-				box.style.display = "block";
-				box.className = "sp-feedback" +
-					(d.critical_error ? " is-critical" : d.outcome === "Pass" ? " is-pass" : "");
-
-				if (d.critical_error) {
-					box.textContent = d.message;
-				} else if (d.outcome === "Pass") {
-					box.textContent = "Recorded. " + (d.state ? "You are now at: " + d.state : "");
-					setTimeout(function () { window.location.reload(); }, 1400);
-				} else if (d.hint) {
-					box.textContent = d.hint;
-					document.getElementById("sp-response").value = "";
-				} else {
-					box.textContent = d.message || "Recorded.";
+			submit.disabled = true;
+			frappe.call({
+				method: "sparsh_los.runner.submit",
+				args: { activity: submit.dataset.activity, response: response },
+				callback: function (r) {
+					submit.disabled = false;
+					const d = r.message || {};
+					if (d.critical_error) {
+						show(box, d.message, "sp-note--stop");
+					} else if (d.outcome === "Pass") {
+						show(box, "Recorded." + (d.state ? " You are now at: " + d.state + "." : ""), "sp-feedback--pass");
+						setTimeout(function () { window.location.reload(); }, 1600);
+					} else if (d.hint) {
+						show(box, d.hint, "sp-note--info");
+						field.value = "";
+						field.focus();
+					} else {
+						show(box, d.message || "Recorded.", "");
+					}
+				},
+				error: function () {
+					submit.disabled = false;
+					show(box, "Your response could not be recorded. Please try again.", "sp-note--stop");
 				}
+			});
+		});
+	}
+
+	// ---- expert guidance ----------------------------------------------------------
+	const panel = document.getElementById("sp-guidance");
+	const opener = document.getElementById("sp-guidance-open");
+	const send = document.getElementById("sp-guidance-send");
+	const cancel = document.getElementById("sp-guidance-cancel");
+	const question = document.getElementById("sp-question");
+	const gbox = document.getElementById("sp-guidance-feedback");
+
+	function setOpen(open) {
+		panel.hidden = !open;
+		if (opener) opener.setAttribute("aria-expanded", open ? "true" : "false");
+		if (open) question.focus();
+		else if (opener) opener.focus();
+	}
+	if (opener) opener.addEventListener("click", function () { setOpen(true); });
+	cancel.addEventListener("click", function () { setOpen(false); });
+
+	send.addEventListener("click", function () {
+		const text = question.value;
+		if (!text.trim()) {
+			show(gbox, "Please write your question before sending.", "");
+			question.focus();
+			return;
+		}
+		send.disabled = true;
+		const args = { question_text: text, urgency: document.getElementById("sp-urgency").value };
+		if (send.dataset.activity) args.activity = send.dataset.activity;
+
+		frappe.call({
+			method: "sparsh_los.escalation.raise_question",
+			args: args,
+			callback: function (r) {
+				send.disabled = false;
+				question.value = "";
+				show(gbox, "Your question has been sent to a reviewer (reference " + (r.message || "recorded") +
+					"). It will appear under “Your open questions” and you will be answered by a named person.",
+					"sp-feedback--pass");
+				setTimeout(function () { window.location.reload(); }, 2200);
 			},
-			error: function () { button.disabled = false; }
+			error: function () {
+				send.disabled = false;
+				show(gbox, "Your question could not be sent. Please check it and try again.", "sp-note--stop");
+			}
 		});
 	});
 });

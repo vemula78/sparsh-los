@@ -209,13 +209,20 @@ def supervisor_view(competency=None):
 			}
 		)
 
-	# Where critical safety errors are occurring.
+	# Where critical safety errors are occurring. Capped at fifty rows so one bad week
+	# cannot make the page unusable -- but the cap needs its own count beside it, or a
+	# supervisor reads "50" as the total and a fifty-first safety error is invisible on
+	# the one view built to surface them.
+	CRITICAL_LIMIT = 50
 	critical = frappe.get_all(
 		"Sparsh Evidence",
 		filters={"critical_error": 1, "docstatus": 1},
 		fields=["learner", "competency", "activity", "recorded_at"],
 		order_by="creation desc",
-		limit=50,
+		limit=CRITICAL_LIMIT,
+	)
+	critical_error_count = frappe.db.count(
+		"Sparsh Evidence", {"critical_error": 1, "docstatus": 1}
 	)
 
 	# What recurring questions should trigger a content or programme change.
@@ -236,6 +243,10 @@ def supervisor_view(competency=None):
 		"ready_to_progress": ready,
 		"stuck": stuck,
 		"critical_errors": critical,
+		# The true total, and whether the list above is all of it. A supervisor must
+		# never have to infer that fifty means "fifty or more".
+		"critical_error_count": critical_error_count,
+		"critical_errors_truncated": critical_error_count > len(critical),
 		"programme_signals": programme_signals,
 		"pending_escalations": frappe.db.count(
 			"Sparsh Escalation Question", {"status": ("in", ("Open", "Routed to Human"))}

@@ -19,9 +19,43 @@ def get_context(context):
 
 	from sparsh_los import dashboard
 
+	from sparsh_los.branding import masthead
+
+	context.branding = masthead()
 	context.no_cache = 1
 	context.learner = frappe.session.user
+	context.learner_name = frappe.utils.get_fullname(frappe.session.user)
 	context.view = dashboard.learner_view()
+
+	# The learner's own work that is waiting on a person. Same predicate as
+	# `review.pending` and the programme summary, including the Reflection exclusion --
+	# a reflection is stored, not queued, so listing one here would promise a verdict
+	# nobody will give. Only the activity's title and competency travel: the row must
+	# never carry a permlevel-1 Activity field, since this page is rendered for an
+	# account that may not read Activity at all.
+	from sparsh_los.runner import NOT_SCORED_MODES
+
+	context.awaiting_review = frappe.db.sql(
+		"""
+		select act.title, act.competency, a.attempted_at
+		from `tabSparsh Attempt` a
+		inner join `tabSparsh Activity` act on act.name = a.activity
+		where a.learner = %(learner)s
+		  and a.outcome = 'Not Evaluated'
+		  and ifnull(act.evaluation_mode, '') not in %(not_scored)s
+		  and not exists (select 1 from `tabSparsh Evidence` e where e.attempt = a.name)
+		order by a.creation asc
+		""",
+		{"learner": frappe.session.user, "not_scored": NOT_SCORED_MODES},
+		as_dict=True,
+	)
+
+	# The urgency choices are the engine's, rendered from its own list so the page
+	# cannot drift from what `raise_question` accepts.
+	from sparsh_los import escalation
+
+	context.urgencies = escalation.URGENCIES
+	context.default_urgency = escalation.DEFAULT_URGENCY
 
 	# Opening this page is the learner's session. Emitted after learner_view, whose
 	# require_enrolment has already refused anyone not on the programme, so an

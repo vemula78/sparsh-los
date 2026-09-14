@@ -1,0 +1,553 @@
+{% extends "templates/web.html" %}
+
+{% block title %}Programme dashboard{% endblock %}
+
+{% block head_include %}
+{{ super() }}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Lato:wght@400;700&family=Roboto+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/assets/sparsh_los/css/sparsh.css">
+{% endblock %}
+
+{% block page_content %}
+<style>
+	/* Page-local layout only. Every colour below is a shared token; none is new. */
+	.pg-stats { display: grid; gap: 1px; background: #E3E3E3; border: var(--sss-line);
+		grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: var(--sss-gap); }
+	.pg-stat { background: var(--sss-white); padding: 12px 14px; border-left: 4px solid transparent; }
+	.pg-stat--attention { border-left-color: var(--sss-orange); }
+	.pg-stat--critical  { border-left-color: var(--sss-danger); }
+	.pg-stat .pg-stat__n { font-family: var(--font-mono); font-size: 26px; line-height: 1.1;
+		color: var(--sss-blue-deep); font-variant-numeric: tabular-nums; }
+	.pg-stat .pg-stat__l { font-size: 12px; color: var(--sss-grey-mid); margin-top: 4px; }
+	.pg-stat .pg-stat__d { font-size: 11px; color: var(--sss-grey-mid); }
+
+	.pg-nav { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; margin: 0 0 var(--sss-gap-lg); }
+	.pg-nav a { color: var(--sss-blue-mid); text-decoration: none; border-bottom: 1px solid var(--sss-gold); }
+	.pg-nav a:hover, .pg-nav a:focus-visible { color: var(--sss-blue-deep); border-bottom-width: 2px; }
+
+	.pg-section { margin-bottom: var(--sss-gap-lg); }
+	.pg-section > h2 { padding-bottom: 6px; border-bottom: var(--sss-rule); margin-bottom: 12px; }
+	.pg-lede { font-size: 14px; color: var(--sss-grey-mid); margin: 0 0 12px; }
+
+	/* Rows that need a person's attention carry a stripe, so the state reads without colour. */
+	.sp-table tr.pg-row--critical td:first-child { border-left: 4px solid var(--sss-danger); }
+	.sp-table tr.pg-row--attention td:first-child { border-left: 4px solid var(--sss-orange); }
+
+	/* Heatmap: first column stays put while the competencies scroll. */
+	.pg-heat th:first-child, .pg-heat td:first-child { position: sticky; left: 0; background: var(--sss-white); z-index: 1; }
+	.pg-heat thead th:first-child { background: var(--sss-blue-deep); }
+	.pg-heat tbody tr:nth-child(even) td:first-child { background: #FAFCFE; }
+	.pg-heat td, .pg-heat th { white-space: nowrap; }
+	.pg-heat td { text-align: center; }
+	.pg-heat td:first-child { text-align: left; }
+	.pg-heat thead th:not(:first-child) { text-align: center; }
+
+	.pg-kv { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; font-size: 14px; }
+	.pg-kv dt { color: var(--sss-grey-mid); }
+	.pg-kv dd { margin: 0; }
+	.pg-refusal { font-size: 13px; color: var(--sss-grey-dark); border-left: 3px solid var(--sss-gold);
+		padding-left: 10px; margin: 6px 0 0; }
+	.pg-refusal strong { color: var(--sss-blue-deep); }
+	.pg-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: 12px; color: var(--sss-grey-mid); margin: 8px 0 0; }
+	.pg-list { margin: 6px 0 0; padding-left: 20px; }
+	.pg-list li { margin-bottom: 4px; }
+</style>
+
+{%- set S = summary -%}
+{%- set C = compliance -%}
+
+<div class="sp-page">
+<div class="sp-masthead">
+	<div class="sp-shell">
+		<div>
+			<div class="sp-institute">{{ branding.institute }}</div>
+			<div class="sp-campus">WHITEFIELD, BENGALURU &middot; COMPETENCY TRAINING</div>
+		</div>
+		<div class="sp-campus">Generated {{ generated_at }} &middot; {{ viewer }}</div>
+	</div>
+</div>
+
+<div class="sp-shell">
+	<p class="sp-eyebrow">Supervisor and programme view</p>
+	<h1>Programme dashboard</h1>
+	<p class="pg-lede">Every figure here is read from evidence when the page loads. Where a figure cannot be counted, the reason is shown in its place.</p>
+
+	{# ------------------------------------------------------------ readiness banner #}
+	{% if pilot.can_begin %}
+	<div class="sp-note sp-note--info" role="status">
+		<strong>Pilot readiness: can begin.</strong>
+		Nothing scores automatically until {{ pilot.nothing_scores_automatically_until }}
+	</div>
+	{% else %}
+	<div class="sp-note sp-note--stop" role="status">
+		<strong>Pilot readiness: cannot begin.</strong> {{ pilot.blocking|length }} item{{ "s" if pilot.blocking|length != 1 }} blocking:
+		<ul class="pg-list">
+		{% for item in pilot.blocking %}<li>{{ item }}</li>{% endfor %}
+		</ul>
+		<p class="sp-small sp-muted" style="margin:8px 0 0">
+			Reviewers enabled: <span class="sp-num">{{ pilot.reviewers.enabled|length }}</span> of <span class="sp-num">{{ pilot.reviewers.with_the_reviewer_role|length }}</span> with the role.
+			Rules in force: <span class="sp-num">{{ pilot.rules.in_force|length }}</span>;
+			answered but not in force: <span class="sp-num">{{ pilot.rules.answered_but_not_in_force|length }}</span>;
+			no decision yet: <span class="sp-num">{{ pilot.rules.no_decision_yet|length }}</span>.
+			Suggested cohort size {{ pilot.suggested_cohort_size }}.
+		</p>
+	</div>
+	{% endif %}
+
+	{# ------------------------------------------------------------ summary tiles #}
+	<div class="pg-stats" aria-label="Programme at a glance">
+		<div class="pg-stat"><div class="pg-stat__n">{{ S.enrolled }}</div><div class="pg-stat__l">Enrolled</div><div class="pg-stat__d">accounts with the learner role</div></div>
+		<div class="pg-stat"><div class="pg-stat__n">{{ S.active_in_period }}</div><div class="pg-stat__l">Active</div><div class="pg-stat__d">last {{ S.period_days }} days</div></div>
+		<div class="pg-stat {% if cohort.stuck %}pg-stat--attention{% endif %}"><div class="pg-stat__n">{{ cohort.stuck|length }}</div><div class="pg-stat__l">Stuck</div><div class="pg-stat__d">learner-competency pairs</div></div>
+		<div class="pg-stat"><div class="pg-stat__n">{{ cohort.ready_to_progress|length }}</div><div class="pg-stat__l">Ready to progress</div><div class="pg-stat__d">Demonstrated or Mastered</div></div>
+		<div class="pg-stat {% if cohort.critical_errors %}pg-stat--critical{% endif %}"><div class="pg-stat__n">{{ cohort.critical_errors|length }}</div><div class="pg-stat__l">Critical safety errors</div><div class="pg-stat__d">recorded{% if cohort.critical_errors|length >= 50 %}, latest 50 shown{% endif %}</div></div>
+		<div class="pg-stat {% if S.attempts_awaiting_a_person %}pg-stat--attention{% endif %}"><div class="pg-stat__n">{{ S.attempts_awaiting_a_person }}</div><div class="pg-stat__l">Awaiting a person</div><div class="pg-stat__d">attempts to be judged</div></div>
+		<div class="pg-stat {% if S.open_questions %}pg-stat--attention{% endif %}"><div class="pg-stat__n">{{ S.open_questions }}</div><div class="pg-stat__l">Open questions</div><div class="pg-stat__d">all time</div></div>
+		<div class="pg-stat"><div class="pg-stat__n">{{ S.certified }}</div><div class="pg-stat__l">Certified</div><div class="pg-stat__d">learners with an Active certificate</div></div>
+	</div>
+
+	<nav class="pg-nav" aria-label="Sections">
+		<a href="#stuck">1. Who is stuck</a>
+		<a href="#heatmap">2. Competency heatmap</a>
+		<a href="#analytics">3. Programme analytics</a>
+		<a href="#compliance">4. Certification and compliance</a>
+	</nav>
+
+	{# ============================================================ 1. STUCK #}
+	<section class="pg-section" id="stuck">
+		<h2>1. Who is stuck, and why</h2>
+		<p class="pg-lede">Each row carries the reason, so a supervisor knows what to do rather than what the threshold was.</p>
+
+		<div class="sp-panel sp-panel--task">
+			<h3>Stuck</h3>
+			{% if cohort.stuck %}
+			<div class="sp-scroll">
+			<table class="sp-table">
+				<thead><tr><th>Learner</th><th>Competency</th><th>State</th><th>Reason</th><th>Assisted passes</th><th>Failures</th><th>Partials</th><th>Last seen</th></tr></thead>
+				<tbody>
+				{% for row in cohort.stuck %}
+				<tr class="pg-row--attention">
+					<td>{{ row.learner }}</td>
+					<td>{{ row.competency }}</td>
+					<td>{% if row.state %}<span class="sp-pill {{ pill_for_state.get(row.state, '') }}">{{ row.state }}</span>{% else %}<span class="sp-empty">no evidence yet</span>{% endif %}</td>
+					<td><strong>{{ row.reason }}</strong></td>
+					<td class="sp-num">{{ row.assisted_passes }}</td>
+					<td class="sp-num">{{ row.failures }}</td>
+					<td class="sp-num">{{ row.partial_results }}</td>
+					<td>{% if row.last_demonstrated %}{{ fmt_date(row.last_demonstrated) }} <span class="sp-caption">demonstrated</span>{% elif row.last_attempt %}{{ fmt_datetime(row.last_attempt) }} <span class="sp-caption">attempt</span>{% else %}<span class="sp-empty">never</span>{% endif %}</td>
+				</tr>
+				{% endfor %}
+				</tbody>
+			</table>
+			</div>
+			{% else %}
+			<p class="sp-empty">Nobody meets the stuck criteria: no learner is at Practising with three or more pieces of evidence, and none has three failing attempts without evidence.</p>
+			{% endif %}
+		</div>
+
+		<div class="sp-grid">
+			<div class="sp-panel">
+				<h3>Ready to progress</h3>
+				{% if cohort.ready_to_progress %}
+				<div class="sp-scroll">
+				<table class="sp-table">
+					<thead><tr><th>Learner</th><th>Competency</th><th>State</th><th>Last demonstrated</th></tr></thead>
+					<tbody>
+					{% for row in cohort.ready_to_progress %}
+					<tr>
+						<td>{{ row.learner }}</td>
+						<td>{{ row.competency }}</td>
+						<td><span class="sp-pill {{ pill_for_state.get(row.state, '') }}">{{ row.state }}</span></td>
+						<td>{{ fmt_date(row.last_demonstrated) or "—" }}</td>
+					</tr>
+					{% endfor %}
+					</tbody>
+				</table>
+				</div>
+				{% else %}
+				<p class="sp-empty">No learner has reached Demonstrated or Mastered on any competency.</p>
+				{% endif %}
+			</div>
+
+			<div class="sp-panel">
+				<h3>Critical safety errors</h3>
+				<p class="sp-small sp-muted">A safety error blocks the learner until a reviewer clears it; performing well afterwards does not.</p>
+				{% if cohort.critical_errors %}
+				<div class="sp-scroll">
+				<table class="sp-table">
+					<thead><tr><th>Learner</th><th>Competency</th><th>Activity</th><th>Recorded</th></tr></thead>
+					<tbody>
+					{% for row in cohort.critical_errors %}
+					<tr class="pg-row--critical">
+						<td>{{ row.learner }}</td>
+						<td>{{ row.competency }}</td>
+						<td>{{ row.activity or "—" }}</td>
+						<td>{{ fmt_datetime(row.recorded_at) or "—" }}</td>
+					</tr>
+					{% endfor %}
+					</tbody>
+				</table>
+				</div>
+				{% else %}
+				<p class="sp-empty">No critical error has been recorded against any learner.</p>
+				{% endif %}
+			</div>
+		</div>
+
+		<div class="sp-grid">
+			<div class="sp-panel sp-panel--quiet">
+				<h3>Questions waiting on a person</h3>
+				<p><span class="sp-num" style="font-size:22px">{{ cohort.pending_escalations }}</span> <span class="sp-muted">open or routed to a human</span></p>
+				{% if not cohort.pending_escalations %}<p class="sp-empty">No learner is waiting on an answer.</p>{% endif %}
+			</div>
+			<div class="sp-panel sp-panel--quiet">
+				<h3>State distribution</h3>
+				{% if cohort.state_distribution %}
+				<dl class="pg-kv">
+				{% for state, n in cohort.state_distribution.items() %}
+					<dt><span class="sp-pill {{ pill_for_state.get(state, '') }}">{{ state }}</span></dt><dd class="sp-num">{{ n }}</dd>
+				{% endfor %}
+				</dl>
+				<p class="sp-caption">Learner-competency pairs, across {{ cohort.learners }} learner{{ "s" if cohort.learners != 1 }} with a state.</p>
+				{% else %}
+				<p class="sp-empty">No Mastery State exists yet: no learner has produced evidence.</p>
+				{% endif %}
+			</div>
+		</div>
+
+		<div class="sp-panel">
+			<h3>Signals for the programme</h3>
+			<p class="sp-small sp-muted">Learner questions a reviewer classified as needing a rule or curriculum change.</p>
+			{% if cohort.programme_signals %}
+			<div class="sp-scroll">
+			<table class="sp-table">
+				<thead><tr><th>Disposition</th><th>Activity</th><th>Reason raised</th><th>Question</th></tr></thead>
+				<tbody>
+				{% for row in cohort.programme_signals %}
+				<tr><td><strong>{{ row.disposition }}</strong></td><td>{{ row.activity or "—" }}</td><td>{{ row.escalation_reason or "—" }}</td><td>{{ row.question_text }}</td></tr>
+				{% endfor %}
+				</tbody>
+			</table>
+			</div>
+			{% else %}
+			<p class="sp-empty">No answered question has been marked as a source-of-truth update or curriculum change.</p>
+			{% endif %}
+		</div>
+	</section>
+
+	{# ============================================================ 2. HEATMAP #}
+	<section class="pg-section" id="heatmap">
+		<h2>2. Competency heatmap</h2>
+		<p class="pg-lede">Learners down, competencies across. Each cell holds a mastery state, never a score.</p>
+		<div class="sp-panel">
+			{% if heatmap.rows %}
+			<div class="sp-scroll">
+			<table class="sp-table pg-heat">
+				<thead><tr><th scope="col">Learner</th>{% for comp in heatmap.competencies %}<th scope="col">{{ comp }}</th>{% endfor %}</tr></thead>
+				<tbody>
+				{% for learner, cells in heatmap.rows.items()|sort %}
+				<tr>
+					<th scope="row" style="font-weight:600;color:var(--sss-grey-dark)">{{ learner }}</th>
+					{% for comp in heatmap.competencies %}
+					{% set st = cells.get(comp) %}
+					<td>{% if st %}<span class="sp-pill {{ pill_for_state.get(st, '') }}">{{ st }}</span>{% else %}<span class="sp-caption" aria-label="no state">·</span>{% endif %}</td>
+					{% endfor %}
+				</tr>
+				{% endfor %}
+				</tbody>
+			</table>
+			</div>
+			<div class="pg-legend" aria-label="Legend">
+				<span><span class="sp-pill sp-pill--mastered">Mastered</span></span>
+				<span><span class="sp-pill sp-pill--demonstrated">Demonstrated</span></span>
+				<span><span class="sp-pill sp-pill--practising">Practising</span></span>
+				<span><span class="sp-pill sp-pill--due">Refresh Due</span></span>
+				<span><span class="sp-pill">Exploring / Not Started</span></span>
+				<span>· &nbsp;no Mastery State: the learner has produced no evidence on this competency</span>
+			</div>
+			{% else %}
+			<p class="sp-empty">The heatmap is empty because no learner holds a Mastery State on any competency. A state appears once evidence is recorded.</p>
+			{% endif %}
+		</div>
+	</section>
+
+	{# ============================================================ 3. ANALYTICS #}
+	<section class="pg-section" id="analytics">
+		<h2>3. Programme analytics</h2>
+		<p class="pg-lede">Reporting window: the last <span class="sp-num">{{ S.period_days }}</span> days. Position figures (pathway completion, backlog) are not windowed.</p>
+
+		<div class="sp-grid">
+			{# ---- inactivity #}
+			<div class="sp-panel">
+				<h3>Inactivity</h3>
+				{% set I = S.inactivity %}
+				{% if I.inactive is none %}
+				<p class="pg-refusal"><strong>Not counted.</strong> {{ I.reason }}</p>
+				{% else %}
+				<dl class="pg-kv">
+					<dt>Inactive in period</dt><dd><span class="sp-num">{{ I.inactive }}</span> of <span class="sp-num">{{ I.enrolled }}</span> enrolled{% if I.proportion is not none %} ({{ fmt_percent(I.proportion) }}){% endif %}</dd>
+					<dt>Seen but did no work</dt><dd><span class="sp-num">{{ I.inactive_with_event_in_period }}</span> <span class="sp-caption">an event but no attempt in the period</span></dd>
+				</dl>
+				{% if I.learners %}
+				<div class="sp-scroll" style="margin-top:10px">
+				<table class="sp-table">
+					<thead><tr><th>Learner</th><th>Last activity</th><th>Source</th></tr></thead>
+					<tbody>
+					{% for row in I.learners %}
+					<tr class="pg-row--attention">
+						<td>{{ row.learner }}</td>
+						<td>{% if row.last_activity %}{{ fmt_datetime(row.last_activity) }}{% else %}<span class="sp-empty">never seen</span>{% endif %}</td>
+						<td>{{ row.source or "—" }}</td>
+					</tr>
+					{% endfor %}
+					</tbody>
+				</table>
+				</div>
+				{% else %}
+				<p class="sp-empty">Every enrolled learner made an attempt in the period.</p>
+				{% endif %}
+				{% endif %}
+			</div>
+
+			{# ---- refreshers #}
+			<div class="sp-panel">
+				<h3>Refresher participation</h3>
+				{% set R = S.refreshers %}
+				<dl class="pg-kv">
+					<dt>Issued in period</dt><dd class="sp-num">{{ R.issued }}</dd>
+					<dt>Completed in period</dt><dd class="sp-num">{{ R.completed }}</dd>
+					<dt>Repeated</dt><dd><span class="sp-num">{{ R.repeated }}</span> <span class="sp-caption">a second refresher on the same competency</span></dd>
+					<dt>Open now</dt><dd class="sp-num">{{ R.open_now }}</dd>
+					<dt>Cancelled in period</dt><dd class="sp-num">{{ R.cancelled_in_period }}</dd>
+					<dt>Completed, undated</dt><dd><span class="sp-num">{{ R.completed_without_completion_date }}</span> <span class="sp-caption">no completion stamp, so placed in no period</span></dd>
+					<dt>Overdue</dt><dd>{% if R.overdue is none %}<em>undefined</em>{% else %}<span class="sp-num">{{ R.overdue }}</span>{% endif %}</dd>
+				</dl>
+				{% if R.overdue is none %}
+				<p class="pg-refusal"><strong>Overdue is not a count.</strong> {{ R.overdue_undefined_because }}</p>
+				{% endif %}
+				<p class="sp-caption" style="margin-top:8px">Issued and completed are counted on their own dates and are not a numerator and denominator of each other.</p>
+			</div>
+
+			{# ---- escalation turnaround #}
+			<div class="sp-panel">
+				<h3>Escalation turnaround</h3>
+				{% set E = S.escalation_turnaround %}
+				<dl class="pg-kv">
+					<dt>Answered in period</dt><dd class="sp-num">{{ E.answered_in_period }}</dd>
+					<dt>Median time to answer</dt><dd>{% if E.median_hours is none %}<em>undefined</em>{% else %}<span class="sp-num">{{ E.median_hours }}</span> hours{% endif %}</dd>
+					<dt>Answered without a raised time</dt><dd class="sp-num">{{ E.answered_without_raised_at }}</dd>
+					<dt>Answered before raised</dt><dd><span class="sp-num">{{ E.answered_before_raised }}</span> <span class="sp-caption">clocks disagree, not a real interval</span></dd>
+					<dt>Still open, raised in period</dt><dd class="sp-num">{{ E.still_open_raised_in_period }}</dd>
+				</dl>
+				{% if E.median_hours is none %}
+				<p class="pg-refusal"><strong>No median.</strong> {{ E.median_undefined_because }}</p>
+				{% endif %}
+			</div>
+
+			{# ---- pathway completion #}
+			<div class="sp-panel">
+				<h3>Pathway completion</h3>
+				{% set P = S.pathway_completion %}
+				<dl class="pg-kv">
+					<dt>Active cohorts</dt><dd><span class="sp-num">{{ P.active_cohorts }}</span>{% if P.active_cohorts_without_active_pathway %} <span class="sp-caption">{{ P.active_cohorts_without_active_pathway }} without an Active pathway, assigning nothing</span>{% endif %}</dd>
+					<dt>Learners assigned</dt><dd><span class="sp-num">{{ P.learners_assigned }}</span>{% if P.learners_in_more_than_one_active_cohort %} <span class="sp-caption">{{ P.learners_in_more_than_one_active_cohort }} in more than one Active cohort</span>{% endif %}</dd>
+					<dt>Steps completed</dt><dd><span class="sp-num">{{ P.steps_completed }}</span> of <span class="sp-num">{{ P.steps_assigned }}</span> assigned{% if P.proportion is not none %} ({{ fmt_percent(P.proportion) }}){% endif %}</dd>
+					<dt>Passed with help only</dt><dd><span class="sp-num">{{ P.steps_passed_assisted_only }}</span> <span class="sp-caption">credited, but does not complete the step</span></dd>
+					<dt>Completed every step</dt><dd class="sp-num">{{ P.learners_completed_all_steps }}</dd>
+				</dl>
+				{% if P.proportion is none %}
+				<p class="pg-refusal"><strong>No completion rate.</strong> {{ P.reason }}</p>
+				{% endif %}
+				{% if P.by_pathway %}
+				<div class="sp-scroll" style="margin-top:10px">
+				<table class="sp-table">
+					<thead><tr><th>Pathway</th><th>Learners</th><th>Steps completed</th><th>Steps assigned</th></tr></thead>
+					<tbody>
+					{% for name, b in P.by_pathway.items() %}
+					<tr><td>{{ name }}</td><td class="sp-num">{{ b.learners }}</td><td class="sp-num">{{ b.steps_completed }}</td><td class="sp-num">{{ b.steps_assigned }}</td></tr>
+					{% endfor %}
+					</tbody>
+				</table>
+				</div>
+				{% endif %}
+			</div>
+		</div>
+
+		{# ---- attempts by competency #}
+		<div class="sp-panel">
+			<h3>Attempts by competency</h3>
+			{% set A = S.attempts_by_competency %}
+			<p class="sp-small sp-muted"><span class="sp-num">{{ A.attempts }}</span> attempts in the period{% if A.unattributed %}; <span class="sp-num">{{ A.unattributed }}</span> on an activity with no competency or no longer existing, counted here so the rows still sum to the total{% endif %}.</p>
+			{% if A.by_competency %}
+			<div class="sp-scroll">
+			<table class="sp-table">
+				<thead><tr><th>Competency</th><th>Attempts</th><th>Retries</th><th>Assisted</th><th>Critical errors</th><th>Hint levels</th><th>Outcomes</th></tr></thead>
+				<tbody>
+				{% for comp, b in A.by_competency.items() %}
+				<tr class="{% if b.critical_errors %}pg-row--critical{% endif %}">
+					<td>{{ comp }}</td>
+					<td class="sp-num">{{ b.attempts }}</td>
+					<td class="sp-num">{{ b.retries }}</td>
+					<td class="sp-num">{{ b.assisted }}</td>
+					<td class="sp-num">{{ b.critical_errors }}</td>
+					<td class="sp-small">{% for lvl, n in b.hint_levels.items()|sort %}L{{ lvl }}: <span class="sp-num">{{ n }}</span>{% if not loop.last %} &middot; {% endif %}{% endfor %}</td>
+					<td class="sp-small">{% for o, n in b.outcomes.items()|sort %}{{ o }}: <span class="sp-num">{{ n }}</span>{% if not loop.last %} &middot; {% endif %}{% endfor %}</td>
+				</tr>
+				{% endfor %}
+				</tbody>
+			</table>
+			</div>
+			{% else %}
+			<p class="sp-empty">No attempt was made on any competency in the period.</p>
+			{% endif %}
+		</div>
+
+		<div class="sp-grid">
+			{# ---- gaps and state changes #}
+			<div class="sp-panel">
+				<h3>Most common gap</h3>
+				{% if S.most_common_gap %}
+				<p><strong>{{ S.most_common_gap }}</strong> <span class="sp-muted">— the competency most learners are short of demonstrating</span></p>
+				<dl class="pg-kv">
+				{% for comp, n in S.gaps.items() %}<dt>{{ comp }}</dt><dd class="sp-num">{{ n }}</dd>{% endfor %}
+				</dl>
+				<p class="sp-caption">Learner-competency pairs below Demonstrated.</p>
+				{% else %}
+				<p class="sp-empty">No gap can be named: no learner holds a state short of Demonstrated.</p>
+				{% endif %}
+			</div>
+
+			<div class="sp-panel">
+				<h3>Mastery state changes</h3>
+				{% set X = S.competency_state_changes %}
+				<p class="sp-small sp-muted"><span class="sp-num">{{ X.events }}</span> transitions in the period{% if X.unparsed %}; <span class="sp-num">{{ X.unparsed }}</span> could not be read and are excluded from the rows below{% endif %}.</p>
+				{% if X.by_competency %}
+				<div class="sp-scroll">
+				<table class="sp-table">
+					<thead><tr><th>Competency</th><th>Changes</th><th>Improved</th><th>Regressed</th><th>Lateral</th></tr></thead>
+					<tbody>
+					{% for comp, b in X.by_competency.items() %}
+					<tr><td>{{ comp }}</td><td class="sp-num">{{ b.changes }}</td><td class="sp-num">{{ b.improved }}</td><td class="sp-num">{{ b.regressed }}</td><td class="sp-num">{{ b.lateral }}</td></tr>
+					{% endfor %}
+					</tbody>
+				</table>
+				</div>
+				{% else %}
+				<p class="sp-empty">No mastery state changed in the period.</p>
+				{% endif %}
+			</div>
+		</div>
+
+		{# ---- no-model-call share #}
+		<div class="sp-panel sp-panel--quiet">
+			<h3>Share of interactions needing no model call</h3>
+			{% set M = S.no_model_call_share %}
+			<p class="sp-small sp-muted">Design target {{ M.target }}. Two independent readings; both are shown and neither is preferred.</p>
+			{% if M.share_undefined_because %}
+			<p class="pg-refusal"><strong>No share.</strong> {{ M.share_undefined_because }}</p>
+			{% else %}
+			<dl class="pg-kv">
+				<dt>By evaluation mode</dt><dd><span class="sp-num">{{ M.by_mode.numerator }}</span> of <span class="sp-num">{{ M.by_mode.denominator }}</span>{% if M.by_mode.share is not none %} ({{ fmt_percent(M.by_mode.share) }}){% endif %}</dd>
+				<dt>By model ledger</dt><dd><span class="sp-num">{{ M.by_ledger.numerator }}</span> of <span class="sp-num">{{ M.by_ledger.denominator }}</span>{% if M.by_ledger.share is not none %} ({{ fmt_percent(M.by_ledger.share) }}){% else %} <em>undefined: more recorded model interactions than attempts</em>{% endif %} <span class="sp-caption">{{ M.by_ledger.model_interactions_in_period }} model interaction(s) recorded</span></dd>
+				<dt>Unknown activity</dt><dd class="sp-num">{{ M.attempts_on_unknown_activity }}</dd>
+				<dt>Readings agree</dt><dd>{% if M.readings_agree %}Yes{% else %}<strong>No</strong>{% endif %}</dd>
+			</dl>
+			{% if M.disagreement %}<p class="pg-refusal"><strong>Disagreement.</strong> {{ M.disagreement }}</p>{% endif %}
+			{% endif %}
+		</div>
+	</section>
+
+	{# ============================================================ 4. COMPLIANCE #}
+	<section class="pg-section" id="compliance">
+		<h2>4. Certification and compliance</h2>
+		<p class="pg-lede">Nothing here certifies anybody. It reads the certificates people issued against the readiness the evidence supports.</p>
+
+		<div class="pg-stats" aria-label="Compliance counts">
+			{% for bucket, n in C.counts.items() %}
+			<div class="pg-stat {% if bucket == 'Not yet ready' and n %}pg-stat--attention{% endif %}">
+				<div class="pg-stat__n">{{ n }}</div>
+				<div class="pg-stat__l"><span class="sp-pill {{ pill_for_compliance.get(bucket, '') }}">{{ bucket }}</span></div>
+			</div>
+			{% endfor %}
+		</div>
+
+		<div class="sp-panel">
+			<h3>Learners by competency</h3>
+			{% if C.rows %}
+			<div class="sp-scroll">
+			<table class="sp-table">
+				<thead><tr><th>Learner</th><th>Competency</th><th>Status</th><th>Why</th><th>Evidence</th><th>Signed off</th><th>Renewal</th><th>Refresher</th></tr></thead>
+				<tbody>
+				{% for row in C.rows %}
+				<tr class="{% if row.compliance_status == 'Not yet ready' %}{% if row.blocking_evidence %}pg-row--critical{% else %}pg-row--attention{% endif %}{% endif %}">
+					<td>{{ row.learner }}</td>
+					<td>{{ row.competency }}</td>
+					<td><span class="sp-pill {{ pill_for_compliance.get(row.compliance_status, '') }}">{{ row.compliance_status }}</span></td>
+					<td><strong>{{ row.verdict }}</strong><br><span class="sp-small">{{ row.reason }}</span>{% if row.blocking_evidence %}<br><span class="sp-caption">Blocking evidence: {{ row.blocking_evidence|join(", ") }}</span>{% endif %}</td>
+					<td class="sp-small"><span class="sp-num">{{ row.evidence.evidence_count }}</span> pieces &middot; <span class="sp-num">{{ row.evidence.independent_passes }}</span> unaided &middot; <span class="sp-num">{{ row.evidence.distinct_activities }}</span> activities<br><span class="sp-caption">state: {{ row.state }}{% if row.last_demonstrated %} &middot; last {{ fmt_date(row.last_demonstrated) }}{% endif %}</span></td>
+					<td class="sp-small">{% if row.sign_off %}{{ row.sign_off.certified_by }}<br>{{ fmt_date(row.sign_off.certified_on) or "—" }} &middot; {{ row.sign_off.certification_status }} / {{ row.sign_off.certification_state }}{% if not row.sign_off.version_known %}<br><span class="sp-caption">certificate version not recorded</span>{% endif %}{% else %}<span class="sp-empty">no standing certificate</span>{% endif %}</td>
+					<td class="sp-small">{% if row.renewal_due %}{{ fmt_date(row.renewal_due) }}{% elif row.sign_off %}<em>{{ row.renewal_policy }}</em>{% else %}—{% endif %}</td>
+					<td class="sp-small">{% if row.open_refresher %}<span class="sp-pill sp-pill--due">open</span> {{ row.open_refresher.trigger_reason }}{% elif row.refresher_due %}due {{ fmt_date(row.refresher_due) }}{% else %}<span class="sp-caption">no interval set, or nothing demonstrated</span>{% endif %}</td>
+				</tr>
+				{% endfor %}
+				</tbody>
+			</table>
+			</div>
+			{% else %}
+			<p class="sp-empty">No learner-competency pair is in scope: nobody holds a Mastery State or a certification record yet.</p>
+			{% endif %}
+		</div>
+
+		<div class="sp-grid">
+			<div class="sp-panel">
+				<h3>By cohort</h3>
+				{% if C.by_cohort %}
+				<div class="sp-scroll">
+				<table class="sp-table">
+					<thead><tr><th>Cohort</th><th>Pairs</th><th>Certified</th><th>Renewal due</th><th>Pending</th><th>Not ready</th><th>Certified rate</th></tr></thead>
+					<tbody>
+					{% for name, b in C.by_cohort.items() %}
+					<tr>
+						<td>{% if name in (None, "None") %}<span class="sp-empty">no Active cohort</span>{% else %}{{ name }}{% endif %}</td>
+						<td class="sp-num">{{ b.pairs }}</td>
+						<td class="sp-num">{{ b["Certified"] }}</td>
+						<td class="sp-num">{{ b["Renewal due"] }}</td>
+						<td class="sp-num">{{ b["Pending sign-off"] }}</td>
+						<td class="sp-num">{{ b["Not yet ready"] }}</td>
+						<td>{% if b.certified_rate is none %}<em>undefined</em>{% else %}<span class="sp-num">{{ b["Certified"] }}</span>/<span class="sp-num">{{ b.pairs }}</span> ({{ fmt_percent(b.certified_rate) }}){% endif %}</td>
+					</tr>
+					{% endfor %}
+					</tbody>
+				</table>
+				</div>
+				<p class="sp-caption">The denominator is every pair in scope for the cohort, so a learner who has not started counts against the rate.</p>
+				{% else %}
+				<p class="sp-empty">No pairs to group: nothing is in scope.</p>
+				{% endif %}
+			</div>
+			<div class="sp-panel">
+				<h3>Certificates by month</h3>
+				{% if C.by_period %}
+				<table class="sp-table">
+					<thead><tr><th>Month</th><th>Issued</th><th>Revoked</th></tr></thead>
+					<tbody>
+					{% for period, b in C.by_period.items() %}
+					<tr><td>{{ period }}</td><td class="sp-num">{{ b.issued }}</td><td class="sp-num">{{ b.revoked }}</td></tr>
+					{% endfor %}
+					</tbody>
+				</table>
+				{% else %}
+				<p class="sp-empty">No certificate has been issued.</p>
+				{% endif %}
+			</div>
+		</div>
+	</section>
+
+	<div class="sp-footer">
+		<span>Derived at read time from Evidence, Mastery State and Certification Records. Nothing on this page is stored.</span>
+		<span>Generated {{ generated_at }}</span>
+	</div>
+</div>
+</div>
+{% endblock %}
