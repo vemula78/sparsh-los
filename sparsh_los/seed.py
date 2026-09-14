@@ -88,6 +88,187 @@ def load_matrix(force=False):
 	return created, skipped
 
 
+# His answer to "which rules govern which competency", transcribed from the decisions
+# document. Structural, not clinical: it says which rule the engine must hold a
+# competency to, and he wrote it out per competency. Two of the items he lists have no
+# matrix row of their own -- "Approved pledge co-creation principles" and "Preservation
+# of S episode history" -- and are recorded in COMPETENCY_RULES_UNMATCHED rather than
+# invented as rules.
+COMPETENCY_RULES = {
+	"SSP-DOC": ["IMMUTABLE-BASELINE", "MISSING-DATA", "PARTIAL-ACHIEVEMENT"],
+	"SSP-PLEDGE": ["S-MODIFIER", "70-CONFIDENCE-RULE"],
+	"SSP-RISK": [
+		"RISK-LEVEL-1-DEFINITION",
+		"RISK-LEVEL-2-DEFINITION",
+		"RISK-LEVEL-3-DEFINITION",
+		"RISK-LEVEL-4-DEFINITION",
+	],
+	"SSP-SCOPE": [
+		"RED-FLAG-SYMPTOMS-AND-REFERRAL",
+		"BP-HANDLING-AND-ESCALATION",
+		"HYPOGLYCAEMIA-RESPONSE-SCOPE",
+		"MEDICATION-QUESTIONS",
+	],
+}
+
+# Named in his answer, with no matrix row to link. Reported, never invented.
+COMPETENCY_RULES_UNMATCHED = {
+	"SSP-DOC": ["Preservation of S episode history"],
+	"SSP-PLEDGE": ["Approved pledge co-creation principles",
+				   "Relevant topic-specific guidance only when applicable to that case"],
+}
+
+
+@frappe.whitelist()
+def link_competency_rules():
+	"""Attach the rules the programme owner says govern each competency.
+
+	Until now every competency had no rule linked at all, which is the one configuration
+	that walks through the validation gate: `_rule_is_validated` returns True when
+	nothing is linked, so a competency governed by nothing scored as freely as one
+	governed by an approved rule. His mapping closes that.
+
+	Links the current, non-superseded version of each rule. Re-running is safe: a link
+	that already exists is left alone rather than duplicated.
+	"""
+	linked, missing_rule, missing_competency, already = [], [], [], []
+
+	for competency_id, rule_ids in COMPETENCY_RULES.items():
+		competency = frappe.db.get_value("Sparsh Competency", {"competency_id": competency_id}, "name")
+		if not competency:
+			missing_competency.append(competency_id)
+			continue
+
+		doc = frappe.get_doc("Sparsh Competency", competency)
+		existing = {row.rule for row in (doc.linked_rules or [])}
+
+		for rule_id in rule_ids:
+			rule = frappe.db.get_value(
+				"Sparsh Source of Truth Rule",
+				{"rule_id": rule_id, "status": ("!=", "Superseded")},
+				"name",
+				order_by="version desc",
+			)
+			if not rule:
+				missing_rule.append(f"{competency_id}:{rule_id}")
+				continue
+			if rule in existing:
+				already.append(f"{competency_id}:{rule_id}")
+				continue
+			doc.append("linked_rules", {"rule": rule})
+			linked.append(f"{competency_id}:{rule_id}")
+
+		doc.save(ignore_permissions=True)
+
+	frappe.db.commit()
+
+	return {
+		"linked": linked,
+		"already_linked": already,
+		"rule_not_found": missing_rule,
+		"competency_not_found": missing_competency,
+		# He names these as governing rules; the matrix has no row for them, so there is
+		# nothing to link and nothing may be invented in their place.
+		"named_but_not_in_the_matrix": COMPETENCY_RULES_UNMATCHED,
+	}
+
+
+@frappe.whitelist()
+def load_matrix_decisions():
+	"""Apply the programme owner's completed matrix to rules already seeded.
+
+	He returned the matrix with ten Programme Owner Decisions filled and dated. Six of
+	those rewrote the candidate statement materially -- Level 4 is now a permanent
+	survivor category rather than an open question about acute states, and S is a
+	Special *coaching* modifier where our seeded text said "special/surgical", an
+	assumption his handover note explicitly retires.
+
+	A material rewrite gets a **new version that supersedes the old one**, never an edit.
+	Overwriting would erase what the engine was previously configured to believe, and
+	the controller's supersession path also marks every learner judged against the old
+	wording Refresh Due -- which is exactly right when the rule they were judged against
+	has changed.
+
+	Nothing here sets `status = "Validated"`. His matrix says Validated and this function
+	is a script: the rule requires a named owner, and a `Sparsh Source of Truth Rule`
+	names its owner by `User`, which he does not yet have on this site. The approved
+	wording and the effective date are loaded so nothing is lost and nothing is retyped;
+	the last step is a person with an account flipping the status. What is missing is
+	reported rather than assumed.
+	"""
+	applied, superseded, skipped, ready = [], [], [], []
+
+	for row in _rows():
+		if not row.get("approved_statement"):
+			skipped.append(row["rule_id"])
+			continue
+
+		current = frappe.db.get_value(
+			"Sparsh Source of Truth Rule",
+			{"rule_id": row["rule_id"], "status": ("!=", "Superseded")},
+			["name", "version", "rule_statement", "approved_statement"],
+			as_dict=True,
+			order_by="version desc",
+		)
+		if not current:
+			skipped.append(row["rule_id"])
+			continue
+
+		if current.approved_statement:
+			# Already carries an answer. Re-running must not rewrite a decision.
+			ready.append(row["rule_id"])
+			continue
+
+		if row.get("supersedes_previous"):
+			successor = frappe.new_doc("Sparsh Source of Truth Rule")
+			successor.rule_id = row["rule_id"]
+			successor.version = (current.version or 1) + 1
+			successor.rule_statement = row["rule_statement"]
+			successor.approved_statement = row["approved_statement"]
+			successor.applies_to = row["applies_to"]
+			successor.source = row["source"]
+			successor.criticality = row["criticality"]
+			successor.automation_status = row["automation_status"]
+			successor.notes = row["notes"]
+			successor.source_criticality = row.get("source_criticality")
+			successor.source_status = row.get("source_status")
+			successor.source_automation_status = row.get("source_automation_status")
+			successor.effective_date = row.get("effective_date")
+			successor.supersedes = current.name
+			successor.status = "Draft"
+			successor.insert(ignore_permissions=True)
+			superseded.append(f"{row['rule_id']} v{current.version} -> v{successor.version}")
+		else:
+			frappe.db.set_value(
+				"Sparsh Source of Truth Rule", current.name,
+				{
+					"approved_statement": row["approved_statement"],
+					"effective_date": row.get("effective_date"),
+					"source_status": row.get("source_status"),
+					"source_criticality": row.get("source_criticality"),
+					"source_automation_status": row.get("source_automation_status"),
+				},
+				update_modified=False,
+			)
+			applied.append(row["rule_id"])
+
+	frappe.db.commit()
+
+	return {
+		"decisions_applied": applied,
+		"superseded_with_new_version": superseded,
+		"already_carried_a_decision": ready,
+		"no_decision_in_the_matrix": skipped,
+		# The one thing standing between these and Validated.
+		"awaiting_before_validation": (
+			"A rule may only be Validated with a named owner. The programme owner has no "
+			"User account on this site, so the owner cannot be recorded and the status is "
+			"left Draft. Create the account, then set the status on each rule that carries "
+			"an approved statement."
+		),
+	}
+
+
 @frappe.whitelist()
 def matrix_status():
 	"""How much of the matrix is still waiting on the programme owner.

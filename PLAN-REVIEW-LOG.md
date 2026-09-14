@@ -1627,3 +1627,76 @@ dying in `cleanup` after every check had passed. Post-run queue depth is now 16�
 
 `./scripts/install_verify.sh`, full path including `migrate` and five patches: exit 0,
 `RESULT passed=143 failed=0`.
+
+---
+
+## Phase 4 begins — the programme owner's decisions, 14-Sep-2026
+
+He returned all nine answers, a completed Source-of-Truth Matrix and a handover note. **Ten rows
+now carry a Programme Owner Decision; seven are marked Validated and dated.** The matrix gained an
+eighteenth row he wrote himself, `S Modifier data model`.
+
+### What was applied
+
+| Action | Rules |
+|---|---|
+| **Superseded with a new version** — his wording materially rewrote the candidate | Risk Level 4, S modifier, Red-flag symptoms and referral, BP handling and escalation, Hypoglycaemia response scope, Medication questions |
+| Decision recorded in place — candidate unchanged | the three MVP competency rows |
+| Already carried a decision on arrival | S Modifier data model |
+| No decision yet | Levels 1–3, the 70% rule, Immutable baseline, Missing data, Partial achievement, Oils/fats |
+
+**Superseded, never edited.** Overwriting would have erased what the engine was previously
+configured to believe — and his handover note explicitly *retires* an assumption we had seeded:
+our S rule read *"special/**surgical**/context modifier"*, and he writes *"Retire earlier
+assumptions that S means Structural/Safety/Surgical."* The predecessor now stands as the record of
+what we had wrong. Supersession also marks every learner judged against the old wording Refresh
+Due, which is exactly right.
+
+### The gate that was open is now closed
+
+His answer to "which rules govern which competency" produced **13 links across all four
+competencies**, and `programme_readiness` now reports `competencies_without_rules: []`. That
+matters more than it reads: a competency with no rule linked is the one configuration that walks
+straight through the validation gate — `_rule_is_validated` returns True when nothing is linked —
+so until today every competency scored as freely as one governed by an approved rule.
+
+Three items he names as governing rules have **no matrix row**: *Preservation of S episode
+history*, *Approved pledge co-creation principles*, and *relevant topic-specific guidance*. They
+are reported under `named_but_not_in_the_matrix` and **not invented as rules**.
+
+### Nothing was marked Validated
+
+His matrix says Validated; this loader is a script. A rule may only be Validated with a named
+owner, and `rule_owner` is a Link to `User`, which he does not have on this site. The approved
+wording and effective date are loaded so nothing is lost or retyped, the status stays Draft, and
+the function reports the single outstanding step rather than assuming it. This is the guard added
+yesterday doing its job on the first real decision it met.
+
+### Two checks failed, both because the data is his and it changed
+
+- `matrix_loads_as_draft` asserted a hard count of 17 rules. It went red the moment he added an
+  eighteenth — **on the day the harness most needs to still run**. It now asserts that every row
+  he wrote produced a rule, and that no id repeats.
+- `matrix_keeps_the_owners_own_words` read every version of a rule id and so saw both the
+  superseded predecessor and its successor. It now reads the current version.
+
+Neither was a defect in the engine. Both were assertions written as though the programme owner's
+document were a fixture.
+
+### Raised, not resolved
+
+His S Modifier data model — Status, reason category, reason detail, start and end date, impact
+area, notes, reviewer — is a **caregiver record** structure. This engine deliberately holds no
+caregiver data: §21 and acceptance criterion 12 require it and the code enforces it. He most
+likely means the SAI SPARSH caregiver database rather than the learning system, but if he means
+this one it reverses a foundational constraint, so it is a question for him rather than an
+inference for us.
+
+Also outstanding from his answers: **SC-01 and SC-02 must be revised before the pilot** — he
+approved all nine cases conditionally on those two being corrected, because they were written
+assuming the Level 3/4 boundary concerns acute states and he has now ruled that acute states go to
+the Red Flag pathway and never change the Level.
+
+### Acceptance check
+
+`./scripts/install_verify.sh`: exit 0, `RESULT passed=143 failed=0`, with his decisions loaded.

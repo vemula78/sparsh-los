@@ -1407,7 +1407,15 @@ def check_matrix_loads_as_draft():
 	from sparsh_los import seed
 
 	matrix_ids = [row["rule_id"] for row in seed._rows()]
-	_assert(len(matrix_ids) == 17, f"The matrix source holds {len(matrix_ids)} rules, expected 17")
+	# Not a fixed count. The matrix is the programme owner's document and he adds rows to
+	# it -- an eighteenth arrived with his first set of decisions. A hard 17 would have
+	# gone red on the day he answered, which is the day it matters most that the harness
+	# still runs. What must hold is that every row he wrote produced a rule.
+	_assert(matrix_ids, "The matrix source holds no rules at all")
+	_assert(
+		len(matrix_ids) == len(set(matrix_ids)),
+		f"The matrix source repeats a rule id: {sorted(matrix_ids)}",
+	)
 
 	before = {
 		r.name: r.status
@@ -7930,12 +7938,20 @@ def check_matrix_keeps_the_owners_own_words():
 	validated*" -- which a four-option Select drops. One row loaded stricter than he had
 	authorised with nothing on the record to show it.
 	"""
-	rows = frappe.get_all(
-		"Sparsh Source of Truth Rule",
-		filters={"rule_id": ("in", ("BP-HANDLING-AND-ESCALATION", "70-CONFIDENCE-RULE"))},
-		fields=["rule_id", "criticality", "source_criticality", "source_status",
-				"source_automation_status"],
-	)
+	# The current version of each, not every version: a rule the programme owner has
+	# rewritten keeps its superseded predecessor, so an unfiltered read returns two rows
+	# for one rule id and the older one still carries the pre-decision wording.
+	rows = []
+	for rule_id in ("BP-HANDLING-AND-ESCALATION", "70-CONFIDENCE-RULE"):
+		found = frappe.get_all(
+			"Sparsh Source of Truth Rule",
+			filters={"rule_id": rule_id, "status": ("!=", "Superseded")},
+			fields=["rule_id", "criticality", "source_criticality", "source_status",
+					"source_automation_status"],
+			order_by="version desc",
+			limit=1,
+		)
+		rows.extend(found)
 	_assert(len(rows) == 2, f"The matrix fixtures are not loaded: {rows}")
 
 	for row in rows:

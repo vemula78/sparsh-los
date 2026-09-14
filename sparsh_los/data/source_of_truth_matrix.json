@@ -2,6 +2,7 @@
  {
   "rule_id": "RISK-LEVEL-1-DEFINITION",
   "rule_statement": "Current candidate definition exists in programme materials and analyses; exact current wording to be confirmed.",
+  "approved_statement": null,
   "applies_to": "Risk Level 1 definition",
   "source": "Approved programme rule / curriculum input",
   "criticality": "High-risk",
@@ -10,11 +11,13 @@
   "source_criticality": "High-risk",
   "source_status": "Needs review",
   "source_automation_status": "Do not automate until validated",
-  "approved_statement": null
+  "effective_date": null,
+  "supersedes_previous": false
  },
  {
   "rule_id": "RISK-LEVEL-2-DEFINITION",
   "rule_statement": "Current candidate definition exists; boundary with Level 1 and Level 3 needs explicit programme-owner wording.",
+  "approved_statement": null,
   "applies_to": "Risk Level 2 definition",
   "source": "Approved programme rule / curriculum input",
   "criticality": "High-risk",
@@ -23,11 +26,13 @@
   "source_criticality": "High-risk",
   "source_status": "Needs review",
   "source_automation_status": "Do not automate until validated",
-  "approved_statement": null
+  "effective_date": null,
+  "supersedes_previous": false
  },
  {
   "rule_id": "RISK-LEVEL-3-DEFINITION",
   "rule_statement": "Current candidate definition exists; exact treatment of established but stable disease must be confirmed.",
+  "approved_statement": null,
   "applies_to": "Risk Level 3 definition",
   "source": "Approved programme rule / curriculum input",
   "criticality": "High-risk",
@@ -36,76 +41,88 @@
   "source_criticality": "High-risk",
   "source_status": "Needs review",
   "source_automation_status": "Do not automate until validated",
-  "approved_statement": null
+  "effective_date": null,
+  "supersedes_previous": false
  },
  {
   "rule_id": "RISK-LEVEL-4-DEFINITION",
-  "rule_statement": "Current candidate definition exists; acute/critical/post-procedure boundaries require confirmation.",
+  "rule_statement": "Level 4 = Tertiary Prevention / Survivor. It reflects a prior major cardiovascular or cerebrovascular event and is not an emergency category.",
+  "approved_statement": "Validated: Level 4 is an immutable baseline prevention category for survivors of major cardiovascular/cerebrovascular events. Acute or unstable symptoms are handled separately through the Red Flag pathway.",
   "applies_to": "Risk Level 4 definition",
-  "source": "Approved programme rule / curriculum input",
-  "criticality": "Safety-critical",
-  "automation_status": "Do not automate",
-  "notes": "Confirm whether Level 4 is temporary and transition rules.",
-  "source_criticality": "Safety-critical",
-  "source_status": "Needs review",
-  "source_automation_status": "Do not automate until validated",
-  "approved_statement": null
+  "source": "Approved programme rule",
+  "criticality": "High-risk",
+  "automation_status": "Safe as fixed logic",
+  "notes": "Do not use Level 4 to represent current acute instability.",
+  "source_criticality": "High-risk",
+  "source_status": "Validated",
+  "source_automation_status": "Safe as fixed logic once qualifying events are validated; live acute symptoms use separate Red Flag routing",
+  "effective_date": "2026-09-13",
+  "supersedes_previous": true
  },
  {
   "rule_id": "S-MODIFIER",
-  "rule_statement": "Used as a special/surgical/context modifier in working materials; exact indications and duration are not yet locked for the platform.",
+  "rule_statement": "S = Special coaching modifier. It is a dynamic flag, separate from Prevention Level 1–4 and separate from the Red Flag pathway. It applies when a significant medical, psychosocial, family, financial, occupational, caregiving or other life circumstance creates sustained stress, reduces self-efficacy, or materially affects the feasibility of standard coaching or pledges.",
+  "approved_statement": "Validated for MVP: S is recorded as Active/Inactive; it does not alter the underlying Prevention Level. Its purpose is to trigger adapted coaching, pledge selection/intensity, empathic support and follow-up. Acute safety concerns belong to the separate Red Flag pathway. Remote/minor surgery does not automatically qualify. Ambiguous triggers remain human-reviewed initially.",
   "applies_to": "S modifier",
-  "source": "Programme rule / field-query input",
+  "source": "Approved programme rule / programme-owner clarification",
   "criticality": "High-risk",
-  "automation_status": "Do not automate",
-  "notes": "Confirm which histories qualify and whether all surgeries do.",
-  "source_criticality": "High-risk",
-  "source_status": "Needs review",
-  "source_automation_status": "Do not automate until validated",
-  "approved_statement": null
+  "automation_status": "Human review required",
+  "notes": "Preserve longitudinal episode history. Retire earlier assumptions that S means Structural/Safety/Surgical, that every surgery qualifies, that S is permanent once set, or that acute symptoms are S by default.",
+  "source_criticality": "High",
+  "source_status": "Validated",
+  "source_automation_status": "Rule-assisted for clear predefined contexts; ambiguous activation/deactivation requires human review initially",
+  "effective_date": "2026-09-13",
+  "supersedes_previous": true
  },
  {
   "rule_id": "RED-FLAG-SYMPTOMS-AND-REFERRAL",
-  "rule_statement": "Volunteers must recognise situations that require stopping routine coaching and seeking medical help.",
+  "rule_statement": "Red Flag is a separate acute safety/escalation pathway, independent of Prevention Level and S. Explicit validated symptoms/thresholds stop routine coaching and trigger urgent/emergency review.",
+  "approved_statement": "Validated conceptually: Red Flag is separate from Level 1–4 and S. Use approved urgency categories; live cases route to a person/clinical service.",
   "applies_to": "Red-flag symptoms and referral",
-  "source": "Programme safety rule",
+  "source": "Approved programme safety rule",
   "criticality": "Safety-critical",
   "automation_status": "Human review required",
-  "notes": "Insert only approved symptom list and urgency rules.",
+  "notes": "Red Flag must not be encoded as Level 4 or as S.",
   "source_criticality": "Safety-critical",
-  "source_status": "Needs review",
-  "source_automation_status": "Human escalation required; deterministic once validated",
-  "approved_statement": null
+  "source_status": "Validated",
+  "source_automation_status": "Deterministic flagging allowed after validation; live clinical response requires human/clinical routing",
+  "effective_date": "2026-09-13",
+  "supersedes_previous": true
  },
  {
   "rule_id": "BP-HANDLING-AND-ESCALATION",
-  "rule_statement": "BP measurement/interpretation guidance is used in training, but platform thresholds and escalation timing require clinical sign-off.",
+  "rule_statement": "Stop routine coaching at confirmed BP ≥180 systolic and/or ≥120 diastolic. Repeat after at least 1 minute; without acute symptoms arrange same-day clinical contact; with concerning acute symptoms use emergency pathway.",
+  "approved_statement": "Validated for MVP training. Live cases may be flagged automatically but clinical action routes to a person/service.",
   "applies_to": "BP handling and escalation",
-  "source": "Programme safety rule",
+  "source": "Approved programme safety rule",
   "criticality": "Safety-critical",
-  "automation_status": "Do not automate",
-  "notes": "Separate measurement technique from clinical escalation.",
+  "automation_status": "Human review required",
+  "notes": "Keep BP measurement technique distinct from escalation logic.",
   "source_criticality": "Safety-critical",
-  "source_status": "Needs review",
-  "source_automation_status": "Do not automate until validated",
-  "approved_statement": null
+  "source_status": "Validated",
+  "source_automation_status": "Automatic recognition/scoring in training; live cases human/clinical routing",
+  "effective_date": "2026-09-13",
+  "supersedes_previous": true
  },
  {
   "rule_id": "HYPOGLYCAEMIA-RESPONSE-SCOPE",
-  "rule_statement": "Working analyses include a response protocol; confirm what volunteers are authorised and trained to do.",
+  "rule_statement": "Volunteer may assist with basic first-response for mild suspected/confirmed hypoglycaemia only when caregiver is conscious, cooperative and can swallow safely; severe/unsafe cases require emergency help.",
+  "approved_statement": "Validated for MVP training; severe or ambiguous live cases must route to a person/emergency pathway.",
   "applies_to": "Hypoglycaemia response scope",
-  "source": "Programme safety rule",
+  "source": "Approved programme safety rule",
   "criticality": "Safety-critical",
-  "automation_status": "Do not automate",
-  "notes": "Clarify when to treat, refer, or call emergency services.",
+  "automation_status": "Human review required",
+  "notes": "Any oral treatment or glucagon rules must remain within approved volunteer scope.",
   "source_criticality": "Safety-critical",
-  "source_status": "Needs review",
-  "source_automation_status": "Do not automate until validated",
-  "approved_statement": null
+  "source_status": "Validated",
+  "source_automation_status": "Automatic scoring of clear training scenarios; live severe/ambiguous cases human/emergency routing",
+  "effective_date": "2026-09-13",
+  "supersedes_previous": true
  },
  {
   "rule_id": "70-CONFIDENCE-RULE",
   "rule_statement": "Low-confidence pledges should be explored and often reduced; confirm whether 70%/7-of-10 is a hard threshold or a coaching heuristic.",
+  "approved_statement": null,
   "applies_to": "70% confidence rule",
   "source": "Coaching framework / field experience",
   "criticality": "Normal",
@@ -114,11 +131,13 @@
   "source_criticality": "Medium",
   "source_status": "Needs review",
   "source_automation_status": "AI may advise within approved coaching rule",
-  "approved_statement": null
+  "effective_date": null,
+  "supersedes_previous": false
  },
  {
   "rule_id": "IMMUTABLE-BASELINE",
   "rule_statement": "Baseline data should remain unchanged so follow-up does not overwrite the original programme state.",
+  "approved_statement": null,
   "applies_to": "Immutable baseline",
   "source": "Programme data rule",
   "criticality": "High-risk",
@@ -127,11 +146,13 @@
   "source_criticality": "High",
   "source_status": "Needs review",
   "source_automation_status": "Safe as fixed logic once confirmed",
-  "approved_statement": null
+  "effective_date": null,
+  "supersedes_previous": false
  },
  {
   "rule_id": "MISSING-DATA",
   "rule_statement": "Unconfirmed or unavailable follow-up data should not automatically be recorded as a negative response.",
+  "approved_statement": null,
   "applies_to": "Missing data",
   "source": "Programme data rule / field-query input",
   "criticality": "High-risk",
@@ -140,11 +161,13 @@
   "source_criticality": "High",
   "source_status": "Needs review",
   "source_automation_status": "Safe as fixed logic once confirmed",
-  "approved_statement": null
+  "effective_date": null,
+  "supersedes_previous": false
  },
  {
   "rule_id": "PARTIAL-ACHIEVEMENT",
   "rule_statement": "Partial progress should be distinguished from complete failure; exact labels need confirmation.",
+  "approved_statement": null,
   "applies_to": "Partial achievement",
   "source": "Programme coaching/data rule",
   "criticality": "Normal",
@@ -153,24 +176,28 @@
   "source_criticality": "Medium",
   "source_status": "Needs review",
   "source_automation_status": "Safe as fixed logic once confirmed",
-  "approved_statement": null
+  "effective_date": null,
+  "supersedes_previous": false
  },
  {
   "rule_id": "MEDICATION-QUESTIONS",
-  "rule_statement": "Volunteers should not independently prescribe, stop or change medicines; specific escalation wording/timing needs approval.",
+  "rule_statement": "Volunteers may document, ask about adherence, reinforce taking medicines as prescribed, and facilitate clinician contact. They may not start, stop, substitute or alter medication doses.",
+  "approved_statement": "Validated. Non-urgent medication questions go to treating clinical team; acute red-flag reactions use emergency pathway.",
   "applies_to": "Medication questions",
-  "source": "Scope-of-practice rule",
+  "source": "Approved scope-of-practice rule",
   "criticality": "Safety-critical",
   "automation_status": "Human review required",
-  "notes": "Keep medication adjustment outside volunteer scope unless explicitly authorised.",
+  "notes": "No autonomous medication management.",
   "source_criticality": "Safety-critical",
-  "source_status": "Needs review",
-  "source_automation_status": "Human escalation required",
-  "approved_statement": null
+  "source_status": "Validated",
+  "source_automation_status": "Training boundary can be scored automatically; live medication questions route to qualified person",
+  "effective_date": "2026-09-13",
+  "supersedes_previous": true
  },
  {
   "rule_id": "OILS-FATS-RULES",
   "rule_statement": "Specific oils, quantities and tiering have appeared in working materials; exact current programme guidance must be verified before encoding.",
+  "approved_statement": null,
   "applies_to": "Oils/fats rules",
   "source": "Curriculum input",
   "criticality": "Normal",
@@ -179,45 +206,67 @@
   "source_criticality": "Medium",
   "source_status": "Needs review",
   "source_automation_status": "Reference content only until validated",
-  "approved_statement": null
+  "effective_date": null,
+  "supersedes_previous": false
  },
  {
   "rule_id": "RISK-STRATIFICATION-MVP-COMPETENCY",
   "rule_statement": "First MVP competency candidate because it tests judgement and branching scenarios.",
+  "approved_statement": "Use Prevention Level 1–4 rules only as the core stratification framework. S is a separate contextual coaching modifier; Red Flag is separate escalation logic.",
   "applies_to": "Risk-stratification MVP competency",
   "source": "Curriculum/competency analysis",
   "criticality": "High-risk",
   "automation_status": "Human review required",
-  "notes": "Keep core engine generic.",
+  "notes": "Level 4 is validated; Levels 1–3 still need explicit programme-owner wording.",
   "source_criticality": "High",
   "source_status": "Context-dependent",
-  "source_automation_status": "Can implement with placeholder logic; production scoring only after validation",
-  "approved_statement": null
+  "source_automation_status": "Can implement with placeholder logic; production scoring only after all Level rules are validated",
+  "effective_date": "2026-09-13",
+  "supersedes_previous": false
  },
  {
   "rule_id": "PLEDGE-CO-CREATION-MVP-COMPETENCY",
   "rule_statement": "First MVP competency candidate because it tests coaching, barrier exploration and adaptive hints.",
+  "approved_statement": "S Modifier / Special Category should primarily influence contextual coaching, pledge selection/intensity, self-efficacy assessment and follow-up.",
   "applies_to": "Pledge co-creation MVP competency",
   "source": "Curriculum/competency analysis + field queries",
   "criticality": "Normal",
   "automation_status": "Human review required",
-  "notes": "Use de-identified scenarios.",
+  "notes": "S is cross-cutting but maps most naturally here rather than being treated as a risk level.",
   "source_criticality": "Medium",
   "source_status": "Context-dependent",
   "source_automation_status": "AI-assisted coaching allowed within approved guardrails",
-  "approved_statement": null
+  "effective_date": "2026-09-13",
+  "supersedes_previous": false
  },
  {
   "rule_id": "SCOPE-ESCALATION-MVP-COMPETENCY",
   "rule_statement": "First MVP competency candidate because it tests safety boundaries and human handoff.",
+  "approved_statement": "Governed by Red Flag, BP escalation, hypoglycaemia scope and medication-boundary rules. Acute symptoms should not be converted into S or Level 4.",
   "applies_to": "Scope/escalation MVP competency",
   "source": "Curriculum/competency analysis + field queries",
   "criticality": "Safety-critical",
   "automation_status": "Human review required",
-  "notes": "Human escalation workflow is required.",
+  "notes": "Human escalation workflow remains mandatory for live/ambiguous cases.",
   "source_criticality": "Safety-critical",
   "source_status": "Context-dependent",
   "source_automation_status": "Deterministic critical-error logic after validation",
-  "approved_statement": null
+  "effective_date": "2026-09-13",
+  "supersedes_previous": false
+ },
+ {
+  "rule_id": "S-MODIFIER-DATA-MODEL",
+  "rule_statement": "Store S Status (Active/Inactive), S Reason Category, S Reason Detail, S Start Date, S End/Resolution Date, S Impact Area, S Notes and human-review fields separately from Prevention Level and Red Flag.",
+  "approved_statement": "Approved for MVP architecture. Suggested reason categories: Medical recovery; Caregiving burden; Bereavement; Financial crisis; Family crisis; Occupational stress; Psychosocial stress; Other. Impact areas may include Diet, Activity, Sleep, Stress, Confidence or Multiple.",
+  "applies_to": "S Modifier data model",
+  "source": "Programme design / data rule",
+  "criticality": "Normal",
+  "automation_status": "Safe as fixed logic",
+  "notes": "Preserve history of all S episodes. Current status may become Inactive when the special circumstance resolves or no longer materially affects coaching.",
+  "source_criticality": "Medium",
+  "source_status": "Validated",
+  "source_automation_status": "Safe as fixed data structure; classification logic may remain partly human-reviewed",
+  "effective_date": "2026-09-13",
+  "supersedes_previous": false
  }
 ]
