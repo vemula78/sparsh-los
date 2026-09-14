@@ -16,6 +16,22 @@ required_apps = ["frappe"]
 before_install = "sparsh_los.install.before_install"
 after_install = "sparsh_los.install.after_install"
 
+# Where each role lands after signing in
+# --------------------------------------
+# Without this, everyone arrives at `/me`, Frappe's default portal page, which says
+# nothing about this programme -- the programme owner signing in to review the rules
+# would have had to be told a URL to type. A reviewer lands on the programme dashboard,
+# a learner on their practice page.
+#
+# For somebody holding both roles the winner is decided by the order `frappe.get_roles()`
+# returns, not by the order written here: Frappe walks the user's roles and takes the
+# first that appears in this dict. Both destinations are readable by anyone holding
+# either role, so the worst case is landing on the other one and following a link.
+role_home_page = {
+	"Sparsh Reviewer": "programme",
+	"Sparsh Learner": "practice",
+}
+
 # Permissions
 # -----------
 # DocType permissions grant a role access to a kind of record; these narrow a
