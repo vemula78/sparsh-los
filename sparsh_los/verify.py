@@ -8682,6 +8682,31 @@ def check_decisions_promote_a_rule_whose_wording_arrived_first():
 		frappe.db.commit()
 
 
+def check_engine_roles_do_not_open_the_desk():
+	"""Neither role carries desk access, so holding one never promotes the holder.
+
+	Frappe recomputes `user_type` on every User save: "System User" if any role the user
+	holds has `desk_access`, "Website User" otherwise. Both roles were created with it set,
+	so granting the programme owner `Sparsh Reviewer` -- purely so he could read three
+	portal pages -- promoted him and opened the desk, where seventeen unrelated hospital
+	apps live. Every volunteer on the pilot roster would have been promoted the same way.
+
+	This app's whole interface is the portal pages. Nothing in it is worked in the desk,
+	so nothing in it should hand out desk access.
+	"""
+	from sparsh_los.install import ROLES
+
+	opens_the_desk = [
+		role for role in ROLES
+		if frappe.db.exists("Role", role) and frappe.db.get_value("Role", role, "desk_access")
+	]
+	_assert(
+		not opens_the_desk,
+		f"{', '.join(opens_the_desk)} carries desk access, so anyone granted it becomes a "
+		f"System User and lands in the desk beside every other app on this bench",
+	)
+
+
 CHECKS = (
 	("partial_only_history_is_named_accurately", check_partial_only_history_is_named_accurately),
 	("queue_shows_work_that_is_actually_waiting", check_queue_shows_work_that_is_actually_waiting),
@@ -8830,6 +8855,7 @@ CHECKS = (
 	("validated_means_somebody_validated_it", check_validated_means_somebody_validated_it),
 	("owner_decisions_reach_validated", check_owner_decisions_reach_validated),
 	("decisions_promote_a_rule_whose_wording_arrived_first", check_decisions_promote_a_rule_whose_wording_arrived_first),
+	("engine_roles_do_not_open_the_desk", check_engine_roles_do_not_open_the_desk),
 	("matrix_keeps_the_owners_own_words", check_matrix_keeps_the_owners_own_words),
 	("mastery_threshold_is_the_owners_not_the_engines",
 	 check_mastery_threshold_is_the_owners_not_the_engines),

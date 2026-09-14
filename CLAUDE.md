@@ -59,7 +59,7 @@ Two traps here, both of which have cost hours:
   bench the last teardown emptied, so the check fails for want of fixtures rather than for its own
   reason. `run_one` brackets it with `setup()` and `teardown()`.
 
-Flush the job queue before any run: the local stack has no rq worker, so a 155-check run reaches
+Flush the job queue before any run: the local stack has no rq worker, so a 156-check run reaches
 the 700-job cap on its own. `install_verify.sh` does it for you; by hand it is
 `docker exec frappe_docker-redis-queue-1 redis-cli flushall`. Never on the hospital bench.
 
@@ -94,7 +94,7 @@ schema work — run it after touching any DocType JSON.
 
 Twenty Python modules under `sparsh_los/`, plus `www/`, `patches/` and the DocType package, over
 18 top-level DocTypes and 8 child tables, all prefixed `Sparsh `.
-The acceptance harness is **155 checks**; raise `MIN_CHECKS` in `install_verify.sh` with it, or an
+The acceptance harness is **156 checks**; raise `MIN_CHECKS` in `install_verify.sh` with it, or an
 empty `CHECKS` tuple reads as success.
 
 | Module | Role |
