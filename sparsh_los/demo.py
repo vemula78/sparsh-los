@@ -30,6 +30,26 @@ VOLUNTEERS = [(f"demo-volunteer-{i:02d}@sparsh-demo.invalid", f"Demo Volunteer {
 REVIEWERS = [(f"demo-reviewer-{i:02d}@sparsh-demo.invalid", f"Demo Reviewer {i:02d}")
 			 for i in range(1, 3)]
 
+# Everything a synthetic learner owns, in deletion order: children before the parents
+# they reference. `Sparsh Event` is the DocType `events.emit()` actually writes -- this
+# list said "Sparsh Event Log" for as long as it existed, and because the loop skips a
+# DocType it cannot find, the mistake removed nothing and reported success.
+#
+# Escalation questions are here because a synthetic learner raises them. An answered
+# question normally refuses deletion -- it is the record of what a learner was told --
+# and `remove()` sets `frappe.flags.in_sparsh_maintenance` precisely so that this
+# cleanup, and nothing else, can take them away.
+LEARNER_OWNED_DOCTYPES = {
+	"Sparsh Assessment Event": "learner",
+	"Sparsh Refresher Assignment": "learner",
+	"Sparsh Evidence": "learner",
+	"Sparsh Mastery State": "learner",
+	"Sparsh Escalation Question": "learner",
+	"Sparsh Attempt": "learner",
+	"Sparsh Event": "learner",
+}
+
+
 DEMO_PATHWAY = "SSP-DEMO"
 DEMO_COHORT = "SSPC-DEMO"
 
@@ -250,15 +270,18 @@ def remove(confirm=0):
 	frappe.flags.in_sparsh_maintenance = True
 	try:
 		# Children before parents: evidence and events reference attempts.
-		for doctype, field in (
-			("Sparsh Assessment Event", "learner"),
-			("Sparsh Refresher Assignment", "learner"),
-			("Sparsh Evidence", "learner"),
-			("Sparsh Mastery State", "learner"),
-			("Sparsh Attempt", "learner"),
-			("Sparsh Event Log", "learner"),
-		):
+		for doctype, field in LEARNER_OWNED_DOCTYPES.items():
 			if not frappe.db.exists("DocType", doctype):
+				# Kept as a guard against a future rename, but it is no longer a place
+				# a typo can hide: `demonstration_removal_names_doctypes_that_exist`
+				# asserts every name here exists. It used to say "Sparsh Event Log",
+				# which does not, so every synthetic event survived a removal reported
+				# as complete.
+				frappe.log_error(
+					title="Sparsh demo cleanup names a missing DocType",
+					message=f"{doctype} is not installed; demonstration rows of that "
+							f"kind were not removed.",
+				)
 				continue
 			names = frappe.get_all(doctype, filters={field: ("in", emails)}, pluck="name")
 			for name in names:

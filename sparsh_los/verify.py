@@ -9167,6 +9167,104 @@ def check_the_rule_gate_fails_closed_and_reads_automation_status():
 	frappe.db.commit()
 
 
+
+def check_demonstration_removal_names_doctypes_that_exist():
+	"""Every DocType `demo.remove` claims to clear is one the engine actually writes.
+
+	`remove()` listed "Sparsh Event Log". No such DocType exists -- `events.emit()`
+	writes "Sparsh Event" -- and the loop skips any name it cannot find, so the typo
+	was silent and every synthetic event row survived a removal reported as complete.
+	The programme owner was told the demonstration data goes in one step.
+
+	This asserts against the DocType registry rather than a hardcoded list, so a future
+	rename is caught here instead of in a cleanup somebody trusted.
+	"""
+	from sparsh_los import demo
+
+	for doctype in demo.LEARNER_OWNED_DOCTYPES:
+		_assert(
+			frappe.db.exists("DocType", doctype),
+			f"demo.remove would silently skip {doctype!r}: no such DocType",
+		)
+
+	# The engine's own event writer must be covered by that list, or demonstration
+	# events outlive the demonstration.
+	_assert(
+		"Sparsh Event" in demo.LEARNER_OWNED_DOCTYPES,
+		"demo.remove does not clear Sparsh Event, which is what events.emit writes",
+	)
+	_assert(
+		"Sparsh Escalation Question" in demo.LEARNER_OWNED_DOCTYPES,
+		"demo.remove does not clear the questions the synthetic learners raised",
+	)
+
+
+
+def check_a_validated_rule_cannot_be_rewritten_in_place():
+	"""Once a rule is Validated, its wording and provenance are frozen.
+
+	The controller demanded that a Validated rule carry approved wording, an approver,
+	a source and a date -- and then let all four be edited afterwards, silently. A rule
+	could be signed, put in force, and reworded in place with nothing but a change-log
+	entry to show for it. Versioning existed and was optional, which is the same as not
+	existing: the governance page would show the new wording as though the owner had
+	approved it.
+
+	Superseding a Validated rule with a new version is the supported route and is
+	deliberately left open. Retiring one is also allowed: withdrawing a rule is not
+	rewriting what it said.
+	"""
+	_reset_competency()
+	frappe.db.commit()
+
+	rule = _new_rule(1)
+	_assert(rule.status == "Validated", "The fixture rule is not Validated")
+
+	frozen = {
+		"rule_statement": "A different statement entirely.",
+		"approved_statement": "Wording the owner never approved.",
+		"approved_by_name": "Somebody Else",
+		"approval_source": "A source nobody cited.",
+		"effective_date": frappe.utils.add_days(frappe.utils.today(), -30),
+		"version": 7,
+	}
+	for field, value in frozen.items():
+		def rewrite(field=field, value=value):
+			doc = frappe.get_doc("Sparsh Source of Truth Rule", rule.name)
+			setattr(doc, field, value)
+			doc.save(ignore_permissions=True)
+
+		_raises(
+			rewrite,
+			f"A Validated rule's {field} was rewritten in place",
+			expect="Validated",
+		)
+
+	# Status may still move: retiring or superseding a rule is a decision, not a
+	# rewrite of what it said.
+	doc = frappe.get_doc("Sparsh Source of Truth Rule", rule.name)
+	doc.status = "Context-dependent"
+	doc.save(ignore_permissions=True)
+	_assert(
+		frappe.db.get_value("Sparsh Source of Truth Rule", rule.name, "status")
+		== "Context-dependent",
+		"A Validated rule's status could not move, which is a decision and not a rewrite",
+	)
+
+	# And a Draft rule is freely editable -- the freeze begins at Validated.
+	draft = _new_rule(2, status="Draft")
+	draft.rule_statement = "Still being drafted."
+	draft.save(ignore_permissions=True)
+	_assert(
+		frappe.db.get_value("Sparsh Source of Truth Rule", draft.name, "rule_statement")
+		== "Still being drafted.",
+		"A Draft rule could not be edited",
+	)
+
+	_reset_competency()
+	frappe.db.commit()
+
+
 CHECKS = (
 	("partial_only_history_is_named_accurately", check_partial_only_history_is_named_accurately),
 	("queue_shows_work_that_is_actually_waiting", check_queue_shows_work_that_is_actually_waiting),
@@ -9321,6 +9419,8 @@ CHECKS = (
 	("an_answered_question_reaches_the_learner", check_an_answered_question_reaches_the_learner),
 	("certification_enforces_the_owners_assessment_rule", check_certification_enforces_the_owners_assessment_rule),
 	("the_rule_gate_fails_closed_and_reads_automation_status", check_the_rule_gate_fails_closed_and_reads_automation_status),
+	("demonstration_removal_names_doctypes_that_exist", check_demonstration_removal_names_doctypes_that_exist),
+	("a_validated_rule_cannot_be_rewritten_in_place", check_a_validated_rule_cannot_be_rewritten_in_place),
 	("matrix_keeps_the_owners_own_words", check_matrix_keeps_the_owners_own_words),
 	("mastery_threshold_is_the_owners_not_the_engines",
 	 check_mastery_threshold_is_the_owners_not_the_engines),

@@ -25,10 +25,16 @@ no_cache = 1
 
 # A rule's status, as a semantic pill. `Draft` is not a warning -- it is the correct
 # resting state for a rule nobody has ruled on -- but it must not read as "in force".
+# Every status the DocType actually defines. "Retired" was mapped here and is not one
+# of them, while "Context-dependent" and "Do not automate" -- both real, and both
+# meaning the engine will not apply the rule -- were missing and fell through to no
+# pill at all, which read as though they were unremarkable.
 PILL_FOR_STATUS = {
 	"Validated": "sp-pill--mastered",
 	"Draft": "sp-pill--due",
-	"Retired": "sp-pill--blocked",
+	"Superseded": "sp-pill--blocked",
+	"Context-dependent": "sp-pill--due",
+	"Do not automate": "sp-pill--blocked",
 }
 
 

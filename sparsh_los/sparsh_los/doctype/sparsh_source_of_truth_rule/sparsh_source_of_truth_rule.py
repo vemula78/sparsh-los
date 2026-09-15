@@ -10,11 +10,44 @@ from frappe.model.document import Document
 RULE_ID_PATTERN = re.compile(r"^[A-Z0-9-]+$")
 
 
+
+def _differs(before, after):
+	"""Compare a stored value with a submitted one without tripping on type or blanks.
+
+	A Date column comes back as `datetime.date` and is usually submitted as a string;
+	an Int as 0 and None mean the same absence here. Comparing raw would report a
+	change on every save and freeze rules that nobody edited.
+	"""
+	if before is None and after is None:
+		return False
+	if before in ("", None) and after in ("", None):
+		return False
+	return str(before).strip() != str(after).strip()
+
+
 # Frappe derives the controller class as doctype.replace(" ", ""), which keeps the
 # lowercase "of". The odd casing is required: renaming it breaks controller loading.
 class SparshSourceofTruthRule(Document):
+	# What a Validated rule says, and on whose authority. Frozen once it is in force:
+	# the engine judges people against this wording, and a page that shows the owner's
+	# approved statement beside the proposal is worth nothing if either can be edited
+	# afterwards. Superseding with a new version is the supported way to change a rule;
+	# that route keeps both versions and is deliberately still open.
+	FROZEN_ONCE_VALIDATED = (
+		"rule_id",
+		"version",
+		"rule_statement",
+		"approved_statement",
+		"approved_by_name",
+		"approval_source",
+		"effective_date",
+		"criticality",
+		"automation_status",
+	)
+
 	def validate(self):
 		self._validated_means_somebody_validated_it()
+		self._validated_wording_is_frozen()
 
 		if not RULE_ID_PATTERN.match(self.rule_id or ""):
 			frappe.throw(_("Rule ID must contain only A-Z, 0-9 and hyphen"))
@@ -43,6 +76,46 @@ class SparshSourceofTruthRule(Document):
 			before = frappe.db.get_value(self.doctype, self.name, "status")
 			if before == "Superseded" and self.status != "Superseded":
 				frappe.throw(_("A superseded rule cannot be reverted to an active status"))
+
+	def _validated_wording_is_frozen(self):
+		"""A rule already in force cannot be reworded, re-dated or re-attributed.
+
+		`status` itself is not frozen: retiring a rule withdraws it and superseding it
+		replaces it, and neither changes what the rule said while it was in force.
+		Everything that constitutes the claim -- the wording, who approved it, the
+		document that says so, the date it took effect, and whether a machine may apply
+		it -- is fixed here.
+
+		The guard reads the stored row rather than `self._doc_before_save`, which is
+		None on a `db_set` path and would make the freeze depend on how the caller
+		happened to write.
+		"""
+		if self.is_new():
+			return
+
+		before = frappe.db.get_value(
+			self.doctype, self.name, ["status", *self.FROZEN_ONCE_VALIDATED], as_dict=True
+		)
+		if not before or before.status != "Validated":
+			return
+
+		changed = [
+			field
+			for field in self.FROZEN_ONCE_VALIDATED
+			if _differs(before.get(field), self.get(field))
+		]
+		if not changed:
+			return
+
+		frappe.throw(
+			_(
+				"This rule is Validated and in force: {0} cannot be changed. Supersede it "
+				"with a new version instead, which keeps both what was approved and what "
+				"replaced it."
+			).format(", ".join(sorted(changed))),
+			frappe.ValidationError,
+		)
+
 
 	def _validated_means_somebody_validated_it(self):
 		"""Validated is a claim about a person, so the person has to be on the record.
