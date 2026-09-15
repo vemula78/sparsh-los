@@ -193,6 +193,71 @@ def record_evidence(attempt, outcome, assistance_level=None, critical_error=0, c
 	return _write_verdict(doc, activity, outcome, assistance_level, critical_error, comments)
 
 
+@frappe.whitelist()
+def clear_critical_error(evidence, comments):
+	"""Clear a standing critical error, which unblocks the learner.
+
+	The mechanism already existed -- a submitted Human Review carrying
+	`clears_critical_error` -- and nothing in the reviewer's own screens could create
+	one. The queue told a reviewer that a safety error "blocks the learner until a
+	reviewer clears it" and then offered no way to do it, so the first real critical
+	error in a pilot would have stranded that learner, with the remedy reachable only
+	through the platform's administrative interface that reviewers do not have.
+
+	A reason is required, not optional. Clearing a safety error is the one reviewer
+	action that removes a block a learner can see, and "why" is the whole record of it.
+	"""
+	_require_reviewer()
+
+	if not (comments or "").strip():
+		frappe.throw(_("Say why the critical error is cleared"))
+
+	row = frappe.db.get_value(
+		"Sparsh Evidence",
+		evidence,
+		["name", "learner", "competency", "critical_error", "critical_error_cleared", "docstatus"],
+		as_dict=True,
+	)
+	if not row:
+		frappe.throw(_("That evidence does not exist"))
+	if row.docstatus != 1:
+		frappe.throw(_("That evidence is not submitted"))
+	if not row.critical_error:
+		frappe.throw(_("That evidence does not carry a critical error"))
+	if row.critical_error_cleared:
+		# Not an error worth throwing on: two reviewers reading the same queue is the
+		# ordinary case, and the second one arriving should be told it is already done.
+		return {"evidence": row.name, "cleared": True, "already": True}
+
+	# `before_submit` refuses a reviewer clearing their own evidence. Checked here too
+	# so the refusal names the act the reviewer attempted rather than surfacing from
+	# inside a submit.
+	if row.learner == frappe.session.user:
+		frappe.throw(_("You cannot clear a critical error on your own work"), frappe.PermissionError)
+
+	review = frappe.new_doc("Sparsh Human Review")
+	review.evidence = row.name
+	review.reviewer = frappe.session.user
+	review.review_status = "Approved"
+	review.reviewer_comments = comments
+	review.clears_critical_error = 1
+	review.reviewed_at = frappe.utils.now_datetime()
+	review.insert(ignore_permissions=True)
+	# The clearing itself, the mastery recompute and the withdrawal-on-cancel all live
+	# in the controller. This function creates the record and submits it; it must not
+	# reach into Evidence itself, or there would be two places that clear a block.
+	review.submit()
+
+	return {
+		"evidence": row.name,
+		"review": review.name,
+		"learner": row.learner,
+		"competency": row.competency,
+		"cleared": True,
+		"already": False,
+	}
+
+
 def aggregate_rubric(total, met):
 	"""Pass when every criterion is met, Fail when none is, Partial between.
 

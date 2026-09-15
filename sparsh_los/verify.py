@@ -9357,7 +9357,88 @@ def check_a_rescoped_rule_supersedes_and_cites_its_own_approval():
 	return f"S-MODIFIER-DATA-MODEL v{previous.version} superseded by v{current.version}"
 
 
+def check_a_reviewer_can_clear_a_critical_error_from_the_queue():
+	"""The block a reviewer is told about is one they can actually lift.
+
+	The mechanism always existed -- a submitted Human Review carrying
+	`clears_critical_error` -- and nothing a reviewer could reach created one. The queue
+	said a safety error "blocks the learner until a reviewer clears it" and offered no
+	control that did it, so the first real critical error in a pilot would have stranded
+	that learner, with the remedy behind an administrative interface reviewers do not
+	have. The test is end to end: blocked, cleared through the reviewer's own endpoint,
+	no longer blocked.
+	"""
+	from sparsh_los import review as review_api
+	from sparsh_los.mastery import has_blocking_critical_error
+
+	_reset_competency()
+	# The reviewer cannot be the learner, so the blocked account is a separate one.
+	_make_learner(TEST_LEARNER)
+	frappe.db.commit()
+
+	critical = _new_evidence(ACTIVITY_1, "Fail", critical_error=1, learner=TEST_LEARNER)
+	_assert(
+		has_blocking_critical_error(TEST_LEARNER, COMPETENCY),
+		"The fixture did not produce a standing critical error",
+	)
+
+	# Named before it is called. Without this the absence of the endpoint surfaces as an
+	# AttributeError inside whichever assertion happens to reach it first, and a check
+	# that fails for the wrong reason is not a check.
+	_assert(
+		callable(getattr(review_api, "clear_critical_error", None)),
+		"A reviewer has no endpoint to clear a critical error, so the queue's block "
+		"cannot be lifted from the reviewer's own screens",
+	)
+
+	# A reason is not optional: clearing is the one reviewer act that lifts a block the
+	# learner can see, and why is the whole of the record.
+	_raises(
+		lambda: review_api.clear_critical_error(critical.name, "   "),
+		"A critical error was cleared with no reason given",
+		expect="Say why",
+	)
+	_assert(
+		has_blocking_critical_error(TEST_LEARNER, COMPETENCY),
+		"The refused call cleared the error anyway",
+	)
+
+	result = review_api.clear_critical_error(
+		critical.name, "Repeated the case unaided and escalated correctly."
+	)
+	_assert(result.get("cleared"), f"The clearance did not report success: {result}")
+	_assert(not result.get("already"), "A first clearance reported itself as already done")
+	_assert(
+		not has_blocking_critical_error(TEST_LEARNER, COMPETENCY),
+		"The learner is still blocked after the critical error was cleared",
+	)
+
+	# The clearance is a Human Review, not a direct write to Evidence: that record is
+	# what `on_cancel` withdraws, and a clearance with nothing behind it could be
+	# neither undone nor attributed.
+	linked = frappe.db.get_value("Sparsh Evidence", critical.name, "cleared_by_review")
+	_assert(linked, "The evidence was cleared without a Human Review to attribute it to")
+	row = frappe.db.get_value(
+		"Sparsh Human Review", linked,
+		["clears_critical_error", "docstatus", "reviewer_comments"], as_dict=True,
+	)
+	_assert(row.docstatus == 1, "The clearing review was not submitted")
+	_assert(row.clears_critical_error == 1, "The clearing review does not record that it cleared")
+	_assert(
+		"unaided" in (row.reviewer_comments or ""),
+		"The reviewer's reason was not stored on the review",
+	)
+
+	# A second reviewer arriving at the same row is told, not thrown at.
+	again = review_api.clear_critical_error(critical.name, "Reached it second.")
+	_assert(again.get("already"), "A second clearance did not report the error already cleared")
+
+	return "blocked, cleared through the reviewer's endpoint, no longer blocked"
+
+
 CHECKS = (
+	("a_reviewer_can_clear_a_critical_error_from_the_queue",
+	 check_a_reviewer_can_clear_a_critical_error_from_the_queue),
 	("a_revised_case_reaches_the_activity", check_a_revised_case_reaches_the_activity),
 	("a_rescoped_rule_supersedes_and_cites_its_own_approval",
 	 check_a_rescoped_rule_supersedes_and_cites_its_own_approval),

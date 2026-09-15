@@ -63,6 +63,11 @@
 	.rq-result { margin-top: 12px; }
 	.rq-result:empty { display: none; }
 	.rq-done { opacity: .72; }
+	/* A standing safety block. Bordered on the danger colour because it is the one
+	   thing on this page that stops a learner working. */
+	.rq-critical { border-left: 4px solid var(--sss-danger); margin-bottom: 12px; }
+	.rq-critical .rq-critical-title { margin: 0; font-size: 15px; color: var(--sss-blue-deep); }
+	.rq-critical .rq-clear-said { margin-left: 10px; font-size: 13px; color: var(--sss-grey-mid); }
 
 	.rq-q { font-size: 16px; line-height: 1.5; margin: 6px 0 var(--sss-gap); white-space: pre-wrap; overflow-wrap: anywhere; }
 
@@ -88,7 +93,7 @@
 		<p class="sp-muted sp-small">Oldest first throughout. A learner waiting on you is blocked; a standing safety error is blocked until you clear it.</p>
 
 		<div class="rq-tiles" aria-label="Queue summary">
-			<div class="rq-tile"><div class="n {% if critical %}is-alert{% endif %}">{{ critical|length }}</div><div class="l">Standing critical errors</div></div>
+			<div class="rq-tile"><div class="n {% if critical %}is-alert{% endif %}" id="rq-count-critical">{{ critical|length }}</div><div class="l">Standing critical errors</div></div>
 			<div class="rq-tile"><div class="n" id="rq-count-pending">{{ pending_reviews|length }}</div><div class="l">Attempts awaiting judgement</div></div>
 			<div class="rq-tile"><div class="n" id="rq-count-questions">{{ escalations|length }}</div><div class="l">Open questions</div></div>
 			<div class="rq-tile"><div class="n">{{ cohort.ready_to_progress|length }}</div><div class="l">Ready to progress</div></div>
@@ -98,24 +103,28 @@
 		{# ------------------------------------------------ 1. Safety ------------- #}
 		<section class="rq-section" aria-labelledby="rq-h-critical">
 			<h2 id="rq-h-critical">Standing critical errors</h2>
-			<p class="rq-lede">A safety error blocks the learner until a reviewer clears it through a Human Review. Nothing else does — not a later good performance.</p>
+			<p class="rq-lede">A safety error blocks the learner until a reviewer clears it. Nothing else does — not a later good performance. Clearing it here unblocks that learner immediately, so say why.</p>
 			{% if critical %}
-			<div class="sp-scroll">
-			<table class="sp-table">
-				<thead><tr><th scope="col">Learner</th><th scope="col">Competency</th><th scope="col">Activity</th><th scope="col">Recorded</th><th scope="col">Evidence</th></tr></thead>
-				<tbody>
-				{% for row in critical %}
-					<tr>
-						<td>{{ row.learner }}</td>
-						<td>{{ row.competency }}</td>
-						<td>{{ row.activity or "—" }}</td>
-						<td class="sp-num">{{ frappe.utils.format_datetime(row.recorded_at, "dd-MMM-yyyy HH:mm") if row.recorded_at else "—" }}</td>
-						<td><a href="/app/sparsh-evidence/{{ row.name }}">{{ row.name }}</a></td>
-					</tr>
-				{% endfor %}
-				</tbody>
-			</table>
-			</div>
+			{% for row in critical %}
+			<article class="sp-panel rq-critical" data-evidence="{{ row.name }}">
+				<div class="rq-head">
+					<h3 class="rq-critical-title">{{ row.learner }} — {{ row.competency }}</h3>
+					<span class="sp-pill">Blocking</span>
+				</div>
+				<p class="sp-caption">{{ row.activity or "—" }} &middot; recorded {{ frappe.utils.format_datetime(row.recorded_at, "dd-MMM-yyyy HH:mm") if row.recorded_at else "—" }} &middot; evidence {{ row.name }}</p>
+				{% if row.learner == reviewer %}
+				<p class="sp-note">This is your own work. Another reviewer has to clear it.</p>
+				{% else %}
+				<label class="rq-label" for="rq-clear-note-{{ loop.index }}">Why is this cleared?</label>
+				<textarea class="sp-response rq-clear-note" id="rq-clear-note-{{ loop.index }}" rows="3"
+					placeholder="What the learner has since shown, or why the error should not stand."></textarea>
+				<div class="sp-actions rq-actions">
+					<button type="button" class="sp-btn rq-clear-go">Clear this critical error</button>
+					<span class="rq-clear-said" role="status" aria-live="polite"></span>
+				</div>
+				{% endif %}
+			</article>
+			{% endfor %}
 			{% else %}<p class="sp-empty">None outstanding.</p>{% endif %}
 		</section>
 
@@ -398,6 +407,48 @@ frappe.ready(function () {
 		decrement("rq-count-pending");
 	}
 
+	// Clearing a standing critical error. Deliberately not a form submit: the panel has
+	// no form, so a safety clearance is never one Return keypress away in a textarea.
+	document.querySelectorAll(".rq-critical .rq-clear-go").forEach(function (button) {
+		button.addEventListener("click", function () {
+			const panel = button.closest(".rq-critical");
+			const noteEl = panel.querySelector(".rq-clear-note");
+			const said = panel.querySelector(".rq-clear-said");
+			const reason = (noteEl.value || "").trim();
+			if (!reason) {
+				said.textContent = "Say why before clearing.";
+				noteEl.focus();
+				return;
+			}
+			button.disabled = true;
+			said.textContent = "Clearing\u2026";
+			frappe.call({
+				method: "sparsh_los.review.clear_critical_error",
+				args: { evidence: panel.dataset.evidence, comments: reason },
+				freeze: false,
+				error_handlers: { ValidationError: function () {}, PermissionError: function () {} },
+				callback: function (r) {
+					const d = r.message || {};
+					panel.classList.add("rq-done");
+					const who = escape(d.learner || "The learner");
+					panel.querySelector(".rq-actions").innerHTML =
+						'<span class="sp-note sp-note--info">' +
+						(d.already
+							? "<strong>Already cleared.</strong> Another reviewer reached it first."
+							: "<strong>Cleared.</strong> " + who + " is no longer blocked on this competency.") +
+						"</span>";
+					noteEl.disabled = true;
+					decrement("rq-count-critical");
+				},
+				error: function (r) {
+					button.disabled = false;
+					if (r && r.responseJSON) r = r.responseJSON;
+					const refused = r && r.exc_type === "PermissionError";
+					said.textContent = (refused ? "Refused. " : "Not cleared. ") + serverMessage(r || {});
+				}
+			});
+		});
+	});
 	document.querySelectorAll(".rq-form--rubric").forEach(function (form) {
 		form.addEventListener("submit", function (ev) {
 			ev.preventDefault();
