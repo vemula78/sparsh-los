@@ -228,27 +228,50 @@ def _evaluate_numeric(activity, response):
 	return ("Pass", 0) if abs(value - expected) <= tolerance else ("Fail", 0)
 
 
+# The automation statuses that permit a machine to apply a rule. "AI may advise" is
+# included because advising is what an automatic score is here: the outcome still
+# reaches a person through the review queue. "Human review required" and "Do not
+# automate" are refusals and are absent deliberately.
+AUTOMATABLE = ("Safe as fixed logic", "AI may advise")
+
+
 def _rule_is_validated(competency):
-	"""True when nothing unvalidated governs this competency.
+	"""True only when a rule that permits automation governs this competency.
 
 	Every non-superseded linked rule must be Validated, not merely the highest-versioned
 	one: checking only the governing rule meant a competency linked to a Validated v2
 	and a Draft v1 auto-scored, because the gate happened to look at v2.
 
-	A competency with no rule linked passes. The code cannot tell whether such a
-	competency is clinical -- it establishes only that no link row exists -- so this is
-	an accepted risk, not a safety property. `seed.programme_readiness` names these
-	activities so the gap is visible rather than silent.
+	Two holes an independent audit found, both now closed.
+
+	A competency with **no rule linked** used to pass. That made forgetting a link a
+	way to authorise automatic scoring, which is the opposite of what §8 asks: nothing
+	is automated until a rule says it may be. It now fails closed, and the work goes to
+	a person instead. `seed.programme_readiness` still names these so the content gap
+	is visible rather than merely inert.
+
+	`status` was the only field read. A rule can be Validated -- the owner has ruled on
+	the wording -- and still carry `automation_status` of "Human review required" or
+	"Do not automate", which is a separate decision about whether a machine may apply
+	it. Ruling on wording is not permission to automate, and the two are now both
+	required.
 	"""
 	if not competency:
-		return True
+		return False
 
 	links = frappe.get_all(
 		"Sparsh Competency Rule Link", filters={"parent": competency}, pluck="rule"
 	)
+	if not links:
+		return False
+
 	for rule in links:
-		status = frappe.db.get_value("Sparsh Source of Truth Rule", rule, "status")
-		if status not in ("Validated", "Superseded"):
+		row = frappe.db.get_value(
+			"Sparsh Source of Truth Rule", rule, ["status", "automation_status"], as_dict=True
+		)
+		if not row or row.status not in ("Validated", "Superseded"):
+			return False
+		if row.automation_status not in AUTOMATABLE:
 			return False
 
 	return True

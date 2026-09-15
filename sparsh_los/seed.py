@@ -641,12 +641,18 @@ def programme_readiness():
 		# linked, the one configuration that bypasses the gate, was never named.
 		from sparsh_los.runner import _rule_is_validated
 
-		if not _rule_is_validated(row.competency):
-			auto_scoring_unvalidated.append(row.name)
-		elif not frappe.get_all(
+		# Two different situations, and they must not be merged. Since the gate began
+		# failing closed, an activity whose competency links no rule is no longer an
+		# auto-scorer that slipped through -- it is routed to a person, which is safe.
+		# It is still worth naming, because nothing governs it and the owner should
+		# know; but naming it as though it scored itself would now be false.
+		linked = frappe.get_all(
 			"Sparsh Competency Rule Link", filters={"parent": row.competency}, limit=1
-		):
+		)
+		if not linked:
 			no_rule_but_scoring.append(row.name)
+		elif not _rule_is_validated(row.competency):
+			auto_scoring_unvalidated.append(row.name)
 
 	# Scoring is not the only judgement the engine makes without being asked twice.
 	# A critical marker produces Evidence that cannot be cancelled -- a permanent block
@@ -723,9 +729,13 @@ def programme_readiness():
 			and not critical_without_rule
 		),
 		"auto_scoring_against_unvalidated_rules": auto_scoring_unvalidated,
-		# Reported, not blocking: an activity with no rule linked is the deliberate
-		# hole in the gate. The programme owner should see which activities sit in it.
+		# Reported, not blocking. This used to be the deliberate hole in the gate:
+		# no rule linked meant the engine scored the activity anyway. The gate now
+		# fails closed, so these go to a person instead -- the entry stays because the
+		# content gap is real and the owner should see it, but it no longer names a
+		# safety hazard. The key is kept for callers that already read it.
 		"auto_scoring_with_no_rule_linked": no_rule_but_scoring,
+		"no_rule_linked_so_routed_to_a_person": no_rule_but_scoring,
 		# Whatever their evaluation mode: the block does not depend on the engine being
 		# able to grade the rest of the answer.
 		"critical_markers_with_no_rule_linked": critical_without_rule,

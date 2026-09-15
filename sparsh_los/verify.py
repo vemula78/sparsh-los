@@ -33,6 +33,7 @@ COMPETENCY_2 = PREFIX + "COMP2"
 ACTIVITY_1 = PREFIX + "ACT1"
 ACTIVITY_2 = PREFIX + "ACT2"
 RULE_ID = PREFIX + "RULE"
+BASE_RULE_ID = PREFIX + "BASERULE"
 TEST_LEARNER = "zzv-learner@example.invalid"
 DUAL_LEARNER = "zzv-dual@example.invalid"
 OTHER_LEARNER = "zzv-other@example.invalid"
@@ -204,7 +205,16 @@ def _reset_competency(competency=None):
 			doc.set("linked_rules", [])
 			doc.save(ignore_permissions=True)
 	_delete_all("Sparsh Source of Truth Rule", {"rule_id": PREFIX + "RULE"})
+	_delete_all("Sparsh Source of Truth Rule", {"rule_id": BASE_RULE_ID})
 	frappe.db.commit()
+
+	# ...and put a permitting one back. The comment above says a leftover Draft rule
+	# stops the runner and reads as a regression in the next check; now that the gate
+	# fails closed, *no* rule stops it in exactly the same way. Restoring the ordinary
+	# case -- a Validated rule that permits automation -- keeps reset meaning "back to
+	# normal" rather than "back to blocked". Checks about the gate unlink it themselves.
+	if frappe.db.exists("Sparsh Competency", competency):
+		_link_permitting_rule(competency)
 
 
 def teardown():
@@ -311,12 +321,21 @@ def setup():
 	frappe.db.commit()
 
 
-def _new_rule(version, supersedes=None, status="Validated"):
+def _new_rule(version, supersedes=None, status="Validated", automation_status="Safe as fixed logic"):
+	"""A fixture rule.
+
+	`automation_status` defaults to one that permits automation because most checks
+	here exercise scoring and need a rule that allows it. It is explicit rather than
+	blank: the gate now refuses to automate a rule that does not say it may be, so a
+	blank fixture would silently stop the very behaviour a scoring check is testing,
+	and the failure would read as a scoring bug rather than a missing fixture field.
+	"""
 	rule = frappe.new_doc("Sparsh Source of Truth Rule")
 	rule.rule_id = RULE_ID
 	rule.version = version
 	rule.rule_statement = "Verification rule statement."
 	rule.status = status
+	rule.automation_status = automation_status
 	if status == "Validated":
 		# Validated requires the four things that make it a claim about a person: the
 		# approved wording, who approved it, the document that says so, and the date.
@@ -331,6 +350,58 @@ def _new_rule(version, supersedes=None, status="Validated"):
 	rule.supersedes = supersedes
 	rule.insert(ignore_permissions=True)
 	return rule
+
+
+def _link_permitting_rule(competency=None):
+	"""Give a fixture competency a Validated rule that permits automation.
+
+	The rule gate now fails closed: a competency with no rule linked is not scored by
+	the engine at all, and a Validated rule that does not say it may be automated is
+	not either. That is the point of the gate, but almost every scoring check here was
+	written when an unruled competency scored freely, so without this their fixtures
+	would exercise the gate instead of the behaviour they name.
+
+	Checks that are *about* the gate remove the link themselves.
+	"""
+	competency = competency or COMPETENCY
+	existing = frappe.get_all(
+		"Sparsh Competency Rule Link", filters={"parent": competency}, pluck="rule"
+	)
+	if existing:
+		return existing[0]
+
+	# Its own rule_id, not the shared fixture one: several checks create
+	# `PREFIX + "RULE"` versions themselves, and a baseline sharing that name collides
+	# on insert and fails the check for a reason that has nothing to do with it.
+	name = BASE_RULE_ID + "-v1"
+	if not frappe.db.exists("Sparsh Source of Truth Rule", name):
+		rule = frappe.new_doc("Sparsh Source of Truth Rule")
+		rule.rule_id = BASE_RULE_ID
+		rule.version = 1
+		rule.rule_statement = "Baseline fixture rule: the ordinary, automatable case."
+		rule.status = "Validated"
+		rule.automation_status = "Safe as fixed logic"
+		rule.approved_statement = "Baseline approved wording."
+		rule.approved_by_name = "Verification Programme Owner"
+		rule.approval_source = "Verification governance record, undated fixture."
+		rule.effective_date = frappe.utils.today()
+		rule.insert(ignore_permissions=True)
+	rule = frappe._dict({"name": name})
+	doc = frappe.get_doc("Sparsh Competency", competency)
+	doc.append("linked_rules", {"rule": rule.name})
+	doc.save(ignore_permissions=True)
+	frappe.db.commit()
+	return rule.name
+
+
+def _unlink_rules(competency=None):
+	"""Take every rule off a fixture competency, for checks about the unruled case."""
+	competency = competency or COMPETENCY
+	doc = frappe.get_doc("Sparsh Competency", competency)
+	if doc.get("linked_rules"):
+		doc.set("linked_rules", [])
+		doc.save(ignore_permissions=True)
+	frappe.db.commit()
 
 
 def _new_attempt(rule_name, hint_level=0, outcome="Pass", critical_error=0,
@@ -1002,6 +1073,13 @@ def check_other_domain_runs_unchanged():
 	competency.competency_name = "Create and share a spreadsheet"
 	competency.domain = OTHER_DOMAIN
 	competency.insert(ignore_permissions=True)
+
+	# A governing rule that permits automation. This check is about the engine being
+	# domain-agnostic, not about the rule gate: without a rule the gate now -- rightly
+	# -- routes the answer to a person, and the check would fail for a reason that has
+	# nothing to do with the domain. A digital-skills competency has a governing rule
+	# like any other; it simply is not a clinical one.
+	_link_permitting_rule(OTHER_COMPETENCY)
 
 	activity = frappe.new_doc("Sparsh Activity")
 	activity.activity_id = OTHER_ACTIVITY
@@ -4110,8 +4188,12 @@ def check_no_rule_auto_scoring_blocks_the_pilot():
 
 	_delete_all("Sparsh Activity", {"activity_id": OTHER_ACTIVITY})
 	# `other_domain_runs_unchanged` builds this competency itself and inserts without
-	# checking, so anything created here has to be taken away again.
+	# checking, so anything created here has to be taken away again. It also links a
+	# governing rule now that the gate fails closed, and this check's whole subject is
+	# the competency with no rule, so the link has to come off first.
 	borrowed = not frappe.db.exists("Sparsh Competency", OTHER_COMPETENCY)
+	if not borrowed:
+		_unlink_rules(OTHER_COMPETENCY)
 	if borrowed:
 		competency = frappe.new_doc("Sparsh Competency")
 		competency.competency_id = OTHER_COMPETENCY
@@ -5038,6 +5120,11 @@ def check_critical_marker_without_rule_blocks_the_pilot():
 		competency.competency_name = "Verification Competency"
 		competency.domain = DOMAIN
 		competency.insert(ignore_permissions=True)
+	else:
+		# `other_domain_runs_unchanged` links a governing rule to this competency now
+		# that the gate fails closed. The unruled competency is this check's subject,
+		# so the link has to come off before the fixture means anything.
+		_unlink_rules(OTHER_COMPETENCY)
 	frappe.db.commit()
 	_assert(
 		not frappe.get_all("Sparsh Competency Rule Link", filters={"parent": OTHER_COMPETENCY}, limit=1),
@@ -8950,6 +9037,136 @@ def check_an_answered_question_reaches_the_learner():
 	frappe.db.commit()
 
 
+
+def check_certification_enforces_the_owners_assessment_rule():
+	"""Readiness honours the number of cases and unaided passes the owner required.
+
+	`Sparsh Competency` carries three fields the programme owner filled in for the
+	safety competency -- `assessment_cases`, `unaided_passes_required` and
+	`all_safety_decisions_must_be_correct` -- and until this check existed nothing read
+	any of them. `readiness()` returned "the evidence supports sign-off" as soon as
+	mastery reached Demonstrated, which one unaided pass achieves. For SSP-SCOPE the
+	owner asked for five cases, four of them unaided and every safety decision correct.
+	The engine displayed his rule and certified against a different one, which is worse
+	than having no rule at all: the person signing was told the evidence met a standard
+	it had not met.
+	"""
+	from sparsh_los import certification
+
+	_reset_competency()
+	frappe.db.set_value(
+		"Sparsh Competency",
+		COMPETENCY,
+		{
+			"assessment_cases": 2,
+			"unaided_passes_required": 2,
+			"all_safety_decisions_must_be_correct": 1,
+			"threshold_source": "Harness fixture, not a programme decision",
+		},
+		update_modified=False,
+	)
+	frappe.db.commit()
+
+	try:
+		# One unaided pass reaches Demonstrated, which used to read as ready.
+		_new_evidence(ACTIVITY_1, "Pass")
+		first = certification.readiness(COMPETENCY, LEARNER)
+		_assert(
+			first["verdict"] != certification.READY,
+			f"One pass certified against a rule asking for two: {first['verdict']} -- {first['reason']}",
+		)
+		_assert(
+			"2" in first["reason"],
+			f"The shortfall does not say what was required: {first['reason']}",
+		)
+
+		# A second unaided pass on a distinct activity meets it.
+		_new_evidence(ACTIVITY_2, "Pass")
+		met = certification.readiness(COMPETENCY, LEARNER)
+		_assert(
+			met["verdict"] == certification.READY,
+			f"Two unaided passes across two cases did not satisfy the rule: {met['reason']}",
+		)
+
+		# An assisted pass is not an unaided one: it must not close the gap.
+		_reset_competency()
+		frappe.db.set_value(
+			"Sparsh Competency", COMPETENCY,
+			{"assessment_cases": 2, "unaided_passes_required": 2,
+			 "all_safety_decisions_must_be_correct": 0},
+			update_modified=False)
+		frappe.db.commit()
+		_new_evidence(ACTIVITY_1, "Pass")
+		_new_evidence(ACTIVITY_2, "Pass", assistance_level=2)
+		assisted = certification.readiness(COMPETENCY, LEARNER)
+		_assert(
+			assisted["verdict"] != certification.READY,
+			"An assisted pass was counted towards an unaided-pass requirement",
+		)
+	finally:
+		_reset_competency()
+		frappe.db.set_value(
+			"Sparsh Competency", COMPETENCY,
+			{"assessment_cases": 0, "unaided_passes_required": 0,
+			 "all_safety_decisions_must_be_correct": 0, "threshold_source": None},
+			update_modified=False)
+		frappe.db.commit()
+
+
+
+def check_the_rule_gate_fails_closed_and_reads_automation_status():
+	"""No rule linked means no automatic score, and "Do not automate" is obeyed.
+
+	Two holes, both found by an independent audit rather than by this harness.
+
+	The gate returned True for a competency with no rule linked at all, so deleting or
+	forgetting a link authorised automatic scoring. §8 asks for the opposite default:
+	nothing is automated until a rule says it may be. The old docstring called this an
+	accepted risk, which is a fair description of a decision nobody made deliberately.
+
+	The gate also read only `status`. A rule could be Validated -- the owner has ruled
+	on the wording -- and still say "Human review required" or "Do not automate" in
+	`automation_status`, which is a separate decision about whether a machine may apply
+	it. Ruling on wording is not permission to automate.
+	"""
+	from sparsh_los import runner
+
+	_reset_competency()
+	_unlink_rules()
+
+	# Nothing linked: the engine must not score on its own.
+	_assert(
+		runner._rule_is_validated(COMPETENCY) is False,
+		"A competency with no rule linked still authorised automatic scoring",
+	)
+
+	rule = _new_rule(1)
+	frappe.db.set_value(
+		"Sparsh Source of Truth Rule", rule.name,
+		{"automation_status": "Safe as fixed logic"}, update_modified=False)
+	doc = frappe.get_doc("Sparsh Competency", COMPETENCY)
+	doc.append("linked_rules", {"rule": rule.name})
+	doc.save(ignore_permissions=True)
+	frappe.db.commit()
+	_assert(
+		runner._rule_is_validated(COMPETENCY) is True,
+		"A Validated rule marked safe to automate did not permit scoring",
+	)
+
+	for refused in ("Human review required", "Do not automate"):
+		frappe.db.set_value(
+			"Sparsh Source of Truth Rule", rule.name,
+			{"automation_status": refused}, update_modified=False)
+		frappe.db.commit()
+		_assert(
+			runner._rule_is_validated(COMPETENCY) is False,
+			f"A Validated rule marked '{refused}' still authorised automatic scoring",
+		)
+
+	_reset_competency()
+	frappe.db.commit()
+
+
 CHECKS = (
 	("partial_only_history_is_named_accurately", check_partial_only_history_is_named_accurately),
 	("queue_shows_work_that_is_actually_waiting", check_queue_shows_work_that_is_actually_waiting),
@@ -9102,6 +9319,8 @@ CHECKS = (
 	("governance_view_shows_the_wording_and_is_gated", check_governance_view_shows_the_wording_and_is_gated),
 	("demonstration_data_refuses_without_confirmation", check_demonstration_data_refuses_without_confirmation),
 	("an_answered_question_reaches_the_learner", check_an_answered_question_reaches_the_learner),
+	("certification_enforces_the_owners_assessment_rule", check_certification_enforces_the_owners_assessment_rule),
+	("the_rule_gate_fails_closed_and_reads_automation_status", check_the_rule_gate_fails_closed_and_reads_automation_status),
 	("matrix_keeps_the_owners_own_words", check_matrix_keeps_the_owners_own_words),
 	("mastery_threshold_is_the_owners_not_the_engines",
 	 check_mastery_threshold_is_the_owners_not_the_engines),

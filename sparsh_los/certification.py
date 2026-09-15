@@ -100,6 +100,60 @@ def _evidence_summary(learner, competency):
 	}
 
 
+def _owners_rule_unmet(competency, summary):
+	"""What the programme owner's own assessment rule still asks for, if anything.
+
+	`Sparsh Competency` carries three fields the owner fills in -- how many cases must
+	be assessed, how many of those unaided, and whether every safety decision must be
+	correct. Nothing read them: `readiness` answered from the mastery state alone, so a
+	competency whose owner asked for five cases and four unaided passes certified on
+	one. The engine showed his rule on the page and signed against a looser one.
+
+	Returns a list of shortfalls in his terms. An empty list means his rule is met, or
+	that he has not set one -- an unset threshold is not a threshold of zero, and a
+	competency he has not ruled on keeps the behaviour it had.
+	"""
+	rule = frappe.db.get_value(
+		"Sparsh Competency",
+		competency,
+		["assessment_cases", "unaided_passes_required", "all_safety_decisions_must_be_correct"],
+		as_dict=True,
+	) or {}
+
+	unmet = []
+
+	cases_required = rule.get("assessment_cases") or 0
+	if cases_required:
+		assessed = len({r.activity for r in summary["records"] if r.activity})
+		if assessed < cases_required:
+			unmet.append(
+				_("{0} of {1} cases assessed").format(assessed, cases_required)
+			)
+
+	unaided_required = rule.get("unaided_passes_required") or 0
+	if unaided_required:
+		unaided = summary["independent_passes"]
+		if unaided < unaided_required:
+			unmet.append(
+				_("{0} of {1} unaided passes").format(unaided, unaided_required)
+			)
+
+	if rule.get("all_safety_decisions_must_be_correct"):
+		# His words were "no critical boundary violation is acceptable", so a cleared
+		# error counts too. Clearing records that a reviewer dealt with it; it does not
+		# make the violation not have happened. If the programme wants a cleared error
+		# to stop counting, that is his decision to state and not ours to assume.
+		violations = [r for r in summary["records"] if r.critical_error]
+		if violations:
+			unmet.append(
+				_("{0} safety-critical error(s) on record, and the rule allows none").format(
+					len(violations)
+				)
+			)
+
+	return unmet
+
+
 @frappe.whitelist()
 def readiness(competency, learner=None):
 	"""Why this learner is or is not ready, with the evidence behind the answer."""
@@ -117,9 +171,23 @@ def readiness(competency, learner=None):
 		uncleared = [r.name for r in summary["critical_errors"]]
 		reason = _("A critical error is unresolved and requires a reviewer to clear it.")
 	elif state in (DEMONSTRATED, MASTERED):
-		verdict = READY
 		uncleared = []
-		reason = _("The evidence supports sign-off. The decision remains with the programme.")
+		# The mastery state says the learner has shown the competency. Whether that is
+		# enough to certify is the owner's rule, not the engine's, and it is read here
+		# rather than folded into mastery: he specified a certification standard, and
+		# inferring a mastery threshold from it would be his decision made for him.
+		shortfall = _owners_rule_unmet(competency, summary)
+		if shortfall:
+			verdict = INSUFFICIENT
+			source = frappe.db.get_value("Sparsh Competency", competency, "threshold_source")
+			reason = _("The programme's rule for this competency is not yet met: {0}.").format(
+				"; ".join(shortfall)
+			)
+			if source:
+				reason = f"{reason} {source}"
+		else:
+			verdict = READY
+			reason = _("The evidence supports sign-off. The decision remains with the programme.")
 	elif state == REFRESH_DUE:
 		# A learner held by a refresher may already have every unaided pass the rule
 		# asks for. Telling them to earn another sends them at the wrong task and reads
