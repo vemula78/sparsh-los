@@ -16,7 +16,10 @@ way.
 ## Working on the bench
 
 Development happens on the **local bench** on this Mac (`frappe_docker`, container
-`frappe_docker-backend-1`, site `sparsh.localhost`). The live hospital bench at
+`frappe_docker-backend-1`, site **`sparsh.localhost`**). That bench carries four sites —
+`sparsh.localhost`, `frontend`, `rehearsal.localhost`, `rehearsal2.localhost` — and only the first
+is the development site. Name it explicitly in every command; installing onto `frontend` because it
+sorted first has happened. The live hospital bench at
 `erp.sssihms.org` is not a development environment — the programme owner made that a condition
 of approval. Both scripts default to local. The remote has **no defaults at all** — its address,
 user and key are not in version control — so reaching it means supplying them deliberately:
@@ -45,9 +48,14 @@ docker exec -u frappe frappe_docker-backend-1 bash -lc \
 
 # One check, with setup and teardown around it.
 docker exec -u frappe frappe_docker-backend-1 bash -lc \
-  'cd /home/frappe/frappe-bench && bench --site sparsh.localhost \
-   execute sparsh_los.verify.run_one --args "[\'critical_error_blocks\']"'
+  'cd /home/frappe/frappe-bench/sites && ../env/bin/python -c "
+import frappe; frappe.init(site=\"sparsh.localhost\"); frappe.connect()
+from sparsh_los import verify; verify.run_one(\"critical_error_blocks\")"'
 ```
+
+Note the second command does **not** go through `bench execute` either. The warning below applies
+to `run_one` exactly as it applies to `run`: this file used to show `bench execute ... run_one`
+two lines under the sentence saying never to do that, and the example won.
 
 Two traps here, both of which have cost hours:
 
@@ -94,7 +102,7 @@ schema work — run it after touching any DocType JSON.
 
 Twenty Python modules under `sparsh_los/`, plus `www/`, `patches/` and the DocType package, over
 18 top-level DocTypes and 8 child tables, all prefixed `Sparsh `.
-The acceptance harness is **158 checks**; raise `MIN_CHECKS` in `install_verify.sh` with it, or an
+The acceptance harness is **163 checks**; raise `MIN_CHECKS` in `install_verify.sh` with it, or an
 empty `CHECKS` tuple reads as success.
 
 | Module | Role |
@@ -111,6 +119,7 @@ empty `CHECKS` tuple reads as success.
 | `events.py` | The lightweight usage log: counts and states, never content |
 | `gateway.py` | The model-interaction ledger: cost, versions, de-identification assertion. Makes no call |
 | `seed.py` | Loads the Source-of-Truth Matrix and Starter Case Pack; programme readiness |
+| `demo.py` | The synthetic demonstration cohort. `load`/`remove` both refuse without `confirm=1`; `LEARNER_OWNED_DOCTYPES` is what `remove` clears |
 | `verify.py` | The acceptance harness |
 | `www/practice.py`, `www/queue.py` | Learner page and reviewer queue |
 
@@ -163,7 +172,17 @@ Conventions the pages must keep:
   `/home/frappe/frappe-bench/assets`, which is what nginx serves. Anything written to the volume
   is never served. `bench build` would also place it and then exits non-zero here because node is
   absent. The copy lives in the container's own filesystem, so **recreating the frontend container
-  loses it** — re-run the script. Baking the app into the frontend image is the durable fix.
+  loses it** — re-run the script.
+
+  On the hospital stack this is now solved properly: since 14-Sep-2026 `sparsh_los` is built into
+  the `frappe-internal` image (tag `deploy-2026-09-14`, commit `4108bd8`) alongside the other
+  seventeen apps, so the code and its assets survive a rebuild and every container carries them.
+  Before that it was copied into the running containers at deploy time and **only the web container
+  received it** — the four background workers could not import the module, so the daily refresher
+  job had never once run. Deploying a code change to the hospital now means a new tag and an image
+  rebuild, not a file copy. The pin in `apps-internal.json` uses the **`branch`** key for the tag
+  name; there is no `tag` key, and a `commit` alone is documentation — `bench init` resolves
+  branch/tag and ignores it.
 
 Frappe's own navbar and "Powered by ERPNext" footer wrap these pages; both are Website Settings on
 the site, not app code, and are a deployment step rather than something the app overrides.
@@ -195,10 +214,43 @@ proven otherwise.
   holds NULL, and NULLs do not collide, so a unique index installs cleanly over data that already
   violates it. A new key column needs a backfill patch, and the patch reports what it cannot
   decide rather than guessing.
-- **No unvalidated rule becomes production logic.** If an activity's competency links a rule
-  that is not `Validated`, the runner refuses to auto-score it and routes to a reviewer. This
-  was documentation-only until an audit showed a Deterministic activity against a Draft
-  safety-critical rule scoring itself and moving Mastery.
+- **No unvalidated rule becomes production logic, and the gate fails closed.** The runner
+  auto-scores only when every non-superseded linked rule is `Validated` *and* its
+  `automation_status` permits automation (`Safe as fixed logic` or `AI may advise`). Three
+  separate holes have been closed here, each found by an audit and none by this harness: a Draft
+  safety-critical rule scoring itself; a competency with **no rule linked at all** passing the
+  gate, so forgetting a link authorised automatic scoring; and `automation_status` being ignored
+  entirely, so a rule the owner had marked "Do not automate" was automated because its wording had
+  been approved. Ruling on wording is not permission to automate. A competency with no rule now
+  routes to a person, and `seed.programme_readiness` reports it as a content gap rather than as an
+  auto-scorer, because it is no longer one.
+
+- **A signed rule is frozen.** Once a rule is `Validated`, its `rule_statement`,
+  `approved_statement`, `approved_by_name`, `approval_source`, `effective_date`, `criticality`,
+  `automation_status`, `rule_id` and `version` cannot be edited in place. The controller demanded
+  all of that provenance before letting a rule reach Validated and then let every field be rewritten
+  afterwards, so a rule could be signed, put in force, and reworded with nothing but a change-log
+  entry — and the governance page would show the new wording as the owner's approval. `status` is
+  deliberately not frozen: retiring or superseding withdraws or replaces a rule, and neither changes
+  what it said while in force. Superseding with a new version is the supported way to change one.
+
+- **Certification enforces the owner's assessment rule, not the engine's.** `Sparsh Competency`
+  carries `assessment_cases`, `unaided_passes_required` and `all_safety_decisions_must_be_correct`.
+  These are *his* numbers and `certification.readiness()` reads them; until an audit found it,
+  nothing did, and readiness answered "the evidence supports sign-off" as soon as mastery reached
+  Demonstrated — which one unaided pass achieves, against a safety competency where he had asked for
+  five cases and four unaided. Mastery deliberately does **not** read them: he specified a
+  certification standard, and deriving a mastery threshold from it would be his decision made for
+  him. A *cleared* critical error still counts against "all safety decisions correct": clearing
+  records that a reviewer dealt with it, not that it did not happen.
+
+- **An answered question reaches the learner who asked it.** `dashboard.learner_view` returns
+  `answered_escalations` carrying the question, the answer, who gave it and when, and `/practice`
+  renders them. It previously selected only `Open` questions and never selected `answer_text` at
+  all, so answering removed the question from the learner's page and put the answer nowhere: the
+  escalation route was a dead letter box. `disposition` is deliberately not carried — private /
+  reusable / policy-relevant classifies what the answer is worth to the programme, which is a
+  reviewer's judgement about the material and not a message to the learner.
 - **Learner-only accounts cannot read `Sparsh Activity` or `Sparsh Scenario` at all.** Reviewers
   can, and Frappe unions permissions across roles, so a learner who is *also* a reviewer reads
   them by virtue of the reviewer role — the guarantee is about the learner role, not the person. Content reaches them only
@@ -267,9 +319,12 @@ another learner is rejected before any field correction runs.
 
 ## Content and clinical rules
 
-Nothing clinical is validated. All 17 Source-of-Truth Matrix rules load as **Draft**, and the nine
-Starter Case Pack activities load in **Human review** mode so the engine cannot score them. Check
-the current position rather than assuming:
+The matrix holds **18 rules**, of which **seven are Validated and in force** since 14-Sep-2026 and
+eleven still await a decision. (This section said "all 17 load as Draft", which was true before the
+owner ruled and is the count of rows in his original spreadsheet; the eighteenth,
+`S-MODIFIER-DATA-MODEL`, is decision-derived rather than a row he supplied.) The nine Starter Case
+Pack activities all load in **Human review** mode, so the engine cannot score any of them. Check the
+current position rather than assuming:
 
 ```bash
 docker exec -u frappe frappe_docker-backend-1 bash -lc \
@@ -352,11 +407,56 @@ invented as rules**.
 answers the narrower safety question — is anything configured such that the engine would score
 against a rule nobody validated. They are deliberately separate reports.
 
+## Open findings from the 15-Sep-2026 independent audit
+
+An outside model (Codex, `gpt-5.6-sol` — `astra` is not available on this ChatGPT account, so the
+tier was one below what the diff warranted) audited the build against the four programme documents
+and against the manual written for the programme owner. It returned 11 blockers, 26 major and 11
+minor findings and declined to approve the build for a volunteer-facing pilot. Findings were
+verified against the code before being acted on; several were right, one was right for the wrong
+reason, and none was taken on trust.
+
+Fixed since: the fail-open rule gate, ignored automation status, unenforced certification
+thresholds, in-place rewriting of signed rules, the answer that never reached the learner, the
+`demo.remove()` DocType typo, and the rules page mapping a status that does not exist.
+
+**Still open, and each needs a decision rather than a patch:**
+
+- **The practice page falls back to free practice**, and `runner.start` / `runner.submit` enforce no
+  assignment at all: any enrolled account that knows an activity name can work it and earn evidence
+  outside any pathway. The fallback is deliberate and an existing check encodes it — *"a learner in
+  no cohort still gets work"* — but it contradicts both the manual and the owner's instruction to
+  keep `SSP-PILOT` in Draft until he activates it. Enforcing assignment would make `/practice` empty
+  for anyone unassigned, including the owner during his review. **Do not change this silently: it is
+  a product decision, and the three sources of truth disagree.**
+- **Certification does not snapshot its evidence.** A certificate stores learner, competency, state
+  and signatory; `certificate_detail()` recomputes supporting evidence from whatever exists now, so
+  later evidence changes what an old certificate appears to have rested on.
+- **A critical error cannot be cleared from the reviewer portal.** The queue links to
+  `/app/sparsh-evidence/...`, and the reviewer role is deliberately a Website User with no desk
+  access, so the documented clearance route does not exist for the people meant to use it.
+- **Reviewer comments are stored in `ai_feedback_summary`**, a field labelled "Automated Feedback
+  Summary". That is false provenance in a record a clinician may later read.
+- **`escalation.open_queue()` sorts oldest-first and ignores urgency**, so "Immediate" is a label
+  with nothing behind it — no routing, no notification, no acknowledgement. In a clinical-adjacent
+  interface that can be read as an emergency route, and is not one. `routed_to` is never set either,
+  though the page promises a named reviewer.
+- **The identifier guard is four regexes** (hospital MRN formats, Aadhaar-length runs, Indian
+  mobiles, emails). Its own docstring is honest — "stops the obvious accidents rather than
+  pretending to detect every identifier" — and any document describing it must be equally honest.
+  De-identification is a policy enforced by the people writing cases, not by this function.
+- **Website users do not land on a Sparsh page after sign-in.** `role_home_page` maps
+  `Sparsh Learner` → `practice` and `get_home_page()` returns it correctly, but Frappe v16's login
+  form routes website users through its app picker to `/desk`, which refuses them: the first thing a
+  volunteer sees is *Not Permitted*. Platform behaviour, not app code. Give volunteers a direct link
+  until it is fixed.
+
+
 ## History
 
 `PLAN.md` holds the original plan and the decisions taken against it. `PLAN-REVIEW-LOG.md` is an
-append-only record of twenty-three audit rounds — seven of them genuinely independent, run outside
-this toolchain — and the disposition of every finding, including the ones rejected with evidence.
+append-only record of the audit rounds — eight of them genuinely independent, run outside this
+toolchain — and the disposition of every finding, including the ones rejected with evidence.
 The independent rounds found what the in-house ones could not: the blocker that Draft rules did not
 prevent automatic scoring; then, twice running, that a fix had survived its own new check; then
 that three guarantees held on the save path and nowhere else; and finally, reading the programme's
