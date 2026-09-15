@@ -6,3 +6,4 @@ __pycache__/
 .DS_Store
 *.egg-info/
 node_modules/
+sparsh_los/DEPLOYED_COMMIT

@@ -1,5 +1,5 @@
 """Read-only introspection of the installed app. Writes facts, changes nothing."""
-import frappe, json, inspect
+import frappe, json, inspect, os
 
 frappe.init(site="sparsh.localhost"); frappe.connect()
 out = []
@@ -8,6 +8,15 @@ def sec(t): out.append("\n===== %s =====" % t)
 sec("VERSIONS")
 import frappe as f
 out.append("frappe %s" % f.__version__)
+# Written by scripts/install_verify.sh at deploy time. Absent means this tree was put
+# here by some other means, which is itself the fact worth reporting -- do not invent a
+# version for it.
+_stamp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sparsh_los", "DEPLOYED_COMMIT")
+if os.path.exists(_stamp):
+    out.append("sparsh_los deployed:")
+    out.extend("  " + ln for ln in open(_stamp).read().strip().splitlines())
+else:
+    out.append("sparsh_los deployed: no DEPLOYED_COMMIT stamp (not deployed by install_verify.sh)")
 out.append("installed apps: %s" % frappe.get_installed_apps())
 
 sec("WHITELISTED METHODS FRAPPE ACTUALLY REGISTERED FOR sparsh_los")

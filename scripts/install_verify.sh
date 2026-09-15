@@ -77,6 +77,27 @@ COPYFILE_DISABLE=1 tar -C "${REPO_DIR}" \
 	-cf - . \
 	| host_cmd "docker exec -i -u root ${CONTAINER} tar -C ${APP_DIR} -xf -"
 
+echo "==> Stamping the deployed commit"
+# The app is streamed as a tar with .git excluded, so the deployed tree carries no
+# commit id of its own and "which commit is live?" could only be answered by reading
+# file contents and inferring. That is not an answer anybody should have to derive
+# during an incident. The id is written in at stream time instead, and read back below
+# -- a stamp that is written but never verified is a claim, not a fact.
+SPARSH_SHA="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+SPARSH_DESC="$(git -C "${REPO_DIR}" describe --tags --always --dirty)"
+SPARSH_DIRTY="$(git -C "${REPO_DIR}" status --porcelain | head -c 1)"
+if [ -n "${SPARSH_DIRTY}" ]; then
+	echo "WARNING: the working tree has uncommitted changes; the stamp records ${SPARSH_DESC}" >&2
+fi
+STAMP="commit ${SPARSH_SHA}
+describe ${SPARSH_DESC}
+deployed_at $(date -u +%Y-%m-%dT%H:%M:%SZ)
+deployed_from $(hostname -s)
+site ${SITE}"
+host_cmd "docker exec -i -u root ${CONTAINER} bash -lc 'cat > ${APP_DIR}/sparsh_los/DEPLOYED_COMMIT'" <<STAMP_EOF
+${STAMP}
+STAMP_EOF
+
 echo "==> Fixing ownership"
 host_cmd "docker exec -u root ${CONTAINER} bash -lc 'chown -R frappe:frappe ${APP_DIR}'"
 
@@ -157,6 +178,14 @@ sleep 5
 
 echo "==> Clearing cache"
 host_cmd "docker exec -u frappe ${CONTAINER} bash -lc 'cd ${BENCH_DIR} && bench --site ${SITE} clear-cache'"
+
+echo "==> Confirming the stamp landed"
+READ_BACK="$(host_cmd "docker exec -u frappe ${CONTAINER} bash -lc 'sed -n 1p ${APP_DIR}/sparsh_los/DEPLOYED_COMMIT'" | tr -d '\r')"
+if [ "${READ_BACK}" != "commit ${SPARSH_SHA}" ]; then
+	echo "FAIL: deployed stamp is '${READ_BACK}', expected 'commit ${SPARSH_SHA}'" >&2
+	exit 1
+fi
+echo "    ${SPARSH_DESC} (${SPARSH_SHA})"
 
 echo "==> App list"
 host_cmd "docker exec -u frappe ${CONTAINER} bash -lc 'cd ${BENCH_DIR} && bench --site ${SITE} list-apps | grep sparsh_los'"
