@@ -11,6 +11,7 @@ leftovers from an interrupted run are cleared before the first check.
 No patient data, no real learner data, no network access.
 """
 
+import pathlib
 import re
 import sys
 import traceback
@@ -8851,6 +8852,104 @@ def check_demonstration_data_refuses_without_confirmation():
 		)
 
 
+
+
+def check_an_answered_question_reaches_the_learner():
+	"""A reviewer's answer is shown to the learner who asked.
+
+	The escalation route is only worth having if the answer comes back. This failed
+	in the field: `learner_view` selected questions at `Open` or `Routed to Human`
+	and never selected `answer_text`, so the moment a reviewer answered, the question
+	left the learner's page and the answer appeared nowhere. A volunteer would ask,
+	a reviewer would write a careful reply, and the volunteer would never read it.
+	"""
+	from sparsh_los import dashboard, escalation
+
+	_make_learner(TEST_LEARNER)
+	frappe.db.commit()
+
+	original_user = frappe.session.user
+	try:
+		frappe.set_user(TEST_LEARNER)
+		attempt = frappe.new_doc("Sparsh Attempt")
+		attempt.learner = TEST_LEARNER
+		attempt.activity = ACTIVITY_1
+		attempt.hint_level_used = 0
+		attempt.insert()
+		question = escalation.raise_question(
+			"Does a reduced pledge still count as kept?",
+			activity=ACTIVITY_1,
+			attempt=attempt.name,
+		)
+	finally:
+		frappe.set_user(original_user)
+
+	answer_text = "Yes. A smaller pledge that is kept beats a larger one abandoned."
+	escalation.answer(question, answer_text, "Private answer")
+	answered_by = frappe.session.user
+	frappe.db.commit()
+
+	try:
+		frappe.set_user(TEST_LEARNER)
+		view = dashboard.learner_view()
+
+		open_ids = [q["name"] for q in view["open_escalations"]]
+		_assert(
+			question not in open_ids,
+			"An answered question is still listed as awaiting an answer",
+		)
+
+		answered = view.get("answered_escalations")
+		_assert(
+			answered is not None,
+			"learner_view returns no answered_escalations: the answer cannot reach the learner",
+		)
+		mine = [q for q in answered if q["name"] == question]
+		_assert(len(mine) == 1, f"The answered question is not in the learner's view: {answered}")
+		row = mine[0]
+		_assert(
+			row.get("answer_text") == answer_text,
+			f"The answer text is not carried to the learner: {row.get('answer_text')!r}",
+		)
+		_assert(
+			row.get("question_text"),
+			"The answer is shown without the question it answers",
+		)
+		# The page promises "a named reviewer will read your question and answer it",
+		# so the name is part of the promise, not an incidental field.
+		_assert(
+			row.get("answered_by") == answered_by,
+			f"The answer does not name who gave it: {row.get('answered_by')!r}",
+		)
+		# The disposition is a programme classification, not the learner's business.
+		_assert(
+			"disposition" not in row,
+			"The reviewer's disposition was exposed to the learner",
+		)
+	finally:
+		frappe.set_user(original_user)
+
+	# The read model carrying the answer is necessary and not sufficient: the page has
+	# to render it. This asserts the wiring statically -- the harness has no template
+	# renderer, and a fresh-interpreter render would not prove what a real request
+	# returns anyway. The rendered page is confirmed over real HTTP at deploy time.
+	template = frappe.get_app_path("sparsh_los", "www", "practice.html")
+	markup = pathlib.Path(template).read_text(encoding="utf-8")
+	_assert(
+		"answered_escalations" in markup,
+		"practice.html never reads answered_escalations, so the answer is fetched and not shown",
+	)
+	_assert(
+		"answer_text" in markup,
+		"practice.html does not render answer_text",
+	)
+	_assert(
+		"disposition" not in markup,
+		"practice.html would show the reviewer's disposition to the learner",
+	)
+	frappe.db.commit()
+
+
 CHECKS = (
 	("partial_only_history_is_named_accurately", check_partial_only_history_is_named_accurately),
 	("queue_shows_work_that_is_actually_waiting", check_queue_shows_work_that_is_actually_waiting),
@@ -9002,6 +9101,7 @@ CHECKS = (
 	("engine_roles_do_not_open_the_desk", check_engine_roles_do_not_open_the_desk),
 	("governance_view_shows_the_wording_and_is_gated", check_governance_view_shows_the_wording_and_is_gated),
 	("demonstration_data_refuses_without_confirmation", check_demonstration_data_refuses_without_confirmation),
+	("an_answered_question_reaches_the_learner", check_an_answered_question_reaches_the_learner),
 	("matrix_keeps_the_owners_own_words", check_matrix_keeps_the_owners_own_words),
 	("mastery_threshold_is_the_owners_not_the_engines",
 	 check_mastery_threshold_is_the_owners_not_the_engines),

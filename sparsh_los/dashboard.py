@@ -63,6 +63,31 @@ def learner_view(learner=None):
 			fields=["name", "question_text", "status", "raised_at"],
 			order_by="creation asc",
 		),
+		# The answer, back to the person who asked. Without this the escalation route
+		# is a dead letter box: the question left `open_escalations` the moment it was
+		# answered and the answer itself was never selected, so a learner asked, a
+		# reviewer wrote a careful reply, and the learner never read it.
+		#
+		# `disposition` is deliberately not selected. It classifies what the answer is
+		# worth to the programme -- private, reusable, policy-relevant -- which is a
+		# reviewer's judgement about the material, not a message to the learner.
+		"answered_escalations": frappe.get_all(
+			"Sparsh Escalation Question",
+			filters={
+				"learner": learner,
+				"status": ("in", ("Answered", "Closed")),
+				"answer_text": ("is", "set"),
+			},
+			fields=[
+				"name",
+				"question_text",
+				"answer_text",
+				"answered_by",
+				"answered_at",
+				"raised_at",
+			],
+			order_by="answered_at desc, creation desc",
+		),
 		"refreshers": frappe.get_all(
 			"Sparsh Refresher Assignment",
 			filters={"learner": learner, "status": "Assigned"},

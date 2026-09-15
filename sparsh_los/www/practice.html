@@ -193,6 +193,25 @@
 				<p class="sp-empty" id="sp-no-questions">You have no question awaiting an answer.</p>
 				{% endif %}
 			</section>
+
+			{% if view.answered_escalations %}
+			<section aria-labelledby="sp-answers-heading">
+				<h2 id="sp-answers-heading">Answers you have been given</h2>
+				<p class="sp-lede">What a reviewer replied when you asked.</p>
+				<ul class="sp-list" id="sp-answered-questions">
+					{% for q in view.answered_escalations %}
+					<li>
+						<p class="sp-quote">{{ q.question_text }}</p>
+						<div class="sp-note sp-note--info">{{ q.answer_text }}</div>
+						<div class="sp-caption">
+							{% if q.answered_by %}answered by {{ frappe.db.get_value("User", q.answered_by, "full_name") or q.answered_by }}{% endif %}
+							{% if q.answered_at %} &middot; {{ frappe.utils.format_datetime(q.answered_at, "dd-MMM-yyyy") }}{% endif %}
+						</div>
+					</li>
+					{% endfor %}
+				</ul>
+			</section>
+			{% endif %}
 		</div>
 
 		<section class="sp-section" aria-labelledby="sp-states-heading">
