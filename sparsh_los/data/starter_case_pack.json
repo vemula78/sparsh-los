@@ -17,7 +17,17 @@
   "task": "Ask the learner whether both belong in the same risk category and why.",
   "engine": "Branching case; learner must distinguish stable disease from a situation needing more immediate clinical oversight.",
   "validation": "Exact Level 3/4 boundaries and use of S modifier must be confirmed.",
-  "status": "Needs review"
+  "status": "Needs review",
+  "revision": {
+   "version": 2,
+   "revised_on": "2026-09-15",
+   "revised_by": "Dr Nayanjeet Chaudhury",
+   "reason": "The original case turned on 'established cardiometabolic disease' versus a recent acute/post-procedure phase, which implied that the acute state decides the Level. The programme owner has ruled that Level 4 rests on a validated survivor history and that acute states go to the Red Flag pathway without changing the Level. Instructed 15-Sep-2026: \"Established cardiometabolic disease should not automatically imply Level 4. Please make both caregivers clearly Level 4 based on a validated survivor history (e.g. prior MI/stroke), with one currently stable and the other developing an acute Red Flag. The teaching point should remain: same Prevention Level, different current pathway.\"",
+   "scenario": "Two caregivers are under SAI SPARSH follow-up. Both have a documented prior major cardiovascular or cerebrovascular event: the first had a myocardial infarction three years ago, the second a stroke five years ago. Both events are recorded in the baseline history.\n\nThe first caregiver is clinically stable, attending routine follow-up, and reports no new symptoms.\n\nDuring the second caregiver's visit, they describe chest pain that began an hour ago and has not settled.",
+   "task": "Ask the learner to state the Prevention Level of each caregiver, and what should happen next for each. Then ask them to say, in one sentence, what the second caregiver's chest pain does and does not change.",
+   "validation": "Level 4 is validated (programme owner, 13-Sep-2026), as are the Red Flag rule and its emergency list. The teaching point is therefore scorable in principle. It remains Human review for the pilot, as the programme owner directed that all cases be human-reviewed.",
+   "teaching_point": "Both caregivers are Level 4 - Tertiary Prevention / Survivor - on the strength of their past events, and the second caregiver's chest pain does not change that. What differs is the pathway each is on right now: the first continues routine coaching, the second stops routine coaching and is advised to seek immediate emergency medical care under the Red Flag protocol. Same Prevention Level, different current pathway."
+  }
  },
  {
   "code": "SC-03",

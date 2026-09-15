@@ -9265,7 +9265,102 @@ def check_a_validated_rule_cannot_be_rewritten_in_place():
 	frappe.db.commit()
 
 
+def check_a_revised_case_reaches_the_activity():
+	"""SC-02's revision is what a learner reads, and the original is still on record.
+
+	`load_case_pack` skips a case that already exists, so a revision to the pack reached
+	a new site and never an existing one. The programme owner revised SC-02 on
+	15-Sep-2026 after it had been seeded everywhere -- exactly the gap -- and the patch
+	closes it. The test is the teaching point, not the presence of a version number: the
+	revision exists to make both caregivers Level 4 with only their current pathway
+	differing, and a case that lost that has been updated without being revised.
+	"""
+	import json as _json
+
+	from sparsh_los.seed import CASES, _case_text
+
+	pack = _json.loads(CASES.read_text())
+	case = next(c for c in pack if c["code"] == "SC-02")
+
+	_assert(case.get("revision"), "SC-02 carries no revision")
+	# The pack is the programme's document. A revision sits beside what it replaced.
+	_assert(
+		"established cardiometabolic disease" in case["scenario"],
+		"SC-02's original wording was overwritten rather than superseded",
+	)
+
+	text = _case_text(case)
+	_assert(text["version"] == 2, f"SC-02 is at revision {text['version']}, expected 2")
+	for phrase in ("myocardial infarction", "stroke", "chest pain"):
+		_assert(
+			phrase in text["scenario"],
+			f"SC-02's revised scenario no longer establishes {phrase!r}",
+		)
+
+	if not frappe.db.exists("Sparsh Activity", "SC-02"):
+		return "SC-02 is not seeded on this site"
+
+	row = frappe.db.get_value(
+		"Sparsh Activity", "SC-02", ["instruction", "version"], as_dict=True
+	)
+	_assert(
+		row.instruction == f"{text['scenario']}\n\n{text['task']}",
+		"The seeded SC-02 still carries pre-revision wording",
+	)
+	_assert(
+		(row.version or 1) == 2,
+		f"The seeded SC-02 is at version {row.version}, so the revision patch has not run",
+	)
+	return "SC-02 at revision 2; the original wording is still on record"
+
+
+def check_a_rescoped_rule_supersedes_and_cites_its_own_approval():
+	"""The S data model rule was re-scoped, not rewritten, and cites the right decision.
+
+	Two decisions taken on different dates under different cover must not both point at
+	one document: the citation is how a reader checks a rule against the thing that
+	authorised it. The 13-Sep matrix approved the fields; the 15-Sep reply settled which
+	system holds them. A successor citing the matrix would send a reader to a document
+	that does not contain the decision they are looking for.
+	"""
+	versions = frappe.get_all(
+		"Sparsh Source of Truth Rule",
+		filters={"rule_id": "S-MODIFIER-DATA-MODEL"},
+		fields=["name", "version", "status", "approval_source", "approved_statement", "supersedes"],
+		order_by="version asc",
+	)
+	if len(versions) < 2:
+		return "The re-scoped S data model rule is not loaded on this site"
+
+	previous, current = versions[0], versions[-1]
+	_assert(
+		previous.status == "Superseded",
+		f"v{previous.version} is {previous.status}, so the original approval was overwritten",
+	)
+	_assert(
+		current.supersedes == previous.name,
+		"The re-scoped rule does not name the version it replaces",
+	)
+	_assert(
+		"caregiver database" in (current.approved_statement or ""),
+		"The re-scoped rule does not say which system holds the S fields",
+	)
+	# The distinguishing fact: its provenance is the reply, not the matrix.
+	_assert(
+		"15-Sep-2026" in (current.approval_source or ""),
+		f"The re-scoped rule cites {current.approval_source!r}, not the decision that authorised it",
+	)
+	_assert(
+		current.approval_source != previous.approval_source,
+		"Both versions cite the same document, so the re-scoping decision is unrecorded",
+	)
+	return f"S-MODIFIER-DATA-MODEL v{previous.version} superseded by v{current.version}"
+
+
 CHECKS = (
+	("a_revised_case_reaches_the_activity", check_a_revised_case_reaches_the_activity),
+	("a_rescoped_rule_supersedes_and_cites_its_own_approval",
+	 check_a_rescoped_rule_supersedes_and_cites_its_own_approval),
 	("partial_only_history_is_named_accurately", check_partial_only_history_is_named_accurately),
 	("queue_shows_work_that_is_actually_waiting", check_queue_shows_work_that_is_actually_waiting),
 	("ledger_with_no_price_reports_unknown_not_zero", check_ledger_with_no_price_reports_unknown_not_zero),

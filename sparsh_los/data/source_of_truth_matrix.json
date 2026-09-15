@@ -256,17 +256,19 @@
  },
  {
   "rule_id": "S-MODIFIER-DATA-MODEL",
-  "rule_statement": "Store S Status (Active/Inactive), S Reason Category, S Reason Detail, S Start Date, S End/Resolution Date, S Impact Area, S Notes and human-review fields separately from Prevention Level and Red Flag.",
-  "approved_statement": "Approved for MVP architecture. Suggested reason categories: Medical recovery; Caregiving burden; Bereavement; Financial crisis; Family crisis; Occupational stress; Psychosocial stress; Other. Impact areas may include Diet, Activity, Sleep, Stress, Confidence or Multiple.",
+  "rule_statement": "The detailed S episode record -- S Status (Active/Inactive), S Reason Category, S Reason Detail, S Start Date, S End/Resolution Date, S Impact Area, S Notes and human-review fields -- is held in the SAI SPARSH caregiver database, not in the Learning Operating System.",
+  "approved_statement": "Re-scoped 15-Sep-2026. The detailed S fields are stored in the SAI SPARSH caregiver database. The Learning Operating System retains only the S rule itself, synthetic or de-identified cases, learner responses and assessment evidence. Suggested reason categories -- Medical recovery; Caregiving burden; Bereavement; Financial crisis; Family crisis; Occupational stress; Psychosocial stress; Other -- and impact areas remain the caregiver database's structure, governed by this rule but not held here. Preservation of S episode history is a requirement on that database. This supersedes the approval of 13-Sep-2026, which described the same fields without saying which system holds them.",
   "applies_to": "S Modifier data model",
   "source": "Programme design / data rule",
   "criticality": "Normal",
   "automation_status": "Safe as fixed logic",
-  "notes": "Preserve history of all S episodes. Current status may become Inactive when the special circumstance resolves or no longer materially affects coaching.",
+  "notes": "Re-scoped rather than retired: the rule still governs, but the storage it describes belongs to the caregiver database. The engine holds no caregiver data (Build Guide section 21, acceptance criterion 12) and the code enforces it. The superseded v1 is the record of what was approved before the scope was settled.",
   "source_criticality": "Medium",
   "source_status": "Validated",
   "source_automation_status": "Safe as fixed data structure; classification logic may remain partly human-reviewed",
-  "effective_date": "2026-09-13",
-  "supersedes_previous": false
+  "effective_date": "2026-09-15",
+  "supersedes_previous": true,
+  "approval_source": "Programme owner's reply of 15-Sep-2026 to the decisions document of the same date, answering the S-modifier scope question: \"Please proceed with option (b). Re-scope the rule so that detailed S fields are stored in the caregiver database, while the LOS retains only the S rule, synthetic/de-identified cases, learner responses and assessment evidence.\"",
+  "approved_by_name": "Dr Nayanjeet Chaudhury"
  }
 ]

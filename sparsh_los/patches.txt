@@ -9,3 +9,4 @@ sparsh_los.patches.v1_0.restore_matrix_source_wording
 sparsh_los.patches.v1_0.clear_uncalibrated_mastery_default
 sparsh_los.patches.v1_0.set_unset_pathway_status_to_draft
 sparsh_los.patches.v1_0.take_desk_access_off_the_engine_roles
+sparsh_los.patches.v1_0.apply_case_revisions

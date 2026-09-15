@@ -265,6 +265,13 @@ def load_matrix_decisions():
 	anything -- it is the script transcribing a decision he has already made and signed.
 	Rows his matrix leaves undecided stay Draft and are reported, never assumed.
 	"""
+	# The controller's comparison, not a second one: a rule is superseded on the same
+	# notion of "different" that the freeze check uses, or the two disagree about
+	# whether a rule changed.
+	from sparsh_los.sparsh_los.doctype.sparsh_source_of_truth_rule.sparsh_source_of_truth_rule import (
+		_differs,
+	)
+
 	approval = _approval()
 	applied, superseded, skipped, ready, promoted = [], [], [], [], []
 
@@ -284,7 +291,19 @@ def load_matrix_decisions():
 			skipped.append(row["rule_id"])
 			continue
 
-		if current.approved_statement:
+		# A later decision that changes the wording supersedes; it does not edit. The
+		# branch below returns early for a rule that already carries an answer, which is
+		# right for a re-run of the same decision and wrong for a new one: the programme
+		# owner re-scoped the S data model rule on 15-Sep-2026, and a loader that cannot
+		# version a rule already carrying a decision can only overwrite it or ignore it.
+		# His handover note forbids the first, so it silently did the second.
+		rescoped = (
+			current.approved_statement
+			and row.get("supersedes_previous")
+			and _differs(row["approved_statement"], current.approved_statement)
+		)
+
+		if current.approved_statement and not rescoped:
 			# Already carries an answer. Re-running must not rewrite a decision -- but
 			# carrying the wording and being Validated are two different things, and they
 			# are not always written together. `restore_matrix_source_wording` writes the
@@ -335,8 +354,12 @@ def load_matrix_decisions():
 			successor.source_status = row.get("source_status")
 			successor.source_automation_status = row.get("source_automation_status")
 			successor.effective_date = row.get("effective_date")
-			successor.approved_by_name = approval.get("approved_by_name")
-			successor.approval_source = approval.get("approval_source")
+			# A row may cite its own approval. Two decisions taken on different dates
+			# under different cover must not both point at one document: the citation is
+			# how a reader checks a rule against the thing that authorised it, and a
+			# wrong citation is worse than none.
+			successor.approved_by_name = row.get("approved_by_name") or approval.get("approved_by_name")
+			successor.approval_source = row.get("approval_source") or approval.get("approval_source")
 			successor.supersedes = current.name
 			# His own status, not ours. "Validated" in his matrix is the sign-off; the
 			# controller refuses it unless the approver, the source and the date are all
@@ -353,8 +376,8 @@ def load_matrix_decisions():
 					"source_status": row.get("source_status"),
 					"source_criticality": row.get("source_criticality"),
 					"source_automation_status": row.get("source_automation_status"),
-					"approved_by_name": approval.get("approved_by_name"),
-					"approval_source": approval.get("approval_source"),
+					"approved_by_name": row.get("approved_by_name") or approval.get("approved_by_name"),
+					"approval_source": row.get("approval_source") or approval.get("approval_source"),
 				},
 				update_modified=False,
 			)
@@ -378,6 +401,21 @@ def load_matrix_decisions():
 		# The one thing standing between these and Validated.
 		"approved_by": approval.get("approved_by_name"),
 		"approval_source": approval.get("approval_source"),
+	}
+
+
+def _case_text(case):
+	"""The wording of a case as it currently stands, revision included.
+
+	A revision does not overwrite the pack: `revision` sits beside the original fields
+	and wins where it sets one. Returns scenario, task, validation and version.
+	"""
+	revision = case.get("revision") or {}
+	return {
+		"scenario": revision.get("scenario") or case["scenario"],
+		"task": revision.get("task") or case["task"],
+		"validation": revision.get("validation") or case.get("validation"),
+		"version": int(revision.get("version") or 1),
 	}
 
 
@@ -491,12 +529,18 @@ def load_case_pack():
 			skipped.append(case["code"])
 			continue
 
+		# A revised case carries its replacement wording alongside the original rather
+		# than in place of it: the pack is the programme's document, and what it said
+		# before the programme owner changed it is part of the record. `_case_text`
+		# returns whichever wording is current.
+		text = _case_text(case)
+
 		activity = frappe.new_doc("Sparsh Activity")
 		activity.activity_id = case["code"]
 		activity.title = case["title"]
 		activity.competency = mapping[0]
 		activity.activity_type = "Short case"
-		activity.instruction = f"{case['scenario']}\n\n{case['task']}"
+		activity.instruction = f"{text['scenario']}\n\n{text['task']}"
 		# `expected_evidence` is what the learner must demonstrate, and the case pack
 		# states it for no case. It used to be filled with the pack's "suggested engine
 		# behaviour" -- developer guidance like "Short case -> decision -> brief
@@ -508,9 +552,9 @@ def load_case_pack():
 		# the programme has not validated the rule behind it, and what specifically is
 		# outstanding -- for SC-06 that is "use programme-approved red-flag/referral
 		# rules only", which is the difference between judging a learner and guessing.
-		activity.validation_required = case.get("validation")
+		activity.validation_required = text.get("validation")
 		activity.source_status = case.get("status")
-		activity.version = 1
+		activity.version = text["version"]
 		# Human review, always. No rule behind these cases is validated yet.
 		activity.evaluation_mode = "Human review"
 		activity.insert(ignore_permissions=True)
